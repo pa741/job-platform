@@ -32,6 +32,9 @@ param(
     [string]$Branch = 'main',
     [string]$NamePrefix = 'jobplatform',
     [string]$Location = 'spaincentral',
+
+    # Deliberately separate: the SQL free offer is not provisionable in every region.
+    [string]$SqlLocation = 'francecentral',
     [string]$LandingContainer = 'jobs-landing'
 )
 
@@ -104,6 +107,7 @@ gh secret set JP_ADMIN_LOGIN_NAME --repo $Repository --body $adminLoginName
 gh variable set AZURE_RESOURCE_GROUP --repo $Repository --body $ResourceGroup
 gh variable set JP_NAME_PREFIX --repo $Repository --body $NamePrefix
 gh variable set JP_LOCATION --repo $Repository --body $Location
+gh variable set JP_SQL_LOCATION --repo $Repository --body $SqlLocation
 gh variable set JP_LANDING_STORAGE_ACCOUNT --repo $Repository --body $LandingStorageAccount
 gh variable set JP_LANDING_CONTAINER --repo $Repository --body $LandingContainer
 

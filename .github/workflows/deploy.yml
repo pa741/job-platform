@@ -22,6 +22,8 @@ env:
   AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
   JP_NAME_PREFIX: ${{ vars.JP_NAME_PREFIX }}
   JP_LOCATION: ${{ vars.JP_LOCATION }}
+  # The SQL free offer is region-restricted; see infra/modules/sql.bicep.
+  JP_SQL_LOCATION: ${{ vars.JP_SQL_LOCATION }}
   JP_LANDING_STORAGE_ACCOUNT: ${{ vars.JP_LANDING_STORAGE_ACCOUNT }}
   JP_LANDING_CONTAINER: ${{ vars.JP_LANDING_CONTAINER }}
   JP_ADMIN_OBJECT_ID: ${{ secrets.JP_ADMIN_OBJECT_ID }}
