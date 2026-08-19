@@ -164,8 +164,35 @@ What still needs care, and how it is handled:
 - CI runs `gitleaks`, and `pull_request` (never `pull_request_target`) keeps fork code away
   from secrets.
 
+## Operating it
+
+The SQL server's only standing firewall rule allows Azure services, so the function can
+reach it but your workstation cannot. `scripts/provision.ps1` opens a rule for your current
+IP and removes it again when it finishes. To inspect the data outside that window, add a
+rule for yourself first:
+
+```bash
+MYIP=$(curl -s https://api.ipify.org)
+az sql server firewall-rule create -g <rg> -s <server> -n my-client   --start-ip-address $MYIP --end-ip-address $MYIP
+```
+
+Then:
+
+```bash
+CONN="Server=tcp:<server>.database.windows.net,1433;Database=jobsdb;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=90;"
+dotnet run --project tools/JobPlatform.DbAdmin -- status  "$CONN"
+dotnet run --project tools/JobPlatform.DbAdmin -- metrics "https://<cosmos-account>.documents.azure.com:443/"
+```
+
+Remember to delete the rule when you are done.
+
 ## Status
 
-Ingestion is complete and deployed. Still to come, per the architecture in `model.md`:
-a Cosmos change-feed function driving Web PubSub for live metrics (the `leases` container
-is already provisioned), an API on Container Apps, and a React dashboard.
+Ingestion is complete, deployed, and verified end to end against real scraper output:
+three uploads totalling 455 rows reduced to 286 distinct postings, with a re-uploaded blob
+correctly reporting 0 new and leaving the row count unchanged — idempotency demonstrated on
+live data rather than asserted. CI and the OIDC deployment workflow both run green.
+
+Still to come, per the architecture in `model.md`: a Cosmos change-feed function driving
+Web PubSub for live metrics (the `leases` container is already provisioned), an API on
+Container Apps, and a React dashboard.
