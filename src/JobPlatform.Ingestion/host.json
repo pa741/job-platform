@@ -1,0 +1,22 @@
+{
+  "version": "2.0",
+  "logging": {
+    "applicationInsights": {
+      "samplingSettings": {
+        "isEnabled": true,
+        "excludedTypes": "Request;Exception"
+      }
+    },
+    "logLevel": {
+      "default": "Information",
+      "JobPlatform": "Information",
+      "Microsoft.EntityFrameworkCore.Database.Command": "Warning",
+      "Azure.Core": "Warning"
+    }
+  },
+  "extensions": {
+    "blobs": {
+      "maxDegreeOfParallelism": 1
+    }
+  }
+}

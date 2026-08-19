@@ -1,0 +1,16 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+
+    "LandingContainerName": "jobs-landing",
+    "LandingStorage__serviceUri": "https://<landing-storage-account>.blob.core.windows.net",
+
+    "Cosmos__AccountEndpoint": "https://<cosmos-account>.documents.azure.com:443/",
+    "Cosmos__DatabaseName": "jobplatform",
+    "Cosmos__MetricsContainerName": "metrics",
+
+    "SqlConnectionString": "Server=tcp:<sql-server>.database.windows.net,1433;Database=jobsdb;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60;"
+  }
+}
