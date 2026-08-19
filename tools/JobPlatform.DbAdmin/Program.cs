@@ -1,4 +1,7 @@
+using System.Text.Json;
+using JobPlatform.Data.Cosmos;
 using JobPlatform.Data.Sql;
+using Microsoft.Azure.Cosmos;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 
@@ -26,6 +29,8 @@ internal static class Program
                 Usage:
                   dbadmin migrate         "<connection-string>"
                   dbadmin grant-identity  "<connection-string>" <managed-identity-name>
+                  dbadmin status          "<connection-string>"
+                  dbadmin metrics         "<cosmos-account-endpoint>" [search-term]
 
                 The connection string must authenticate as the server's Entra admin, e.g.
                   "Server=tcp:<server>.database.windows.net,1433;Database=jobsdb;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60;"
@@ -43,6 +48,9 @@ internal static class Program
                 "migrate" => await MigrateAsync(connectionString),
                 "grant-identity" when args.Length >= 3 => await GrantIdentityAsync(connectionString, args[2]),
                 "grant-identity" => Fail("grant-identity needs the managed identity name."),
+                "status" => await StatusAsync(connectionString),
+                // Second positional argument is the Cosmos endpoint, not a SQL connection.
+                "metrics" => await MetricsAsync(connectionString, args.Length >= 3 ? args[2] : null),
                 _ => Fail($"Unknown command '{command}'."),
             };
         }
@@ -114,6 +122,96 @@ internal static class Program
         Console.WriteLine($"Granted db_datareader and db_datawriter to '{identityName}'.");
         return 0;
     }
+
+    /// <summary>Prints what actually landed in the database, for verifying an ingest.</summary>
+    private static async Task<int> StatusAsync(string connectionString)
+    {
+        var options = new DbContextOptionsBuilder<JobsDbContext>()
+            .UseSqlServer(connectionString, sql =>
+            {
+                sql.EnableRetryOnFailure(maxRetryCount: 5, TimeSpan.FromSeconds(20), null);
+                sql.CommandTimeout(120);
+            })
+            .Options;
+
+        await using var db = new JobsDbContext(options);
+
+        var runs = await db.ScrapeRuns.OrderByDescending(r => r.IngestedAtUtc).Take(5).ToListAsync();
+        var postingCount = await db.JobPostings.CountAsync();
+
+        Console.WriteLine($"JobPostings rows : {postingCount}");
+        Console.WriteLine($"ScrapeRuns rows  : {await db.ScrapeRuns.CountAsync()}");
+        Console.WriteLine();
+        Console.WriteLine("Most recent runs:");
+        Console.WriteLine($"  {"blob",-52} {"rows",5} {"parsed",6} {"new",5} {"upd",5} {"same",5} {"bad",4}");
+
+        foreach (var run in runs)
+        {
+            Console.WriteLine(
+                $"  {Truncate(run.BlobPath, 52),-52} {run.RowCount,5} {run.ParsedCount,6} " +
+                $"{run.NewCount,5} {run.UpdatedCount,5} {run.UnchangedCount,5} {run.InvalidCount,4}");
+        }
+
+        if (postingCount > 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine("Postings by site:");
+            var bySite = await db.JobPostings
+                .GroupBy(p => p.Site)
+                .Select(g => new { Site = g.Key, Count = g.Count() })
+                .OrderByDescending(x => x.Count)
+                .ToListAsync();
+            foreach (var site in bySite)
+            {
+                Console.WriteLine($"  {site.Site,-12} {site.Count}");
+            }
+
+            var remote = await db.JobPostings.CountAsync(p => p.IsRemote);
+            var withDescription = await db.JobPostings.CountAsync(p => p.DescriptionLength > 0);
+            Console.WriteLine();
+            Console.WriteLine($"Remote           : {remote}");
+            Console.WriteLine($"With description : {withDescription}");
+        }
+
+        return 0;
+    }
+
+    /// <summary>Dumps the metric documents Cosmos holds, for verifying an ingest.</summary>
+    private static async Task<int> MetricsAsync(string accountEndpoint, string? searchTerm)
+    {
+        using var client = CosmosClientFactory.Create(new CosmosOptions { AccountEndpoint = accountEndpoint });
+        var container = client.GetContainer("jobplatform", "metrics");
+
+        var sql = searchTerm is null
+            ? "SELECT * FROM c ORDER BY c.type"
+            : "SELECT * FROM c WHERE c.searchTerm = @term ORDER BY c.type";
+
+        var query = new QueryDefinition(sql);
+        if (searchTerm is not null)
+        {
+            query = query.WithParameter("@term", searchTerm);
+        }
+
+        var options = new JsonSerializerOptions { WriteIndented = true };
+        var count = 0;
+
+        using var iterator = container.GetItemQueryIterator<JsonElement>(query);
+        while (iterator.HasMoreResults)
+        {
+            foreach (var document in await iterator.ReadNextAsync())
+            {
+                count++;
+                Console.WriteLine(JsonSerializer.Serialize(document, options));
+                Console.WriteLine();
+            }
+        }
+
+        Console.WriteLine($"{count} metric document(s).");
+        return 0;
+    }
+
+    private static string Truncate(string value, int length)
+        => value.Length <= length ? value : string.Concat("...", value.AsSpan(value.Length - length + 3));
 
     private static int Fail(string message)
     {

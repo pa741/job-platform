@@ -1,8 +1,7 @@
-using System.Net;
-using System.Text.Json;
 using Azure.Storage.Blobs;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Azure.Functions.Worker;
-using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Extensions.Logging;
 
 namespace JobPlatform.Ingestion.Functions;
@@ -14,33 +13,37 @@ namespace JobPlatform.Ingestion.Functions;
 /// Exists for backfill (the container held runs before the function did) and to exercise
 /// the pipeline end to end without waiting for the scraper's daily run. Because ingestion
 /// is idempotent, re-running it over a processed blob is safe.
+///
+/// Uses ASP.NET Core integration types (<see cref="HttpRequest"/> / <see cref="IActionResult"/>)
+/// rather than <c>HttpRequestData</c>: the host is built with
+/// <c>ConfigureFunctionsWebApplication</c>, and mixing the two models leaves the route
+/// unmapped, which shows up as a 404 rather than an error.
+///
+/// The route deliberately avoids an `admin/` prefix: `/admin/*` is reserved by the
+/// Functions host, and claiming it puts the function in an error state at startup
+/// ("the specified route conflicts with one or more built in routes") that also surfaces
+/// only as a 404.
 /// </remarks>
 public sealed class ReprocessBlobFunction(
     IngestionPipeline pipeline,
     BlobContainerClient landingContainer,
     ILogger<ReprocessBlobFunction> logger)
 {
-    private sealed record ReprocessRequest(string? BlobPath, string? Prefix);
-
-    private sealed record ReprocessResponse(int Processed, IReadOnlyList<string> BlobPaths, IReadOnlyList<string> Failures);
+    public sealed record ReprocessRequest(string? BlobPath, string? Prefix);
 
     [Function(nameof(ReprocessBlobFunction))]
-    public async Task<HttpResponseData> RunAsync(
-        [HttpTrigger(AuthorizationLevel.Function, "post", Route = "admin/reprocess")]
-        HttpRequestData request,
+    public async Task<IActionResult> RunAsync(
+        [HttpTrigger(AuthorizationLevel.Function, "post", Route = "reprocess")]
+        HttpRequest request,
+        [FromBody] ReprocessRequest? body,
         CancellationToken ct)
     {
-        var body = await JsonSerializer.DeserializeAsync<ReprocessRequest>(
-            request.Body,
-            new JsonSerializerOptions(JsonSerializerDefaults.Web),
-            ct);
-
         var prefix = body?.BlobPath ?? body?.Prefix ?? "jobs/";
 
         logger.LogInformation("Reprocessing blobs under {Prefix}.", prefix);
 
         var processed = new List<string>();
-        var failures = new List<string>();
+        var failures = new List<object>();
 
         await foreach (var blob in landingContainer.GetBlobsAsync(prefix: prefix, cancellationToken: ct))
         {
@@ -65,18 +68,23 @@ public sealed class ReprocessBlobFunction(
             }
             catch (Exception ex)
             {
-                // One bad blob must not abandon the rest of a backfill.
+                // One bad blob must not abandon the rest of a backfill. The message is
+                // returned as well as logged - this is an authenticated admin route, and
+                // being able to see why a backfill failed is the point of it.
                 logger.LogError(ex, "Failed to reprocess {BlobName}.", blob.Name);
-                failures.Add(blob.Name);
+                failures.Add(new { blob = blob.Name, error = ex.Message, type = ex.GetType().Name });
             }
         }
 
-        var response = request.CreateResponse(
-            failures.Count == 0 ? HttpStatusCode.OK : HttpStatusCode.MultiStatus);
+        var result = new
+        {
+            processed = processed.Count,
+            blobPaths = processed,
+            failures,
+        };
 
-        await response.WriteAsJsonAsync(
-            new ReprocessResponse(processed.Count, processed, failures), ct);
-
-        return response;
+        return failures.Count == 0
+            ? new OkObjectResult(result)
+            : new ObjectResult(result) { StatusCode = StatusCodes.Status207MultiStatus };
     }
 }

@@ -1,0 +1,58 @@
+name: CI
+
+# pull_request (not pull_request_target): code from a fork must never run with access to
+# this repository's secrets. This is a public repo, so that distinction matters.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+
+      # The suite runs against a synthetic fixture and needs no Azure credentials,
+      # so a fresh clone (or a fork) can verify the project end to end.
+      - name: Test
+        run: dotnet test --no-build --configuration Release --verbosity normal
+
+  bicep:
+    name: Validate Bicep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile templates
+        run: az bicep build --file infra/main.bicep --stdout > /dev/null
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Backstop behind GitHub push protection: this repo is public and must stay
+      # free of credentials and scraped personal data.
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

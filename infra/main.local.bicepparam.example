@@ -1,0 +1,12 @@
+// Copy to main.local.bicepparam (gitignored) and fill in real values if you would rather
+// not set environment variables. Never commit the filled-in copy.
+using './main.bicep'
+
+param namePrefix = 'jobplatform'
+param location = '<region>'
+param sqlLocation = '<region supporting the SQL free offer>'
+param landingStorageAccountName = '<existing storage account>'
+param landingContainerName = 'jobs-landing'
+param administratorObjectId = '<your Entra object id: az ad signed-in-user show --query id -o tsv>'
+param administratorLoginName = '<your UPN / email>'
+param tenantId = '<az account show --query tenantId -o tsv>'

@@ -65,8 +65,11 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
             entity.Property(e => e.JobUrlDirect).HasMaxLength(1000);
             entity.Property(e => e.CompanyUrl).HasMaxLength(1000);
 
-            // Descriptions run to several KB and are needed intact for CV matching.
-            entity.Property(e => e.Description).HasColumnType("nvarchar(max)");
+            // Descriptions run to several KB and are needed intact for CV matching, so no
+            // MaxLength is set. EF already maps an unbounded string to nvarchar(max) on SQL
+            // Server; spelling that type out explicitly would also make the model
+            // unbuildable on any other provider, including the SQLite used by the tests.
+            entity.Property(e => e.Description);
 
             entity.HasOne(e => e.FirstSeenRun)
                 .WithMany()

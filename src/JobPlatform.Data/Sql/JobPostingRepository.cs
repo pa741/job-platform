@@ -130,37 +130,53 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
         return (run, outcome);
     }
 
-    /// <summary>Aggregates for one search term on one day, recomputed rather than incremented
-    /// so a replayed blob converges instead of double-counting.</summary>
+    /// <summary>
+    /// Aggregates for one search term on one day, recomputed rather than incremented so a
+    /// replayed blob converges instead of double-counting.
+    /// </summary>
+    /// <remarks>
+    /// Everything is scoped by the *runs* that belong to the date, not by row timestamps.
+    /// <c>FirstSeenUtc</c>/<c>LastSeenUtc</c> record when we ingested a posting, which is
+    /// not the day it was scraped - a blob scraped at 23:50 and ingested after midnight,
+    /// or any backfill, would otherwise land in the wrong bucket or in none at all.
+    /// </remarks>
     public async Task<DailyRollup> BuildDailyRollupAsync(
         string searchTerm, DateOnly date, CancellationToken ct = default)
     {
-        var dayStart = new DateTimeOffset(date.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
-        var dayEnd = dayStart.AddDays(1);
+        var runsOnDate = db.ScrapeRuns
+            .Where(r => r.SearchTerm == searchTerm && r.ScrapeDate == date);
 
-        var runsIngested = await db.ScrapeRuns
-            .CountAsync(r => r.SearchTerm == searchTerm && r.ScrapeDate == date, ct);
+        var runIds = await runsOnDate.Select(r => r.Id).ToListAsync(ct);
 
-        var seenToday = db.JobPostings.Where(p =>
-            p.SearchTerm == searchTerm && p.LastSeenUtc >= dayStart && p.LastSeenUtc < dayEnd);
+        var runsUpToDate = db.ScrapeRuns
+            .Where(r => r.SearchTerm == searchTerm && r.ScrapeDate <= date)
+            .Select(r => r.Id);
 
-        var postingsSeen = await seenToday.CountAsync(ct);
+        // How many postings the day's scraping actually surfaced.
+        var postingsSeen = runIds.Count == 0
+            ? 0
+            : await runsOnDate.SumAsync(r => r.ParsedCount, ct);
 
-        var newPostings = await db.JobPostings.CountAsync(
-            p => p.SearchTerm == searchTerm && p.FirstSeenUtc >= dayStart && p.FirstSeenUtc < dayEnd, ct);
+        var newPostings = await db.JobPostings
+            .CountAsync(p => runIds.Contains(p.FirstSeenRunId), ct);
 
         var cumulative = await db.JobPostings
-            .CountAsync(p => p.SearchTerm == searchTerm && p.FirstSeenUtc < dayEnd, ct);
+            .CountAsync(p => runsUpToDate.Contains(p.FirstSeenRunId), ct);
 
-        var bySite = await seenToday
+        // Characteristics are taken from the postings as the day last saw them.
+        var lastSeenOnDate = db.JobPostings.Where(p => runIds.Contains(p.LastSeenRunId));
+        var distinctSeen = await lastSeenOnDate.CountAsync(ct);
+
+        var bySite = await lastSeenOnDate
             .GroupBy(p => p.Site)
             .Select(g => new { Site = g.Key, Count = g.Count() })
             .ToListAsync(ct);
 
-        var remoteCount = await seenToday.CountAsync(p => p.IsRemote, ct);
-        var withSalary = await seenToday.CountAsync(p => p.MinAmount != null || p.MaxAmount != null, ct);
+        var remoteCount = await lastSeenOnDate.CountAsync(p => p.IsRemote, ct);
+        var withSalary = await lastSeenOnDate
+            .CountAsync(p => p.MinAmount != null || p.MaxAmount != null, ct);
 
-        var topCompanies = await seenToday
+        var topCompanies = await lastSeenOnDate
             .Where(p => p.Company != null)
             .GroupBy(p => p.Company!)
             .Select(g => new { Company = g.Key, Count = g.Count() })
@@ -175,13 +191,13 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
             SearchTerm = searchTerm,
             Date = date.ToString("yyyy-MM-dd"),
             UpdatedAtUtc = DateTimeOffset.UtcNow,
-            RunsIngested = runsIngested,
+            RunsIngested = runIds.Count,
             PostingsSeen = postingsSeen,
             NewPostings = newPostings,
             CumulativePostings = cumulative,
             BySite = bySite.ToDictionary(x => x.Site, x => x.Count, StringComparer.OrdinalIgnoreCase),
-            RemoteShare = Share(remoteCount, postingsSeen),
-            SalaryCoverage = Share(withSalary, postingsSeen),
+            RemoteShare = Share(remoteCount, distinctSeen),
+            SalaryCoverage = Share(withSalary, distinctSeen),
             TopCompanies = [.. topCompanies.Select(x => new NamedCount(x.Company, x.Count))],
         };
     }

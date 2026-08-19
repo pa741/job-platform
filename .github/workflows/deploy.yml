@@ -1,0 +1,103 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'infra/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+    inputs:
+      run_migrations:
+        description: 'Apply pending EF Core migrations to the database'
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write # OIDC federated credential; no client secret is stored.
+  contents: read
+
+env:
+  AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+  JP_NAME_PREFIX: ${{ vars.JP_NAME_PREFIX }}
+  JP_LOCATION: ${{ vars.JP_LOCATION }}
+  JP_LANDING_STORAGE_ACCOUNT: ${{ vars.JP_LANDING_STORAGE_ACCOUNT }}
+  JP_LANDING_CONTAINER: ${{ vars.JP_LANDING_CONTAINER }}
+  JP_ADMIN_OBJECT_ID: ${{ secrets.JP_ADMIN_OBJECT_ID }}
+  JP_ADMIN_LOGIN_NAME: ${{ secrets.JP_ADMIN_LOGIN_NAME }}
+  JP_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+
+jobs:
+  deploy:
+    name: Provision and deploy
+    runs-on: ubuntu-latest
+    # A fork must not attempt to deploy into this subscription.
+    if: github.repository == 'pa741/job-platform'
+    outputs:
+      functionAppName: ${{ steps.infra.outputs.functionAppName }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy infrastructure
+        id: infra
+        run: |
+          set -euo pipefail
+          az deployment group create \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "jobplatform-ingest-${GITHUB_RUN_NUMBER}" \
+            --template-file infra/main.bicep \
+            --parameters infra/main.bicepparam \
+            --no-prompt \
+            --query properties.outputs -o json > outputs.json
+          echo "functionAppName=$(jq -r .functionAppName.value outputs.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish function
+        run: |
+          dotnet publish src/JobPlatform.Ingestion/JobPlatform.Ingestion.csproj \
+            --configuration Release --output ./publish
+
+      - uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ steps.infra.outputs.functionAppName }}
+          package: ./publish
+
+  migrate:
+    name: Apply migrations
+    runs-on: ubuntu-latest
+    needs: deploy
+    # Schema changes are deliberate, never a side effect of a code push.
+    if: github.event_name == 'workflow_dispatch' && inputs.run_migrations
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Requires the deploy principal to be a member of the SQL server's Entra admin
+      # group. If it is not, run this from a workstation instead - see README.
+      - name: Migrate
+        run: |
+          set -euo pipefail
+          CONNECTION=$(az deployment group show \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "jobplatform-ingest-${GITHUB_RUN_NUMBER}" \
+            --query properties.outputs.sqlConnectionString.value -o tsv)
+          dotnet run --project tools/JobPlatform.DbAdmin -- migrate "$CONNECTION"
