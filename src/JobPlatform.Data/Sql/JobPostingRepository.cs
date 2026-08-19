@@ -61,7 +61,12 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
         // The run needs an Id before postings can reference it.
         await db.SaveChangesAsync(ct);
 
-        var sourceKeys = postings.Select(p => p.SourceKey).ToArray();
+        // A List, not an array: on an array, `Contains` can bind to
+        // MemoryExtensions.Contains(ReadOnlySpan<T>, T) rather than Enumerable.Contains,
+        // which EF cannot translate and which fails at runtime with
+        // "GenericArguments[1], 'System.ReadOnlySpan`1[System.String]' ... violates the
+        // constraint of type parameter 'TRet'".
+        var sourceKeys = postings.Select(p => p.SourceKey).ToList();
 
         var existing = await db.JobPostings
             .Where(p => sourceKeys.Contains(p.SourceKey))

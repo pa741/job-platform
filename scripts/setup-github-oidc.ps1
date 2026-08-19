@@ -61,13 +61,31 @@ if (-not $servicePrincipalId) {
 }
 
 Write-Host '==> Federating to the repository' -ForegroundColor Cyan
-$credentialName = "gh-$Branch"
-$existing = az ad app federated-credential list --id $appId --query "[?name=='$credentialName'].name" -o tsv
-if (-not $existing) {
+
+# Two subjects, because GitHub does not always present the same one. The classic form is
+# `repo:<owner>/<repo>:ref:...`; newer runners present an immutable, id-qualified form,
+# `repo:<owner>@<ownerId>/<repo>@<repoId>:ref:...`. Registering only the classic form
+# fails at login with AADSTS700213 ("No matching federated identity record found").
+$owner, $repoName = $Repository -split '/', 2
+$ownerId = gh api "repos/$Repository" --jq .owner.id
+$repoId = gh api "repos/$Repository" --jq .id
+
+$subjects = [ordered]@{
+    "gh-$Branch"           = "repo:${Repository}:ref:refs/heads/$Branch"
+    "gh-$Branch-immutable" = "repo:$owner@$ownerId/$repoName@${repoId}:ref:refs/heads/$Branch"
+}
+
+foreach ($credentialName in $subjects.Keys) {
+    $existing = az ad app federated-credential list --id $appId --query "[?name=='$credentialName'].name" -o tsv
+    if ($existing) {
+        Write-Host "    '$credentialName' already exists"
+        continue
+    }
+
     $parameters = @{
         name      = $credentialName
         issuer    = 'https://token.actions.githubusercontent.com'
-        subject   = "repo:${Repository}:ref:refs/heads/$Branch"
+        subject   = $subjects[$credentialName]
         audiences = @('api://AzureADTokenExchange')
     } | ConvertTo-Json -Compress
 
@@ -75,10 +93,7 @@ if (-not $existing) {
     Set-Content -Path $tempFile -Value $parameters -Encoding utf8
     az ad app federated-credential create --id $appId --parameters "@$tempFile" | Out-Null
     Remove-Item $tempFile -Force
-    Write-Host "    federated repo:${Repository}:ref:refs/heads/$Branch"
-}
-else {
-    Write-Host "    '$credentialName' already exists"
+    Write-Host "    federated $($subjects[$credentialName])"
 }
 
 Write-Host '==> Assigning roles on the resource group' -ForegroundColor Cyan
