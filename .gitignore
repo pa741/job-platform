@@ -1,0 +1,47 @@
+# ---------------------------------------------------------------------------
+# This is a PUBLIC repository. Nothing secret or personally identifying may be
+# committed. See the "Public repo hygiene" section of CLAUDE.md before adding
+# new file types here.
+# ---------------------------------------------------------------------------
+
+# --- Secrets / local configuration (never commit) ---
+local.settings.json
+*.local.bicepparam
+.env
+.env.*
+!.env.example
+appsettings.Development.json
+appsettings.Local.json
+
+# Publish profiles genuinely contain credentials
+*.PublishSettings
+*.pubxml
+*.pubxml.user
+
+# Azure CLI / azd local state
+.azure/
+
+# --- Scraped data (contains PII: emails, recruiter contact details) ---
+# Only hand-written synthetic fixtures are allowed, and only under Fixtures/.
+*.csv
+!tests/**/Fixtures/*.csv
+
+# --- .NET build output ---
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+artifacts/
+*.user
+*.suo
+.vs/
+.vscode/
+*.nupkg
+TestResults/
+coverage*.json
+coverage*.xml
+*.trx
+
+# --- OS noise ---
+Thumbs.db
+.DS_Store
