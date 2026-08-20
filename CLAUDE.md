@@ -139,6 +139,10 @@ nothing to leak.
   fails with "manualChunks is not a function".
 - **Static Web Apps region is a trap like the SQL one.** `westeurope` refuses new customers
   on this subscription. `webLocation` is separate for that reason - probe before changing.
+- **The client must never wait indefinitely.** Requests carry a deadline and raise a
+  distinct `ApiTimeoutError`, which the UI explains as a waking database with a retry. A
+  promise that never settles is a spinner with nothing to click - the worst failure mode
+  this architecture can produce, because pausing is normal here rather than exceptional.
 - **The dashboard's origin reaches the API's CORS list through the template**, from the
   Static Web App module's output. Do not hard-code it: the hostname is generated at creation.
 
@@ -183,6 +187,11 @@ Each of these cost a red CI run; none of them fail locally.
   half-consumes; a polling dashboard reading SQL exhausts it and the database auto-pauses
   until the 1st of the next month. SQL is for posting browse/search/detail and match
   retrieval, behind output caching, and nothing else.
+- **Nothing a client needs before its first real request may touch SQL.** `/search-terms` is
+  the call every page waits on, so it is served from Cosmos. When it read SQL, opening the
+  dashboard while the database was paused hung *every* page - the Cosmos-only overview
+  included - behind a wake-up that logs SQL error 40613 for minutes. Adding a new bootstrap
+  call means asking which store it reads before anything else.
 - **No health probe may touch SQL**, for the same reason — a probe alone would keep the
   database awake permanently. `/health` touches nothing; `/health/ready` checks Cosmos.
 - **EF cannot project a `GroupBy` straight into a positional record's constructor.** It

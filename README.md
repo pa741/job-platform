@@ -142,6 +142,14 @@ floor under deuteranopia, protanopia and tritanopia, in both light and dark. Dar
 - Status is never colour alone: the scraper-health pills carry an icon and a label, because
   two of the four status steps sit below 3:1 contrast on the light surface.
 
+**Nothing the dashboard needs to start touches SQL.** The search-term list, the summary, the
+trend and the scraper health all come from Cosmos, so opening the dashboard cold does not
+wake the serverless database. Only the postings browser and CV matching read SQL, and those
+requests carry a deadline: if the database is mid-wake they fail with an explanation and a
+retry rather than a spinner. This is the property the whole read design exists for, and it
+is easy to lose — an earlier version resolved the search term from SQL, which quietly put
+every page, Cosmos-backed ones included, behind a database wake-up.
+
 **Live metrics are polled, behind an abstraction built for push.** `MetricsFeed` is an
 interface; `PollingMetricsFeed` implements it today. The underlying data changes once a day
 when the scraper runs, so polling reflects the freshness the data actually has — and when the
