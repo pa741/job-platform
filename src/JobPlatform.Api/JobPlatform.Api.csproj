@@ -5,7 +5,12 @@
     <!-- Container Apps runs Linux. -->
     <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
     <SelfContained>false</SelfContained>
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Globalization stays ON. Microsoft.Data.SqlClient builds a CultureInfo from the
+         database's collation (SQL_Latin1_General_CP1_CI_AS) when it materialises string
+         columns; under InvariantGlobalization that throws CultureNotFoundException, "Only
+         the invariant culture is supported", and every SQL-backed endpoint answers 500.
+         The SQLite tests never touch a collation, so this only appears against real SQL. -->
+    <InvariantGlobalization>false</InvariantGlobalization>
     <UserSecretsId>jobplatform-api</UserSecretsId>
   </PropertyGroup>
 

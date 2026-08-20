@@ -37,15 +37,22 @@ public sealed class MetaEndpoints : IEndpointGroup
             .AllowAnonymous()
             .ExcludeFromDescription();
 
+        // Claims are read through both their short names and their mapped URIs. The JWT
+        // handler rewrites several short names to legacy SOAP-era URIs, so `scp` and `name`
+        // are frequently not present under the names the token actually carried - reading
+        // only the short form silently returns nulls and an empty scope list.
         routes.MapGet("/api/v1/me", (ClaimsPrincipal user) => TypedResults.Ok(new MeResponse
         {
-            Name = user.Identity?.Name,
+            Name = user.Identity?.Name
+                ?? First(user, "name", ClaimTypes.Name, "preferred_username", "upn"),
             IsAuthenticated = user.Identity?.IsAuthenticated ?? false,
-            ObjectId = user.FindFirstValue("oid")
-                ?? user.FindFirstValue("http://schemas.microsoft.com/identity/claims/objectidentifier"),
-            TenantId = user.FindFirstValue("tid")
-                ?? user.FindFirstValue("http://schemas.microsoft.com/identity/claims/tenantid"),
-            Scopes = (user.FindFirstValue("scp") ?? string.Empty)
+            ObjectId = First(user, "oid", ClaimTypes.NameIdentifier,
+                "http://schemas.microsoft.com/identity/claims/objectidentifier"),
+            TenantId = First(user, "tid",
+                "http://schemas.microsoft.com/identity/claims/tenantidentifier",
+                "http://schemas.microsoft.com/identity/claims/tenantid"),
+            Scopes = (First(user, "scp", "scope",
+                "http://schemas.microsoft.com/identity/claims/scope") ?? string.Empty)
                 .Split(' ', StringSplitOptions.RemoveEmptyEntries),
         }))
             .WithTags("Meta")
@@ -53,6 +60,12 @@ public sealed class MetaEndpoints : IEndpointGroup
             .WithSummary("The calling principal, as the API resolved it.")
             .RequireAuthorization(AuthSetup.AuthenticatedPolicy);
     }
+
+    /// <summary>First non-empty value among several claim names.</summary>
+    private static string? First(ClaimsPrincipal user, params string[] claimTypes)
+        => claimTypes
+            .Select(user.FindFirstValue)
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
 }
 
 public sealed record MeResponse
