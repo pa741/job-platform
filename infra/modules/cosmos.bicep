@@ -98,6 +98,15 @@ resource metricsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
           {
             path: '/scrapedAtUtc/?'
           }
+          // Daily rollups serialise their day as `date`, not `scrapeDate`, and their
+          // freshness as `updatedAtUtc`. Without these two the API's rollup range query -
+          // the dashboard's main time series - degrades to a scan of the partition.
+          {
+            path: '/date/?'
+          }
+          {
+            path: '/updatedAtUtc/?'
+          }
         ]
         excludedPaths: [
           // Nothing queries inside the nested breakdowns; indexing them only costs RUs.

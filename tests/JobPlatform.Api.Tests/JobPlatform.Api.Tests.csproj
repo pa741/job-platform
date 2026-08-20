@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>JobPlatform.Api.Tests</RootNamespace>
+    <!-- The API sets a linux-x64 RID for its container image; the test host must build for
+         whatever machine is running it, so the RID is not inherited here. -->
+    <RuntimeIdentifier></RuntimeIdentifier>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="coverlet.collector" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\JobPlatform.Api\JobPlatform.Api.csproj" />
+  </ItemGroup>
+
+</Project>

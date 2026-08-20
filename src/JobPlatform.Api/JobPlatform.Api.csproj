@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <RootNamespace>JobPlatform.Api</RootNamespace>
+    <!-- Container Apps runs Linux. -->
+    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <UserSecretsId>jobplatform-api</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+    <PackageReference Include="Scalar.AspNetCore" />
+    <PackageReference Include="Microsoft.Identity.Web" />
+    <PackageReference Include="Microsoft.ApplicationInsights.AspNetCore" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
+    <PackageReference Include="Azure.Identity" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Update, not Include: the Web SDK already globs appsettings*.json, and a second
+         Include is a duplicate-item build error. This exists to set CopyToPublishDirectory,
+         so a developer's gitignored local overrides can never be published into the image. -->
+    <Content Update="appsettings.Local.json" CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="Never" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\JobPlatform.Core\JobPlatform.Core.csproj" />
+    <ProjectReference Include="..\JobPlatform.Data\JobPlatform.Data.csproj" />
+    <ProjectReference Include="..\JobPlatform.Ai\JobPlatform.Ai.csproj" />
+  </ItemGroup>
+
+</Project>

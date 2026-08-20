@@ -3,6 +3,7 @@ using System.Text;
 using JobPlatform.Core.Dedup;
 using JobPlatform.Core.Model;
 using JobPlatform.Core.Parsing;
+using JobPlatform.Core.Text;
 
 namespace JobPlatform.Core.Metrics;
 
@@ -16,17 +17,6 @@ public sealed class MetricsCalculator(TimeProvider? timeProvider = null)
 
     private const int TopN = 20;
     private const int TopKeywordCount = 25;
-
-    /// <summary>Words carrying no signal about what the market wants.</summary>
-    private static readonly HashSet<string> TitleStopWords = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "a", "an", "and", "or", "the", "for", "of", "to", "in", "at", "on", "with", "by",
-        "our", "we", "you", "your", "is", "are", "be", "as", "from", "new", "job", "role",
-        "position", "opportunity", "hiring", "urgent", "apply", "now",
-    };
-
-    private static readonly char[] TitleSeparators =
-        [' ', ',', '/', '-', '(', ')', '|', '&', '.', ':', ';'];
 
     public RunDigest Calculate(
         ScrapeRunContext context,
@@ -148,7 +138,7 @@ public sealed class MetricsCalculator(TimeProvider? timeProvider = null)
         foreach (var posting in postings)
         {
             // Distinct per title, so "Engineer II, Engineer" does not count twice for one job.
-            foreach (var token in Tokenize(posting.Title).Distinct(StringComparer.OrdinalIgnoreCase))
+            foreach (var token in TitleTokenizer.Tokenize(posting.Title).Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 counts[token] = counts.GetValueOrDefault(token) + 1;
             }
@@ -161,12 +151,6 @@ public sealed class MetricsCalculator(TimeProvider? timeProvider = null)
             .Select(kvp => new NamedCount(kvp.Key, kvp.Value))
             .ToList();
     }
-
-    private static IEnumerable<string> Tokenize(string title)
-        => title
-            .Split(TitleSeparators, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(t => t.ToLowerInvariant())
-            .Where(t => t.Length > 1 && !TitleStopWords.Contains(t) && t.Any(char.IsLetter));
 
     private static IReadOnlyDictionary<string, int> CountJobTypes(IReadOnlyList<JobPosting> postings)
     {

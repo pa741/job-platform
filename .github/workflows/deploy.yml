@@ -6,6 +6,8 @@ on:
     paths:
       - 'src/**'
       - 'infra/**'
+      - 'Directory.Packages.props'
+      - 'Directory.Build.props'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
     inputs:
@@ -17,6 +19,7 @@ on:
 permissions:
   id-token: write # OIDC federated credential; no client secret is stored.
   contents: read
+  packages: write # Publishing the API image to GHCR, using the workflow's own token.
 
 env:
   AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
@@ -29,15 +32,61 @@ env:
   JP_ADMIN_OBJECT_ID: ${{ secrets.JP_ADMIN_OBJECT_ID }}
   JP_ADMIN_LOGIN_NAME: ${{ secrets.JP_ADMIN_LOGIN_NAME }}
   JP_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  JP_API_CLIENT_ID: ${{ vars.JP_API_CLIENT_ID }}
+  JP_API_ALLOWED_ORIGINS: ${{ vars.JP_API_ALLOWED_ORIGINS }}
+  JP_MATCHING_PROVIDER: ${{ vars.JP_MATCHING_PROVIDER }}
 
 jobs:
+  # The image is built and pushed first: the container app references it by tag, and
+  # deploying infrastructure that points at a tag which does not exist yet leaves the
+  # revision unable to start.
+  api-image:
+    name: Build and push API image
+    runs-on: ubuntu-latest
+    if: github.repository == 'pa741/job-platform'
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: meta
+        run: |
+          set -euo pipefail
+          # Lowercased: GHCR rejects an uppercase repository path, and owner names can carry
+          # capitals that ${{ github.repository }} preserves verbatim.
+          REPO=$(echo "ghcr.io/${GITHUB_REPOSITORY}-api" | tr '[:upper:]' '[:lower:]')
+          echo "image=${REPO}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "repo=${REPO}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          # Build context is the repository root: central package management lives there.
+          context: .
+          file: src/JobPlatform.Api/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}
+            ${{ steps.meta.outputs.repo }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   deploy:
     name: Provision and deploy
     runs-on: ubuntu-latest
+    needs: api-image
     # A fork must not attempt to deploy into this subscription.
     if: github.repository == 'pa741/job-platform'
+    env:
+      JP_API_IMAGE: ${{ needs.api-image.outputs.image }}
     outputs:
       functionAppName: ${{ steps.infra.outputs.functionAppName }}
+      apiUrl: ${{ steps.infra.outputs.apiUrl }}
     steps:
       - uses: actions/checkout@v4
 
@@ -63,6 +112,7 @@ jobs:
             --no-prompt \
             --query properties.outputs -o json > outputs.json
           echo "functionAppName=$(jq -r .functionAppName.value outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "apiUrl=$(jq -r .apiUrl.value outputs.json)" >> "$GITHUB_OUTPUT"
 
       - name: Publish function
         run: |
@@ -73,6 +123,28 @@ jobs:
         with:
           app-name: ${{ steps.infra.outputs.functionAppName }}
           package: ./publish
+
+  smoke:
+    name: Smoke-test the API
+    runs-on: ubuntu-latest
+    needs: deploy
+    steps:
+      # Liveness only. It requires no token and touches no dependency, so it verifies the
+      # revision actually started without waking the serverless database.
+      - name: Wait for the new revision to answer
+        run: |
+          set -euo pipefail
+          URL="${{ needs.deploy.outputs.apiUrl }}/health"
+          for attempt in $(seq 1 30); do
+            if curl -fsS --max-time 10 "$URL" > /dev/null; then
+              echo "API healthy at $URL"
+              exit 0
+            fi
+            echo "attempt $attempt: not ready yet"
+            sleep 10
+          done
+          echo "API did not become healthy at $URL"
+          exit 1
 
   migrate:
     name: Apply migrations

@@ -16,14 +16,19 @@ public static class CosmosClientFactory
     /// partitioned on <c>/searchTerm</c> — the SDK's default PascalCase output would
     /// satisfy neither.
     /// </remarks>
-    public static CosmosClient Create(CosmosOptions options)
+    /// <param name="applicationName">
+    /// Reported to Cosmos and shown in its metrics, so ingestion writes and API reads can be
+    /// told apart when diagnosing RU consumption. Defaults to the ingestion name for callers
+    /// that predate the API.
+    /// </param>
+    public static CosmosClient Create(CosmosOptions options, string applicationName = "job-platform-ingestion")
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.AccountEndpoint);
 
         var clientOptions = new CosmosClientOptions
         {
-            ApplicationName = "job-platform-ingestion",
+            ApplicationName = applicationName,
             // The ingest is a short burst of writes from a serverless host; Gateway mode
             // avoids the direct-mode port range and connection warm-up cost.
             ConnectionMode = ConnectionMode.Gateway,

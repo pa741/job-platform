@@ -35,6 +35,27 @@ param administratorLoginName string
 @description('Entra tenant id.')
 param tenantId string = subscription().tenantId
 
+@description('Container image for the API. The default is the public image this repo CI publishes.')
+param apiContainerImage string = 'ghcr.io/pa741/job-platform-api:latest'
+
+@description('Application (client) id of the API app registration. Empty leaves the API without an identity provider, so every protected route answers 401.')
+param apiClientId string = ''
+
+@description('Serve API read endpoints without a token. For local or demo use only.')
+param apiAllowAnonymousReads bool = false
+
+@description('Browser origins allowed to call the API, e.g. the Static Web App.')
+param apiAllowedOrigins array = []
+
+// Defaults to keyword so a fresh deploy needs no Key Vault, no key and no third-party
+// account, and still has a working matching endpoint.
+@description('Which CV ranker the API uses. "anthropic" additionally provisions a Key Vault.')
+@allowed([
+  'keyword'
+  'anthropic'
+])
+param matchingProvider string = 'keyword'
+
 @description('Deterministic suffix keeping globally unique names stable across deployments.')
 param resourceToken string = toLower(uniqueString(subscription().id, resourceGroup().id, namePrefix))
 
@@ -140,6 +161,43 @@ module functionApp 'modules/functionapp.bicep' = {
   }
 }
 
+// Provisioned only when an LLM ranker is selected. The keyword default deploys no vault at
+// all, which keeps the "no secret exists to leak" property intact for anyone cloning this.
+module keyVault 'modules/keyvault.bicep' = if (matchingProvider == 'anthropic') {
+  name: 'keyVault'
+  params: {
+    location: location
+    namePrefix: namePrefix
+    resourceToken: resourceToken
+    tags: tags
+    apiPrincipalId: identity.outputs.principalId
+  }
+}
+
+module containerApp 'modules/containerapp.bicep' = {
+  name: 'containerApp'
+  params: {
+    location: location
+    namePrefix: namePrefix
+    resourceToken: resourceToken
+    tags: tags
+    identityResourceId: identity.outputs.resourceId
+    identityClientId: identity.outputs.clientId
+    logAnalyticsWorkspaceId: monitoring.outputs.workspaceId
+    applicationInsightsConnectionString: monitoring.outputs.connectionString
+    cosmosAccountEndpoint: cosmos.outputs.accountEndpoint
+    cosmosDatabaseName: cosmos.outputs.databaseName
+    sqlConnectionString: sql.outputs.connectionString
+    containerImage: apiContainerImage
+    tenantId: tenantId
+    apiClientId: apiClientId
+    allowAnonymousReads: apiAllowAnonymousReads
+    allowedOrigins: apiAllowedOrigins
+    matchingProvider: matchingProvider
+    anthropicSecretUri: matchingProvider == 'anthropic' ? keyVault!.outputs.anthropicSecretUri : ''
+  }
+}
+
 module rbac 'modules/rbac.bicep' = {
   name: 'rbac'
   params: {
@@ -184,3 +242,9 @@ output sqlServerFqdn string = sql.outputs.serverFqdn
 output sqlDatabaseName string = sql.outputs.databaseName
 output sqlConnectionString string = sql.outputs.connectionString
 output landingContainerName string = landingContainerName
+output apiName string = containerApp.outputs.name
+output apiUrl string = containerApp.outputs.url
+output apiFqdn string = containerApp.outputs.fqdn
+output matchingProvider string = matchingProvider
+output keyVaultName string = matchingProvider == 'anthropic' ? keyVault!.outputs.vaultName : ''
+output anthropicSecretName string = matchingProvider == 'anthropic' ? keyVault!.outputs.anthropicSecretName : ''

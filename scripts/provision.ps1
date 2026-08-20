@@ -30,6 +30,12 @@ param(
     [string]$LandingContainer = 'jobs-landing',
     [string]$DeploymentName = 'jobplatform-ingest',
 
+    [ValidateSet('keyword', 'anthropic')]
+    [string]$MatchingProvider = 'keyword',
+
+    [string]$ApiClientId = '',
+    [string[]]$ApiAllowedOrigins = @(),
+
     [switch]$SkipProviderRegistration,
     [switch]$SkipMigrations
 )
@@ -48,7 +54,8 @@ if (-not $SkipProviderRegistration) {
     Write-Host '==> Registering resource providers' -ForegroundColor Cyan
     $providers = @(
         'Microsoft.Web', 'Microsoft.DocumentDB', 'Microsoft.Sql', 'Microsoft.EventGrid',
-        'Microsoft.Insights', 'Microsoft.OperationalInsights', 'Microsoft.ManagedIdentity'
+        'Microsoft.Insights', 'Microsoft.OperationalInsights', 'Microsoft.ManagedIdentity',
+        'Microsoft.App', 'Microsoft.KeyVault'
     )
     foreach ($provider in $providers) {
         $state = az provider show -n $provider --query registrationState -o tsv 2>$null
@@ -68,6 +75,9 @@ $env:JP_LANDING_CONTAINER = $LandingContainer
 $env:JP_ADMIN_OBJECT_ID = $adminObjectId
 $env:JP_ADMIN_LOGIN_NAME = $adminLoginName
 $env:JP_TENANT_ID = $tenantId
+$env:JP_MATCHING_PROVIDER = $MatchingProvider
+$env:JP_API_CLIENT_ID = $ApiClientId
+$env:JP_API_ALLOWED_ORIGINS = ($ApiAllowedOrigins -join ',')
 
 Write-Host '==> Deploying infrastructure (Cosmos and SQL take several minutes)' -ForegroundColor Cyan
 $outputsJson = az deployment group create `
@@ -86,6 +96,7 @@ $identityName = $outputs.ingestIdentityName.value
 
 Write-Host ''
 Write-Host "    function app : $($outputs.functionAppName.value)"
+Write-Host "    api          : $($outputs.apiUrl.value)"
 Write-Host "    cosmos       : $($outputs.cosmosAccountName.value)"
 Write-Host "    sql server   : $($outputs.sqlServerFqdn.value)"
 Write-Host ''
@@ -116,6 +127,27 @@ if (-not $SkipMigrations) {
     finally {
         Write-Host '==> Removing the temporary firewall rule' -ForegroundColor Cyan
         az sql server firewall-rule delete -g $ResourceGroup -s $serverName -n $firewallRule -o none
+    }
+}
+
+# The vault is created empty and the key is set by hand, deliberately: passing it as a
+# parameter would put it in the deployment history, where it would outlive any rotation.
+if ($MatchingProvider -eq 'anthropic') {
+    $vaultName = $outputs.keyVaultName.value
+    $secretName = $outputs.anthropicSecretName.value
+
+    $existing = az keyvault secret show --vault-name $vaultName --name $secretName --query id -o tsv 2>$null
+
+    if (-not $existing) {
+        Write-Host ''
+        Write-Host 'Matching provider is "anthropic" but the key vault has no key yet.' -ForegroundColor Yellow
+        Write-Host 'The API will fall back to the keyword ranker until you set it:' -ForegroundColor Yellow
+        Write-Host "  az keyvault secret set --vault-name $vaultName --name $secretName --value '<your-key>'" -ForegroundColor Yellow
+        Write-Host 'Then restart the container app to pick it up:' -ForegroundColor Yellow
+        Write-Host "  az containerapp revision restart -g $ResourceGroup -n $($outputs.apiName.value)" -ForegroundColor Yellow
+    }
+    else {
+        Write-Host "    key vault    : $vaultName (secret '$secretName' present)"
     }
 }
 

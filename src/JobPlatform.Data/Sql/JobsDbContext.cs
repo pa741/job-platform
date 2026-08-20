@@ -1,5 +1,6 @@
 using JobPlatform.Data.Sql.Entities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace JobPlatform.Data.Sql;
 
@@ -8,6 +9,41 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
     public DbSet<ScrapeRun> ScrapeRuns => Set<ScrapeRun>();
 
     public DbSet<JobPostingEntity> JobPostings => Set<JobPostingEntity>();
+
+    /// <summary>
+    /// On SQLite, stores <see cref="DateTimeOffset"/> as ticks.
+    /// </summary>
+    /// <remarks>
+    /// SQLite has no native date type and its provider refuses to translate a
+    /// <c>DateTimeOffset</c> in an ORDER BY at all - "SQLite does not support expressions of
+    /// type 'DateTimeOffset' in ORDER BY clauses". The API's default posting order is by
+    /// LastSeenUtc, so without this the tests could not exercise the ordering the production
+    /// query actually uses, which is the part most worth testing.
+    ///
+    /// Provider-conditional, so SQL Server keeps its native datetimeoffset columns and
+    /// nothing about the deployed schema changes. This follows the precedent already set by
+    /// the Description column below: the model is deliberately kept buildable on the SQLite
+    /// the tests run against.
+    /// </remarks>
+    protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
+    {
+        ArgumentNullException.ThrowIfNull(configurationBuilder);
+
+        // A string comparison rather than Database.IsSqlite(), which lives in the SQLite
+        // provider package - this project must not take a dependency on it.
+        if (Database.ProviderName?.Contains("Sqlite", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            configurationBuilder.Properties<DateTimeOffset>().HaveConversion<DateTimeOffsetToTicksConverter>();
+            configurationBuilder.Properties<DateTimeOffset?>().HaveConversion<DateTimeOffsetToTicksConverter>();
+        }
+
+        base.ConfigureConventions(configurationBuilder);
+    }
+
+    private sealed class DateTimeOffsetToTicksConverter()
+        : ValueConverter<DateTimeOffset, long>(
+            value => value.UtcTicks,
+            ticks => new DateTimeOffset(ticks, TimeSpan.Zero));
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

@@ -9,8 +9,8 @@ The Azure side of a job-market data pipeline. A separate repository
 and uploads timestamped CSVs to Blob Storage. This repository ingests them: postings into
 Azure SQL, metrics into Cosmos DB, triggered by Event Grid on blob creation.
 
-`../model.md` holds the target architecture for the whole system. Ingestion and Data are
-built; Realtime, API and Frontend are not.
+`../model.md` holds the target architecture for the whole system. Ingestion, Data and the
+API are built; Realtime and Frontend are not.
 
 ## Public repo hygiene
 
@@ -24,7 +24,7 @@ best-effort.
 - **Never commit scraped data.** Real exports contain populated `emails` and descriptions
   carrying recruiter names and contact details. `*.csv` is gitignored except under
   `tests/**/Fixtures/`, and the fixture there is entirely synthetic.
-- **Never introduce a secret.** The architecture has none by design (see below). If a
+- **Never introduce a secret.** The architecture has one, and only one (see below). If a
   change seems to need a password, key or connection secret, that is a signal the design
   is being worked around — find the identity-based path instead.
 - `local.settings.json`, `*.PublishSettings` and `*.pubxml` are gitignored because they
@@ -42,9 +42,19 @@ There is no password, key or connection secret anywhere, and it should stay that
 - Storage: identity-based connections (`__serviceUri` + `__credential=managedidentity`).
   The Functions host account sets `allowSharedKeyAccess: false`.
 - GitHub Actions: OIDC federated credential pinned to `main`. No client secret.
+- Container Apps: the API runs under the same identity, and validates callers' Entra bearer
+  tokens. No inbound key either.
 
-The function runs under a **user-assigned** managed identity, deliberately: the planned
-Container Apps API will need the same grants, and a shared identity means granting once.
+The function runs under a **user-assigned** managed identity, deliberately: the Container
+Apps API needs the same grants, and a shared identity means granting once. That has now paid
+off — the API required no new role assignment and no new database user.
+
+**The one exception is the Anthropic API key**, needed only when `Matching:Provider` is
+`anthropic`. It lives in Key Vault, is read by the shared identity through a Container Apps
+secret reference, and its *value* is set out of band with `az keyvault secret set` — never a
+Bicep parameter, never a template output, never in deployment history. The default provider
+is `keyword`, which provisions no vault and needs no key, so a fresh clone still deploys with
+nothing to leak.
 
 ## Key files
 
@@ -57,6 +67,12 @@ Container Apps API will need the same grants, and a shared identity means granti
 - `src/JobPlatform.Ingestion/IngestionPipeline.cs` — the digest, shared by the blob trigger
   and the admin reprocess endpoint so both run the same path.
 - `infra/main.bicep` — the whole stack.
+- `src/JobPlatform.Api/Program.cs` — composition only. Routes live in `Features/<Name>/`, one
+  `IEndpointGroup` each, registered in `Endpoints/EndpointGroupExtensions.cs`. Adding a
+  feature is a folder plus one line there.
+- `src/JobPlatform.Core/Matching/CvMatchingService.cs` — the retrieve → prefilter → rerank
+  pipeline, and the fallback that keeps matching working when a paid ranker is not.
+- `src/JobPlatform.Data/Sql/JobPostingQueryRepository.cs` — every SQL read the API makes.
 
 ## Conventions and constraints
 
@@ -100,11 +116,52 @@ Container Apps API will need the same grants, and a shared identity means granti
 - Metrics changes belong in `MetricsCalculator` with a matching assertion in
   `MetricsCalculatorTests`, against the synthetic fixture's known-by-construction counts.
 
+### API-specific
+
+- **The API must never serve dashboard metrics from Azure SQL.** They all exist in Cosmos
+  already. SQL is billed on wall-clock time *online* against a monthly grant one daily ingest
+  half-consumes; a polling dashboard reading SQL exhausts it and the database auto-pauses
+  until the 1st of the next month. SQL is for posting browse/search/detail and match
+  retrieval, behind output caching, and nothing else.
+- **No health probe may touch SQL**, for the same reason — a probe alone would keep the
+  database awake permanently. `/health` touches nothing; `/health/ready` checks Cosmos.
+- **EF cannot project a `GroupBy` straight into a positional record's constructor.** It
+  compiles and then fails at runtime with "could not be translated". Project into an
+  anonymous type and map afterwards — see `CountByAsync` and the daily-rollup aggregates.
+- **SQLite cannot `ORDER BY` a `DateTimeOffset`.** `JobsDbContext.ConfigureConventions`
+  converts to ticks under SQLite only, so the tests can exercise the real orderings; SQL
+  Server keeps native `datetimeoffset`.
+- **List responses must not carry `Description`.** It is unbounded `nvarchar(max)`; only
+  `PostingDetail` returns it. `PostingEndpointTests` asserts this, because nothing else fails
+  when it regresses.
+- **`Api:AllowAnonymousReads` is the only switch that opens reads**, and it never opens
+  `/match` or `/me`. Do not make it depend on whether `AzureAd` happens to be configured — a
+  mistyped section name would then silently publish the whole dataset.
+- **Matching must degrade, not fail.** `CvMatchingService` computes the keyword ordering
+  first and returns it if the configured ranker throws or returns nothing, reporting
+  `degradedToFallback`. A third party's rate limit must not 500 the endpoint.
+- **Semantic Kernel is the LLM abstraction, deliberately.** There is no official Microsoft SK
+  connector for Anthropic - only third-party alphas - so `MatchingRegistration.BuildKernel`
+  composes one: the Anthropic SDK's `AsIChatClient()` handed to SK's `AsChatCompletionService()`.
+  Keep prompts as Kernel prompt templates with `KernelArguments`; do not reach past the Kernel
+  to the SDK, or the point of the abstraction is lost.
+- **`TreatWarningsAsErrors` is off** because SK's Extensions.AI bridge is experimental
+  (SKEXP0001). Warnings still appear in build output - do not let them accumulate.
+- **`Microsoft.Extensions.*` is pinned to 10.x on a net9.0 target**, because SK and the
+  Anthropic SDK both require `Microsoft.Extensions.AI` 10.5. With transitive pinning on,
+  dropping these back to 9.0.0 fails the build with CS1705.
+- **The SK path cannot use structured outputs.** SK's execution settings are provider-neutral,
+  so the model may return fenced or prose-wrapped JSON; `ExtractJsonObject` absorbs that and
+  `SemanticKernelRankerTests` pins the behaviour. Do not assume a bare JSON body.
+
 ## Common tasks
 
 ```bash
 dotnet build
-dotnet test                       # no Azure credentials needed
+dotnet test                       # no Azure credentials needed, API suite included
+
+# Run the API locally (copy src/JobPlatform.Api/appsettings.Local.example.json first)
+dotnet run --project src/JobPlatform.Api
 
 # Schema change
 dotnet ef migrations add <Name> --project src/JobPlatform.Data --output-dir Sql/Migrations
@@ -112,6 +169,12 @@ dotnet run --project tools/JobPlatform.DbAdmin -- migrate "<connection-string>"
 
 # Full provision (idempotent)
 ./scripts/provision.ps1 -ResourceGroup <rg> -LandingStorageAccount <account>
+
+# ...with the Claude-backed ranker; the script prints the `az keyvault secret set` to run
+./scripts/provision.ps1 -ResourceGroup <rg> -LandingStorageAccount <account> -MatchingProvider anthropic
+
+# Build the API image the way CI does (context is the repo root, not the project directory)
+docker build -f src/JobPlatform.Api/Dockerfile -t job-platform-api .
 ```
 
 Regenerating the test fixture is deliberate manual work — it is hand-built so its counts
