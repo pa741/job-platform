@@ -143,6 +143,18 @@ Each of these cost a red CI run; none of them fail locally.
 
 ### API-specific
 
+- **Never set `InvariantGlobalization`.** `Microsoft.Data.SqlClient` builds a `CultureInfo`
+  from the database's collation when materialising string columns; in invariant mode that
+  throws `CultureNotFoundException` and every SQL-backed endpoint answers 500. The SQLite
+  tests never touch a collation, so this only shows up against the deployed database.
+- **Read Entra claims under both names.** The JWT handler rewrites short claim names to
+  legacy URIs, so `scp` and `name` are usually absent under the names the token carried.
+  `oid` specifically must not fall back to `ClaimTypes.NameIdentifier`, which resolves to
+  `sub` - pairwise per application, where `oid` is the stable directory object id.
+- **The app registration is `scripts/setup-api-app.ps1`**, not Bicep: an Entra application
+  has no ARM representation. It is idempotent and preserves the existing scope id, because
+  changing that id invalidates every consent already granted.
+
 - **The API must never serve dashboard metrics from Azure SQL.** They all exist in Cosmos
   already. SQL is billed on wall-clock time *online* against a monthly grant one daily ingest
   half-consumes; a polling dashboard reading SQL exhausts it and the database auto-pauses

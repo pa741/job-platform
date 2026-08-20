@@ -46,7 +46,11 @@ public sealed class MetaEndpoints : IEndpointGroup
             Name = user.Identity?.Name
                 ?? First(user, "name", ClaimTypes.Name, "preferred_username", "upn"),
             IsAuthenticated = user.Identity?.IsAuthenticated ?? false,
-            ObjectId = First(user, "oid", ClaimTypes.NameIdentifier,
+            // Deliberately not ClaimTypes.NameIdentifier as a fallback: that resolves to
+            // `sub`, which is pairwise per application, where `oid` is the stable directory
+            // object id. Returning one labelled as the other would quietly break any caller
+            // correlating a user across apps.
+            ObjectId = First(user, "oid",
                 "http://schemas.microsoft.com/identity/claims/objectidentifier"),
             TenantId = First(user, "tid",
                 "http://schemas.microsoft.com/identity/claims/tenantidentifier",

@@ -163,6 +163,7 @@ Requires the Azure CLI, the GitHub CLI, and the .NET 9 SDK.
 ```powershell
 az login
 ./scripts/provision.ps1 -ResourceGroup <rg> -LandingStorageAccount <existing-storage-account>
+./scripts/setup-api-app.ps1 -Repository <owner>/<repo>
 ```
 
 That registers the resource providers, deploys `infra/main.bicep`, applies the database
@@ -223,10 +224,16 @@ touches it at all.
 
 ## Calling the API
 
-Reads require an Entra token by default:
+Reads require an Entra token by default. `scripts/setup-api-app.ps1` creates the app
+registration the API validates against - it exposes a `Jobs.Read` scope and pre-authorises
+the Azure CLI, so a token is one command away with no consent prompt:
+
+```powershell
+./scripts/setup-api-app.ps1 -Repository <owner>/<repo>
+```
 
 ```bash
-TOKEN=$(az account get-access-token --resource api://<api-client-id> --query accessToken -o tsv)
+TOKEN=$(az account get-access-token --scope api://<api-client-id>/Jobs.Read --query accessToken -o tsv)
 API=https://<container-app>.<region>.azurecontainerapps.io
 
 curl -H "Authorization: Bearer $TOKEN" "$API/api/v1/search-terms"
@@ -319,14 +326,20 @@ response handling. It runs under the same managed identity as the ingest functio
 no new role assignment and no new database user to do it - which is what the user-assigned
 identity was chosen for in the first place.
 
-It is deployed without an Entra app registration, so every route except `/health` answers
-401 until `JP_API_CLIENT_ID` is set. That is the intended safe default: reads open only on
-the explicit `Api:AllowAnonymousReads` flag, never as a side effect of missing configuration.
+Verified live against the real ingested data, with a real Entra token:
 
-Verified live: `/health` returns 200 in ~0.3s warm and ~25s on the first request after the
-app has scaled to zero, and every other route answers 401. The cold start is the cost of
-`minReplicas: 0`, and it is the right trade here - the API is idle most of the day, and an
-always-warm replica would consume the free grant to serve nobody.
+| Endpoint | Result |
+| --- | --- |
+| `/health` | 200 in ~0.3s warm, ~25s cold from zero replicas |
+| any route without a token | 401 |
+| `/api/v1/search-terms` | 286 postings across 3 runs |
+| `/api/v1/postings?remote=true` | 39 of 286, correct paging and totals, no description in list rows |
+| `/api/v1/postings/facets` | linkedin 161 / indeed 125; London 94; salary coverage 0% |
+| `/api/v1/metrics/summary` | served from Cosmos, SQL untouched |
+| `/api/v1/match` | 14 skills parsed, 286 candidates ranked, top hit "Backend Software Engineer C# .Net" |
+
+The cold start is the cost of `minReplicas: 0`, and it is the right trade here: the API is
+idle most of the day, and an always-warm replica would burn the free grant serving nobody.
 
 Still to come, per the architecture in `model.md`: a Cosmos change-feed function driving
 Web PubSub for live metrics (the `leases` container is already provisioned), and a React
