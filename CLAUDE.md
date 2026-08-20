@@ -30,6 +30,9 @@ best-effort.
 - `local.settings.json`, `*.PublishSettings` and `*.pubxml` are gitignored because they
   genuinely carry credentials.
 - Before pushing, check `git ls-files` for stray CSVs and `git grep` for identifiers.
+- `.gitleaks.toml` allowlists the Azure built-in **role definition** GUIDs by value. They are
+  public constants, but they look exactly like generic API keys to the scanner. Allowlisting
+  by value rather than by path keeps a real secret in the same file detectable.
 
 ## Authentication model
 

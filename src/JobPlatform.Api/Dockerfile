@@ -24,10 +24,12 @@ WORKDIR /app
 # The image is published to a public registry, so it runs as a non-root user and carries no
 # configuration: every setting arrives as an environment variable from Container Apps, and
 # every credential is a managed identity token acquired at runtime.
-RUN useradd --uid 64198 --create-home --shell /usr/sbin/nologin app
-USER 64198
-
-COPY --from=build --chown=64198 /app .
+#
+# The .NET base images already ship a non-root `app` user and expose its id as APP_UID.
+# Creating one fails the build with useradd exit code 9, "username already in use", so the
+# existing user is used rather than a hand-rolled one.
+COPY --from=build --chown=$APP_UID:$APP_UID /app .
+USER $APP_UID
 
 EXPOSE 8080
 ENV ASPNETCORE_HTTP_PORTS=8080 \
