@@ -21,10 +21,21 @@ param administratorLoginName = readEnvironmentVariable('JP_ADMIN_LOGIN_NAME')
 param tenantId = readEnvironmentVariable('JP_TENANT_ID')
 
 // --- API ---------------------------------------------------------------------
-param apiContainerImage = readEnvironmentVariable('JP_API_IMAGE', 'ghcr.io/pa741/job-platform-api:latest')
+// Every default below is applied with a ternary on empty(), not with
+// readEnvironmentVariable's own fallback argument. GitHub Actions maps an undefined
+// `vars.X` to an env var that is set-and-empty rather than absent, so the fallback never
+// fires and the empty string is passed through - which failed a deploy with BCP033,
+// "Expected a value of type 'anthropic' | 'keyword' but the provided value is of type ''".
+param apiContainerImage = empty(readEnvironmentVariable('JP_API_IMAGE', ''))
+  ? 'ghcr.io/pa741/job-platform-api:latest'
+  : readEnvironmentVariable('JP_API_IMAGE', '')
 param apiClientId = readEnvironmentVariable('JP_API_CLIENT_ID', '')
-param apiAllowAnonymousReads = bool(readEnvironmentVariable('JP_API_ALLOW_ANONYMOUS_READS', 'false'))
-param matchingProvider = readEnvironmentVariable('JP_MATCHING_PROVIDER', 'keyword')
+param apiAllowAnonymousReads = empty(readEnvironmentVariable('JP_API_ALLOW_ANONYMOUS_READS', ''))
+  ? false
+  : bool(readEnvironmentVariable('JP_API_ALLOW_ANONYMOUS_READS', 'false'))
+param matchingProvider = empty(readEnvironmentVariable('JP_MATCHING_PROVIDER', ''))
+  ? 'keyword'
+  : readEnvironmentVariable('JP_MATCHING_PROVIDER', '')
 // Comma-separated in the environment, e.g. "https://app.example.net,https://localhost:5173".
 param apiAllowedOrigins = empty(readEnvironmentVariable('JP_API_ALLOWED_ORIGINS', ''))
   ? []
