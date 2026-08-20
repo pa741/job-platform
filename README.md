@@ -313,8 +313,20 @@ three uploads totalling 455 rows reduced to 286 distinct postings, with a re-upl
 correctly reporting 0 new and leaving the row count unchanged — idempotency demonstrated on
 live data rather than asserted. CI and the OIDC deployment workflow both run green.
 
-The API is built and tested: 43 tests cover the route surface, the authorization rules, the
-matching pipeline and the Semantic Kernel response handling.
+The API is built, tested and deployed to Container Apps: 47 tests cover the route surface,
+the authorization rules, the matching pipeline, the Semantic Kernel composition and its
+response handling. It runs under the same managed identity as the ingest function and needed
+no new role assignment and no new database user to do it - which is what the user-assigned
+identity was chosen for in the first place.
+
+It is deployed without an Entra app registration, so every route except `/health` answers
+401 until `JP_API_CLIENT_ID` is set. That is the intended safe default: reads open only on
+the explicit `Api:AllowAnonymousReads` flag, never as a side effect of missing configuration.
+
+Verified live: `/health` returns 200 in ~0.3s warm and ~25s on the first request after the
+app has scaled to zero, and every other route answers 401. The cold start is the cost of
+`minReplicas: 0`, and it is the right trade here - the API is idle most of the day, and an
+always-warm replica would consume the free grant to serve nobody.
 
 Still to come, per the architecture in `model.md`: a Cosmos change-feed function driving
 Web PubSub for live metrics (the `leases` container is already provisioned), and a React

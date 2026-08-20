@@ -119,6 +119,28 @@ nothing to leak.
 - Metrics changes belong in `MetricsCalculator` with a matching assertion in
   `MetricsCalculatorTests`, against the synthetic fixture's known-by-construction counts.
 
+### Deployment traps
+
+Each of these cost a red CI run; none of them fail locally.
+
+- **`readEnvironmentVariable`'s default does not fire in GitHub Actions.** An undefined
+  `vars.X` becomes an environment variable that is *set and empty*, not absent, so the
+  fallback argument is skipped and `''` reaches the template. `infra/main.bicepparam`
+  therefore defaults with `empty(readEnvironmentVariable('X', '')) ? default : ...`. Follow
+  that pattern for every new parameter, or a missing repo variable fails the deploy with
+  BCP033 rather than taking the default.
+- **Do not create a user in the API Dockerfile.** The .NET base images already ship a
+  non-root `app` user and expose `APP_UID`; `useradd` fails the build with exit code 9,
+  "username already in use".
+- **`cache-to: type=gha` needs `docker/setup-buildx-action`.** On the default docker driver
+  buildx aborts with "Cache export is not supported for the docker driver".
+- **The container app cannot be deployed before its image exists.** The tag is referenced by
+  the template, so `deploy.yml` builds and pushes the image in a job that the infrastructure
+  job depends on. A missing tag fails provisioning outright, not just the revision.
+- **The GHCR package must stay public** for the credential-free pull to work. It inherits the
+  repository's visibility; if that ever changes, the app needs a registry credential and the
+  no-secrets property is gone.
+
 ### API-specific
 
 - **The API must never serve dashboard metrics from Azure SQL.** They all exist in Cosmos
