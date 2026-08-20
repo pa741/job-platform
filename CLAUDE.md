@@ -117,7 +117,10 @@ nothing to leak.
   `infra/modules/sql.bicep` selects; it defaults to `free-serverless` so a clone stays free,
   and the repository variable `JP_SQL_SKU=basic` opts this deployment in. Never remove that
   variable: CI redeploys on every push, the parameter would fall back to the free offer, and
-  a database cannot be converted *back* to it. Basic has no auto-pause because the DTU model
+  a database cannot be converted *back* to it. A repository variable is not enough on its
+  own - it must also be mapped into `deploy.yml`'s `env:` block, or `readEnvironmentVariable`
+  never sees it. Azure rejects the downgrade rather than performing it, so the failure mode
+  is a red pipeline rather than a lost database. Basic has no auto-pause because the DTU model
   has no serverless tier — that is what removed the ~1 minute cold start.
 - **Free-tier ceilings are load-bearing**, not incidental: Cosmos autoscale max 1000 RU/s,
   SQL `useFreeLimit` with `freeLimitExhaustionBehavior: AutoPause`. Raising either starts
