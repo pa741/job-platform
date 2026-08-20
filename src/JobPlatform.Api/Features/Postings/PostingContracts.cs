@@ -85,9 +85,17 @@ public sealed record FacetsResponse
     public IReadOnlyList<NamedCount> Companies { get; init; } = [];
 }
 
+/// <summary>
+/// One search term the platform holds data for.
+/// </summary>
+/// <remarks>
+/// Sourced from the latest daily rollup in Cosmos rather than from SQL. Clients fetch this
+/// before they can fetch anything else, so it must not depend on a database that spends most
+/// of the day paused - see the endpoint for the failure that caused.
+/// </remarks>
 public sealed record SearchTermResponse(
     string SearchTerm,
+    /// <summary>Every distinct posting recorded for this term, as of the latest rollup.</summary>
     int PostingCount,
-    int RunCount,
-    DateOnly? LastScrapeDate,
-    DateTimeOffset? LastSeenUtc);
+    string? LastScrapeDate,
+    DateTimeOffset? UpdatedAtUtc);

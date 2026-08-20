@@ -73,12 +73,12 @@ export interface FacetsResponse {
   companies: NamedCount[];
 }
 
+/** Served from Cosmos, not SQL - see the API endpoint for why that matters. */
 export interface SearchTermResponse {
   searchTerm: string;
   postingCount: number;
-  runCount: number;
   lastScrapeDate: string | null;
-  lastSeenUtc: string | null;
+  updatedAtUtc: string | null;
 }
 
 export interface MetricsSummary {

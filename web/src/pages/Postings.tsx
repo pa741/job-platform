@@ -115,7 +115,7 @@ export function Postings({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
         </div>
       </div>
 
-      {error ? <ErrorNote error={error} /> : null}
+      {error ? <ErrorNote error={error} onRetry={() => void load()} /> : null}
 
       <div className="scroll-x">
         <table>

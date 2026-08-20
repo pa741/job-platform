@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using JobPlatform.Api.Features.Metrics;
+using SearchTermResponse = JobPlatform.Api.Features.Postings.SearchTermResponse;
 using JobPlatform.Core.Metrics;
 using Xunit;
 
@@ -163,6 +164,25 @@ public sealed class MetricEndpointTests : IDisposable
 
         Assert.Equal("unknown", health!.Status);
         Assert.Empty(health.EmptyColumns);
+    }
+
+    /// <summary>
+    /// The regression this guards is an availability one, not a correctness one: clients call
+    /// this before they can call anything else, so if it reads SQL the whole dashboard waits
+    /// on a database that is paused most of the day. Asserting it works with only Cosmos
+    /// populated - the SQL tables here are empty - is what pins that.
+    /// </summary>
+    [Fact]
+    public async Task Search_terms_come_from_Cosmos_and_need_no_SQL_data()
+    {
+        var terms = await _client.GetFromJsonAsync<List<SearchTermResponse>>(
+            "/api/v1/search-terms", Json);
+
+        var term = Assert.Single(terms!);
+        Assert.Equal(Term, term.SearchTerm);
+        // The latest rollup's cumulative count, not a SQL row count.
+        Assert.Equal(75, term.PostingCount);
+        Assert.Equal("2026-08-19", term.LastScrapeDate);
     }
 
     [Fact]

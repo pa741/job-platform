@@ -1,4 +1,5 @@
 using JobPlatform.Api.Endpoints;
+using JobPlatform.Api.Features.Postings;
 using JobPlatform.Api.Infrastructure;
 using JobPlatform.Core.Metrics;
 using JobPlatform.Data.Cosmos;
@@ -55,6 +56,48 @@ public sealed class MetricEndpoints : IEndpointGroup
         group.MapGet("/scraper-health", ScraperHealthAsync)
             .WithName("GetScraperHealth")
             .WithSummary("Per-column fill rates and which columns have silently gone empty.");
+
+        // Outside the /metrics group because it is not a metric - it is the axis every other
+        // route partitions on, and clients fetch it first.
+        //
+        // Served from Cosmos, and that matters more than it looks: this is the call a client
+        // makes before it can make any other, so sourcing it from SQL put the whole
+        // dashboard behind a database that is paused most of the day. Every page then waited
+        // on a wake-up, including the ones that read nothing but Cosmos. Cosmos already
+        // knows which search terms exist, so nothing is gained by asking SQL.
+        routes.MapGet("/search-terms", SearchTermsAsync)
+            .WithTags("Metrics")
+            .WithName("ListSearchTerms")
+            .WithSummary("Search terms the platform holds data for.")
+            .RequireAuthorization(AuthSetup.PublicReadPolicy)
+            .RequireRateLimiting(RateLimitSetup.ReadPolicy)
+            .CacheOutput(CacheSetup.FacetsPolicy);
+    }
+
+    private static async Task<IResult> SearchTermsAsync(
+        [FromServices] IMetricsSource metrics,
+        CancellationToken ct)
+    {
+        var terms = await metrics.ListSearchTermsAsync(ct);
+
+        // One single-partition query per term. There are as many terms as the scraper is
+        // configured with - a handful - so this stays cheap, and the whole response is
+        // output-cached for minutes.
+        var summaries = await Task.WhenAll(terms.Select(async term =>
+        {
+            var rollups = await metrics.ListDailyRollupsAsync(term, from: null, to: null, ct);
+            var latest = rollups.Count > 0 ? rollups[^1] : null;
+
+            return new SearchTermResponse(
+                term,
+                latest?.CumulativePostings ?? 0,
+                latest?.Date,
+                latest?.UpdatedAtUtc);
+        }));
+
+        return TypedResults.Ok(summaries
+            .OrderByDescending(s => s.PostingCount)
+            .ToList());
     }
 
     private static async Task<IResult> LatestAsync(

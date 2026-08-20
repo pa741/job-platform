@@ -174,16 +174,4 @@ public sealed class PostingEndpointTests : IAsyncLifetime
         Assert.Contains(facets.Cities, c => c.Name == "London");
     }
 
-    [Fact]
-    public async Task Search_terms_report_posting_and_run_counts()
-    {
-        var terms = await _client.GetFromJsonAsync<List<SearchTermResponse>>(
-            "/api/v1/search-terms", Json);
-
-        var term = Assert.Single(terms!);
-        Assert.Equal(Term, term.SearchTerm);
-        Assert.Equal(3, term.PostingCount);
-        Assert.Equal(1, term.RunCount);
-        Assert.Equal(ScrapeDate, term.LastScrapeDate);
-    }
 }

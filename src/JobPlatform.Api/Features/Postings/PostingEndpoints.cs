@@ -37,14 +37,6 @@ public sealed class PostingEndpoints : IEndpointGroup
             .WithName("GetPosting")
             .WithSummary("One posting in full, including its description.")
             .CacheOutput(CacheSetup.PostingsPolicy);
-
-        routes.MapGet("/search-terms", SearchTermsAsync)
-            .WithTags("Postings")
-            .WithName("ListSearchTerms")
-            .WithSummary("Search terms the platform holds data for.")
-            .RequireAuthorization(AuthSetup.PublicReadPolicy)
-            .RequireRateLimiting(RateLimitSetup.ReadPolicy)
-            .CacheOutput(CacheSetup.FacetsPolicy);
     }
 
     private static async Task<IResult> SearchAsync(
@@ -140,18 +132,6 @@ public sealed class PostingEndpoints : IEndpointGroup
     {
         var facets = await repository.GetFacetsAsync(searchTerm, ct);
         return TypedResults.Ok(facets.ToResponse());
-    }
-
-    private static async Task<IResult> SearchTermsAsync(
-        [FromServices] JobPostingQueryRepository repository,
-        CancellationToken ct)
-    {
-        var terms = await repository.ListSearchTermsAsync(ct);
-
-        return TypedResults.Ok(terms
-            .Select(t => new SearchTermResponse(
-                t.SearchTerm, t.PostingCount, t.RunCount, t.LastScrapeDate, t.LastSeenUtc))
-            .ToList());
     }
 
     private static bool TryParseSort(string value, out PostingSort sort)

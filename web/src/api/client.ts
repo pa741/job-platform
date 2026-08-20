@@ -15,6 +15,24 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Thrown when a request exceeds the deadline.
+ *
+ * Distinct from ApiError so the UI can say something useful. The postings endpoints read a
+ * serverless database that pauses when idle and takes 30-60s to wake, so the first request
+ * after a quiet period is legitimately slow - but "slow" must still end, because a promise
+ * that never settles leaves a spinner on screen forever with nothing to click.
+ */
+export class ApiTimeoutError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super('The request timed out.');
+    this.name = 'ApiTimeoutError';
+  }
+}
+
+/** Generous, because waking a paused database genuinely takes this long. */
+const DEFAULT_TIMEOUT_MS = 90_000;
+
 /** Supplies a bearer token. Async because MSAL may need to refresh silently. */
 export type TokenProvider = () => Promise<string | null>;
 
@@ -39,7 +57,20 @@ export class JobPlatformApi {
     if (token) headers.set('Authorization', `Bearer ${token}`);
     if (init?.body) headers.set('Content-Type', 'application/json');
 
-    const response = await fetch(`${this.baseUrl}${path}`, { ...init, headers });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new ApiTimeoutError(DEFAULT_TIMEOUT_MS);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
 
     if (!response.ok) {
       // The API answers with RFC 9457 problem details; surface `detail` when it is there,

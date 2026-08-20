@@ -90,14 +90,32 @@ export function Legend({ items }: { items: { name: string; color: string }[] }) 
   );
 }
 
-export function ErrorNote({ error }: { error: unknown }) {
+export function ErrorNote({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   const message = error instanceof Error ? error.message : String(error);
   const detail = (error as { detail?: string })?.detail;
+  const name = (error as { name?: string })?.name;
+
+  // A timeout on this platform has one overwhelmingly likely cause, and saying so is more
+  // useful than "the request timed out": the postings database is serverless, pauses when
+  // idle, and takes up to a minute to wake. Naming that turns a dead end into "wait and
+  // press retry".
+  const timedOut = name === 'ApiTimeoutError';
 
   return (
     <div className="err">
-      <strong>{message}</strong>
-      {detail && <div className="muted" style={{ marginTop: 4 }}>{detail}</div>}
+      <strong>{timedOut ? 'The API did not respond in time.' : message}</strong>
+      {timedOut && (
+        <div className="muted" style={{ marginTop: 4 }}>
+          The postings database pauses when idle and can take up to a minute to wake. If this
+          was the first request in a while, retrying usually succeeds.
+        </div>
+      )}
+      {!timedOut && detail && <div className="muted" style={{ marginTop: 4 }}>{detail}</div>}
+      {onRetry && (
+        <button className="btn" style={{ marginTop: 10 }} onClick={onRetry}>
+          Retry
+        </button>
+      )}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { AuthenticatedTemplate, UnauthenticatedTemplate, useMsal } from '@azure/msal-react';
 import { useApi } from './auth/useApi';
 import { apiRequest } from './auth/msalConfig';
@@ -86,7 +86,12 @@ function Dashboard({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => 
   // The search term is the axis everything else partitions on - postings, metrics and
   // matching are all scoped by it - so it is resolved once here and passed down, rather
   // than each page discovering it independently.
-  useEffect(() => {
+  //
+  // This call gates the entire dashboard, which is why the API serves it from Cosmos rather
+  // than SQL: when it read SQL, opening the dashboard while the serverless database was
+  // paused left every page - including the Cosmos-only overview - waiting on a wake-up.
+  const loadTerms = useCallback(() => {
+    setError(undefined);
     api.searchTerms()
       .then((result) => {
         setTerms(result);
@@ -94,6 +99,8 @@ function Dashboard({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => 
       })
       .catch(setError);
   }, [api]);
+
+  useEffect(loadTerms, [loadTerms]);
 
   return (
     <>
@@ -141,7 +148,7 @@ function Dashboard({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => 
       </header>
 
       <main>
-        {error ? <ErrorNote error={error} /> : null}
+        {error ? <ErrorNote error={error} onRetry={loadTerms} /> : null}
         {!error && !terms && <div className="empty">Loading…</div>}
         {terms?.length === 0 && (
           <div className="empty">
