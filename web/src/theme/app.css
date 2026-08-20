@@ -1,0 +1,105 @@
+@import "./tokens.css";
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.app { min-height: 100vh; display: flex; flex-direction: column; }
+
+.topbar {
+  display: flex; align-items: center; gap: 16px;
+  padding: 12px 20px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 10;
+  flex-wrap: wrap;
+}
+.topbar h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+.topbar .spacer { flex: 1; }
+
+.nav { display: flex; gap: 4px; }
+.nav button {
+  border: 0; background: transparent; color: var(--text-secondary);
+  padding: 6px 12px; border-radius: var(--radius); cursor: pointer;
+  font: inherit; font-size: 13px;
+}
+.nav button:hover { background: var(--gridline); color: var(--text-primary); }
+.nav button[aria-current="page"] { background: var(--gridline); color: var(--text-primary); font-weight: 600; }
+
+.btn {
+  border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
+  padding: 6px 12px; border-radius: var(--radius); cursor: pointer; font: inherit; font-size: 13px;
+}
+.btn:hover { background: var(--gridline); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+main { padding: 20px; max-width: 1240px; width: 100%; margin: 0 auto; flex: 1; }
+
+.grid { display: grid; gap: 16px; }
+.grid.kpi { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.grid.halves { grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); }
+
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+.card > header { margin-bottom: 12px; }
+.card h2 { font-size: 13px; font-weight: 600; margin: 0; color: var(--text-primary); }
+.card .sub { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+
+/* Stat tile. The value is the point, so it is the only large thing in the box. */
+.tile .label { font-size: 12px; color: var(--text-secondary); }
+.tile .value { font-size: 30px; font-weight: 600; letter-spacing: -0.02em; margin-top: 4px; }
+.tile .delta { font-size: 12px; margin-top: 2px; color: var(--text-secondary); }
+.tile .delta.up { color: var(--success-text); }
+.tile .delta.down { color: var(--status-critical); }
+
+/* Meter: a single ratio against its limit, on the sequential ramp. */
+.meter { margin-top: 8px; }
+.meter .track { height: 8px; border-radius: 4px; background: var(--gridline); overflow: hidden; }
+.meter .fill { height: 100%; border-radius: 4px; background: var(--seq-450); }
+
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--gridline); }
+th { color: var(--text-secondary); font-weight: 600; font-size: 12px; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr:hover { background: var(--gridline); }
+.scroll-x { overflow-x: auto; }
+
+.legend { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+.legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+.pill { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border); }
+.pill.good { color: var(--success-text); }
+.pill.critical { color: var(--status-critical); }
+.pill.warning { color: var(--text-primary); }
+
+input, textarea, select {
+  font: inherit; color: var(--text-primary); background: var(--surface-1);
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px;
+}
+textarea { width: 100%; min-height: 150px; resize: vertical; font-size: 13px; }
+label { font-size: 12px; color: var(--text-secondary); display: block; margin-bottom: 4px; }
+.filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 14px; }
+
+.muted { color: var(--text-secondary); }
+.empty { padding: 28px; text-align: center; color: var(--text-secondary); }
+.err { border-left: 3px solid var(--status-critical); padding: 10px 12px; background: var(--surface-1); border-radius: var(--radius); }
+
+.tooltip {
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 8px 10px; font-size: 12px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.10);
+}
+.tooltip .k { color: var(--text-secondary); }
+.tooltip .v { font-variant-numeric: tabular-nums; font-weight: 600; }

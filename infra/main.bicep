@@ -56,6 +56,19 @@ param apiAllowedOrigins array = []
 ])
 param matchingProvider string = 'keyword'
 
+// Separate from `location` for the same reason `sqlLocation` is, and with the same trap:
+// Static Web Apps is offered in a handful of regions, and a region can additionally stop
+// accepting new customers. On this subscription westeurope rejects creation outright
+// ("The selected region is currently not accepting new customers"), while eastus2,
+// centralus, westus2 and eastasia all validate. Probe before changing it. The region is a
+// control-plane choice - the content itself is served from Microsoft's global edge - so
+// being outside Europe costs nothing at request time.
+@description('Region for the Static Web App. Offered only in some regions; probe before changing.')
+param webLocation string = 'eastus2'
+
+@description('Deploy the dashboard Static Web App.')
+param deployWeb bool = true
+
 @description('Deterministic suffix keeping globally unique names stable across deployments.')
 param resourceToken string = toLower(uniqueString(subscription().id, resourceGroup().id, namePrefix))
 
@@ -174,6 +187,15 @@ module keyVault 'modules/keyvault.bicep' = if (matchingProvider == 'anthropic') 
   }
 }
 
+module staticWebApp 'modules/staticwebapp.bicep' = if (deployWeb) {
+  name: 'staticWebApp'
+  params: {
+    location: webLocation
+    namePrefix: namePrefix
+    tags: tags
+  }
+}
+
 module containerApp 'modules/containerapp.bicep' = {
   name: 'containerApp'
   params: {
@@ -192,7 +214,12 @@ module containerApp 'modules/containerapp.bicep' = {
     tenantId: tenantId
     apiClientId: apiClientId
     allowAnonymousReads: apiAllowAnonymousReads
-    allowedOrigins: apiAllowedOrigins
+    // The dashboard's origin is appended here rather than configured by hand. A Static Web
+    // App's hostname is generated at creation, so it cannot be known in advance - taking it
+    // from the module's output is what keeps CORS correct without a second deploy pass.
+    allowedOrigins: deployWeb
+      ? union(apiAllowedOrigins, [staticWebApp!.outputs.url])
+      : apiAllowedOrigins
     matchingProvider: matchingProvider
     anthropicSecretUri: matchingProvider == 'anthropic' ? keyVault!.outputs.anthropicSecretUri : ''
   }
@@ -246,5 +273,7 @@ output apiName string = containerApp.outputs.name
 output apiUrl string = containerApp.outputs.url
 output apiFqdn string = containerApp.outputs.fqdn
 output matchingProvider string = matchingProvider
+output webName string = deployWeb ? staticWebApp!.outputs.name : ''
+output webUrl string = deployWeb ? staticWebApp!.outputs.url : ''
 output keyVaultName string = matchingProvider == 'anthropic' ? keyVault!.outputs.vaultName : ''
 output anthropicSecretName string = matchingProvider == 'anthropic' ? keyVault!.outputs.anthropicSecretName : ''

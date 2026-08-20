@@ -1,0 +1,98 @@
+/*
+ * Chart and UI tokens.
+ *
+ * The categorical slots, ramps, status colours and chrome below are a validated palette:
+ * the slots used here clear the lightness band, chroma floor, CVD separation and
+ * normal-vision floor in both modes. Do not substitute a hex by eye - re-run the palette
+ * validator, because CVD separation is not something the eye can check.
+ *
+ * Dark values are declared twice on purpose: the media query follows the OS setting, and
+ * the [data-theme] scope lets an explicit toggle win in both directions.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Surfaces and ink */
+  --surface-1: #fcfcfb;
+  --page: #f9f9f7;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #898781;
+  --gridline: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.1);
+  --success-text: #006300;
+
+  /* Categorical slots, in fixed order. Never cycle; never generate a ninth. */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+
+  /* Sequential ramp (blue), light to dark. Ordinal use starts at 250. */
+  --seq-250: #86b6ef;
+  --seq-350: #5598e7;
+  --seq-450: #2a78d6;
+  --seq-550: #1c5cab;
+  --seq-650: #104281;
+
+  /* Status. Fixed, never themed, never reused as a series colour. */
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+
+  --radius: 10px;
+  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --page: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --gridline: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.1);
+    --success-text: #0ca30c;
+
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+
+    --seq-250: #104281;
+    --seq-350: #1c5cab;
+    --seq-450: #2a78d6;
+    --seq-550: #3987e5;
+    --seq-650: #5598e7;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-1: #1a1a19;
+  --page: #0d0d0d;
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted: #898781;
+  --gridline: #2c2c2a;
+  --axis: #383835;
+  --border: rgba(255, 255, 255, 0.1);
+  --success-text: #0ca30c;
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+
+  --seq-250: #104281;
+  --seq-350: #1c5cab;
+  --seq-450: #2a78d6;
+  --seq-550: #3987e5;
+  --seq-650: #5598e7;
+}

@@ -119,6 +119,29 @@ nothing to leak.
 - Metrics changes belong in `MetricsCalculator` with a matching assertion in
   `MetricsCalculatorTests`, against the synthetic fixture's known-by-construction counts.
 
+### Dashboard (`web/`)
+
+- **Chart colours are validated, not chosen.** The categorical slots in
+  `src/theme/tokens.css` clear CVD-separation and contrast gates in both modes. Never
+  substitute a hex by eye - colour-vision separation is not something the eye can check, and
+  the slot *order* is itself the safety mechanism. Add series by taking the next slot; a
+  fifth series folds into "Other" rather than getting a generated hue.
+- **Never add a dual-axis chart.** Two y-scales on one plot is the single most misleading
+  thing a dashboard can do. Two measures of different magnitude means two charts, or one
+  chart and one stat tile.
+- **Never fetch metrics directly in a component.** Go through `MetricsFeed`. That interface
+  is what lets the planned Web PubSub push replace polling without touching components; a
+  component with its own timer is exactly the shape that cannot be converted.
+- **Recharts cannot take `var(--token)` for fill/stroke.** `useChartTokens` resolves tokens
+  to hex and re-resolves on theme change - both on the `data-theme` attribute and on the
+  `prefers-color-scheme` media query, or a toggle leaves charts in the old palette.
+- **Vite 8 builds with rolldown**, so `manualChunks` must be a function; the object form
+  fails with "manualChunks is not a function".
+- **Static Web Apps region is a trap like the SQL one.** `westeurope` refuses new customers
+  on this subscription. `webLocation` is separate for that reason - probe before changing.
+- **The dashboard's origin reaches the API's CORS list through the template**, from the
+  Static Web App module's output. Do not hard-code it: the hostname is generated at creation.
+
 ### Deployment traps
 
 Each of these cost a red CI run; none of them fail locally.

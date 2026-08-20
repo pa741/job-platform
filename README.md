@@ -121,6 +121,33 @@ may wrap its JSON in a code fence or a sentence of preamble, and the ranker has 
 that rather than being guaranteed a bare body. `SemanticKernelRankerTests` pins that
 behaviour.
 
+## The dashboard
+
+A React SPA on Static Web Apps (Free tier), signing in with MSAL and calling the API with
+an Entra bearer token. Three pages: an overview of the market metrics, a filterable postings
+browser, and CV matching.
+
+**Charts follow one rule set rather than taste.** The categorical palette is validated for
+colour-vision deficiency rather than eyeballed — every adjacent pair clears a ΔE separation
+floor under deuteranopia, protanopia and tritanopia, in both light and dark. Dark mode is a
+*selected* set of steps for the dark surface, not an automatic inversion. Beyond colour:
+
+- Headline numbers are **stat tiles and meters**, not one-bar charts — for a single current
+  value the number is the visualisation.
+- **No dual-axis charts anywhere.** New postings per day and cumulative postings differ by
+  an order of magnitude, so cumulative is a tile and the trend line stands alone.
+- Rankings (companies, keywords) are **horizontal bars on a single-hue ramp** — one measure
+  at different magnitudes is not several series, and horizontal keeps long labels readable.
+- Board share is a **stacked bar with a table beside it**, never a pie.
+- Status is never colour alone: the scraper-health pills carry an icon and a label, because
+  two of the four status steps sit below 3:1 contrast on the light surface.
+
+**Live metrics are polled, behind an abstraction built for push.** `MetricsFeed` is an
+interface; `PollingMetricsFeed` implements it today. The underlying data changes once a day
+when the scraper runs, so polling reflects the freshness the data actually has — and when the
+Realtime row of `model.md` lands, a `PushMetricsFeed` over Web PubSub replaces it without a
+component changing. The UI shows which feed is live so freshness is never a guess.
+
 ## Repository layout
 
 ```
@@ -129,6 +156,7 @@ src/JobPlatform.Data         EF Core (SQL) + Cosmos repositories, read and write
 src/JobPlatform.Ingestion    The Azure Function.
 src/JobPlatform.Ai           Semantic Kernel + Claude ranker. Isolated so the SDK reaches nothing else.
 src/JobPlatform.Api          The API. Vertical slices under Features/.
+web/                         React dashboard. Vite, MSAL, Recharts.
 tools/JobPlatform.DbAdmin    Schema migration and identity grants.
 tests/                       Unit and integration tests. No credentials required.
 infra/                       Bicep for the whole stack.
@@ -163,8 +191,20 @@ Requires the Azure CLI, the GitHub CLI, and the .NET 9 SDK.
 ```powershell
 az login
 ./scripts/provision.ps1 -ResourceGroup <rg> -LandingStorageAccount <existing-storage-account>
-./scripts/setup-api-app.ps1 -Repository <owner>/<repo>
+
+# Creates both Entra registrations - the API as a protected resource, the dashboard as a
+# public client - and sets the repository variables CI needs. Pass the Static Web App URL
+# that provision.ps1 printed so the dashboard can sign in from it.
+./scripts/setup-api-app.ps1 -Repository <owner>/<repo> `
+    -WebRedirectUris @('http://localhost:5173', '<static-web-app-url>')
 ```
+
+> **Region note, again.** Static Web Apps is offered in only a few regions, and a region can
+> separately stop accepting new customers: on this subscription `westeurope` refuses creation
+> outright, while `eastus2`, `centralus`, `westus2` and `eastasia` all work. `webLocation` is
+> its own parameter for the same reason `sqlLocation` is. The region is a control-plane
+> choice — content is served from Microsoft's global edge — so being outside Europe costs
+> nothing at request time.
 
 That registers the resource providers, deploys `infra/main.bicep`, applies the database
 schema, and grants the function's managed identity a database user. Then, for CI:

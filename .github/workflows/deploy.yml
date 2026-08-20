@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      - 'web/**'
       - 'infra/**'
       - 'Directory.Packages.props'
       - 'Directory.Build.props'
@@ -91,6 +92,8 @@ jobs:
     outputs:
       functionAppName: ${{ steps.infra.outputs.functionAppName }}
       apiUrl: ${{ steps.infra.outputs.apiUrl }}
+      webName: ${{ steps.infra.outputs.webName }}
+      webUrl: ${{ steps.infra.outputs.webUrl }}
     steps:
       - uses: actions/checkout@v4
 
@@ -117,6 +120,8 @@ jobs:
             --query properties.outputs -o json > outputs.json
           echo "functionAppName=$(jq -r .functionAppName.value outputs.json)" >> "$GITHUB_OUTPUT"
           echo "apiUrl=$(jq -r .apiUrl.value outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "webName=$(jq -r .webName.value outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "webUrl=$(jq -r .webUrl.value outputs.json)" >> "$GITHUB_OUTPUT"
 
       - name: Publish function
         run: |
@@ -149,6 +154,46 @@ jobs:
           done
           echo "API did not become healthy at $URL"
           exit 1
+
+  web:
+    name: Build and deploy the dashboard
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: needs.deploy.outputs.webName != ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install
+        working-directory: web
+        run: npm ci
+
+      # Vite inlines these at build time. None is a secret: a SPA client id and an authority
+      # are public by construction, and the API is what enforces authorisation. The API URL
+      # comes from the deployment output rather than a variable, so the two cannot drift.
+      - name: Build
+        working-directory: web
+        env:
+          VITE_API_BASE_URL: ${{ needs.deploy.outputs.apiUrl }}
+          VITE_ENTRA_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          VITE_ENTRA_CLIENT_ID: ${{ vars.JP_WEB_CLIENT_ID }}
+          VITE_API_SCOPE: api://${{ vars.JP_API_CLIENT_ID }}/Jobs.Read
+        run: npm run build
+
+      - name: Deploy to Static Web Apps
+        run: |
+          set -euo pipefail
+          npm install -g @azure/static-web-apps-cli
+          TOKEN=$(az staticwebapp secrets list             --name "${{ needs.deploy.outputs.webName }}"             --resource-group "$AZURE_RESOURCE_GROUP"             --query properties.apiKey -o tsv)
+          swa deploy web/dist --deployment-token "$TOKEN" --env production
+
+      - name: Report
+        run: echo "Dashboard deployed to ${{ needs.deploy.outputs.webUrl }}" >> "$GITHUB_STEP_SUMMARY"
 
   migrate:
     name: Apply migrations

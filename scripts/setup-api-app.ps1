@@ -29,6 +29,12 @@ param(
 
     [string]$ScopeName = 'Jobs.Read',
 
+    [string]$WebName = 'job-platform-web',
+
+    # Origins the dashboard is served from. localhost is for `npm run dev`; add the Static
+    # Web App URL once it exists (the provisioning output prints it).
+    [string[]]$WebRedirectUris = @('http://localhost:5173'),
+
     # Set the JP_API_CLIENT_ID variable on this repository when supplied, so CI deploys the
     # API with authentication configured.
     [string]$Repository
@@ -121,16 +127,95 @@ finally {
 Write-Host '==> Ensuring the service principal exists' -ForegroundColor Cyan
 $spId = az ad sp list --filter "appId eq '$appId'" --query '[0].id' -o tsv
 if (-not $spId) {
-    az ad sp create --id $appId --query id -o tsv | Out-Null
+    $spId = az ad sp create --id $appId --query id -o tsv
     Write-Host '    created'
 }
 else {
     Write-Host '    already present'
 }
 
+# --- The dashboard's own registration -------------------------------------------------
+#
+# A separate application from the API, deliberately. The API is a protected resource; the
+# dashboard is a public client that asks for access to it. Collapsing them into one
+# registration would mean the thing validating tokens and the thing requesting them share an
+# identity, which makes the audience check meaningless.
+Write-Host '==> Configuring the dashboard registration' -ForegroundColor Cyan
+
+$webAppId = az ad app list --display-name $WebName --query '[0].appId' -o tsv
+if (-not $webAppId) {
+    $webAppId = az ad app create --display-name $WebName --sign-in-audience AzureADMyOrg --query appId -o tsv
+    if (-not $webAppId) { throw "Could not create the application '$WebName'." }
+    Write-Host "    created $webAppId"
+}
+else {
+    Write-Host "    reusing $webAppId"
+}
+
+$webObjectId = az ad app show --id $webAppId --query id -o tsv
+
+# The `spa` platform, not `web`: it is what enables the authorisation-code flow with PKCE,
+# which is the only flow a browser app may use. Registering the URIs under `web` instead
+# would hand back an implicit-flow token, or nothing at all.
+$webPatch = @{
+    spa                    = @{ redirectUris = $WebRedirectUris }
+    requiredResourceAccess = @(
+        @{
+            resourceAppId  = $appId
+            resourceAccess = @(@{ id = $scopeId; type = 'Scope' })
+        }
+    )
+} | ConvertTo-Json -Depth 10 -Compress
+
+$webFile = New-TemporaryFile
+try {
+    Set-Content -Path $webFile -Value $webPatch -Encoding utf8
+    az rest --method PATCH --url "https://graph.microsoft.com/v1.0/applications/$webObjectId" `
+        --headers 'Content-Type=application/json' --body "@$webFile" | Out-Null
+}
+finally {
+    Remove-Item $webFile -ErrorAction SilentlyContinue
+}
+
+$webSpId = az ad sp list --filter "appId eq '$webAppId'" --query '[0].id' -o tsv
+if (-not $webSpId) {
+    $webSpId = az ad sp create --id $webAppId --query id -o tsv
+}
+
+# Consent granted for the tenant so no user meets a permission prompt. Written through
+# Graph rather than `az ad app permission admin-consent`, which goes via the legacy AAD
+# Graph and fails against a service principal created moments earlier.
+$existingGrant = az rest --method GET `
+    --url "https://graph.microsoft.com/v1.0/oauth2PermissionGrants?`$filter=clientId eq '$webSpId'" `
+    --query "value[?resourceId=='$spId'].id | [0]" -o tsv 2>$null
+
+if (-not $existingGrant) {
+    $grant = @{
+        clientId    = $webSpId
+        consentType = 'AllPrincipals'
+        resourceId  = $spId
+        scope       = $ScopeName
+    } | ConvertTo-Json -Compress
+
+    $grantFile = New-TemporaryFile
+    try {
+        Set-Content -Path $grantFile -Value $grant -Encoding utf8
+        az rest --method POST --url 'https://graph.microsoft.com/v1.0/oauth2PermissionGrants' `
+            --headers 'Content-Type=application/json' --body "@$grantFile" | Out-Null
+        Write-Host '    granted tenant-wide consent'
+    }
+    finally {
+        Remove-Item $grantFile -ErrorAction SilentlyContinue
+    }
+}
+else {
+    Write-Host '    consent already granted'
+}
+
 if ($Repository) {
-    Write-Host '==> Setting JP_API_CLIENT_ID on the repository' -ForegroundColor Cyan
+    Write-Host '==> Setting repository variables' -ForegroundColor Cyan
     gh variable set JP_API_CLIENT_ID --body $appId --repo $Repository
+    gh variable set JP_WEB_CLIENT_ID --body $webAppId --repo $Repository
 }
 
 Write-Host ''
@@ -139,6 +224,8 @@ Write-Host ''
 Write-Host "    application id : $appId"
 Write-Host "    identifier URI : api://$appId"
 Write-Host "    scope          : api://$appId/$ScopeName"
+Write-Host "    dashboard app  : $webAppId"
+Write-Host "    redirect URIs  : $($WebRedirectUris -join ', ')"
 Write-Host ''
 Write-Host 'Get a token and call the API:' -ForegroundColor Yellow
 Write-Host "  `$t = az account get-access-token --scope api://$appId/$ScopeName --query accessToken -o tsv"
@@ -146,7 +233,8 @@ Write-Host '  curl -H "Authorization: Bearer $t" https://<api-fqdn>/api/v1/searc
 Write-Host ''
 
 if (-not $Repository) {
-    Write-Host 'Set JP_API_CLIENT_ID so CI deploys with authentication enabled:' -ForegroundColor Yellow
+    Write-Host 'Set these so CI deploys with authentication enabled:' -ForegroundColor Yellow
     Write-Host "  gh variable set JP_API_CLIENT_ID --body $appId"
+    Write-Host "  gh variable set JP_WEB_CLIENT_ID --body $webAppId"
     Write-Host ''
 }
