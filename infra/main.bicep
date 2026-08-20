@@ -63,6 +63,16 @@ param matchingProvider string = 'keyword'
 // centralus, westus2 and eastasia all validate. Probe before changing it. The region is a
 // control-plane choice - the content itself is served from Microsoft's global edge - so
 // being outside Europe costs nothing at request time.
+// Defaults to the free offer so a fresh clone of this public repository deploys at zero
+// cost. Switching to 'basic' costs a few euros a month and removes the cold start; it is
+// also a one-way move for that database - see infra/modules/sql.bicep.
+@description('Database compute model: the free serverless offer, or always-on Basic.')
+@allowed([
+  'free-serverless'
+  'basic'
+])
+param sqlSku string = 'free-serverless'
+
 @description('Region for the Static Web App. Offered only in some regions; probe before changing.')
 param webLocation string = 'eastus2'
 
@@ -152,6 +162,7 @@ module sql 'modules/sql.bicep' = {
     administratorObjectId: administratorObjectId
     administratorLoginName: administratorLoginName
     tenantId: tenantId
+    sqlSku: sqlSku
   }
 }
 
@@ -267,6 +278,7 @@ output cosmosAccountName string = cosmos.outputs.accountName
 output sqlLocation string = sqlLocation
 output sqlServerFqdn string = sql.outputs.serverFqdn
 output sqlDatabaseName string = sql.outputs.databaseName
+output sqlSku string = sql.outputs.sqlSku
 output sqlConnectionString string = sql.outputs.connectionString
 output landingContainerName string = landingContainerName
 output apiName string = containerApp.outputs.name

@@ -33,6 +33,11 @@ param apiClientId = readEnvironmentVariable('JP_API_CLIENT_ID', '')
 param apiAllowAnonymousReads = empty(readEnvironmentVariable('JP_API_ALLOW_ANONYMOUS_READS', ''))
   ? false
   : bool(readEnvironmentVariable('JP_API_ALLOW_ANONYMOUS_READS', 'false'))
+// 'basic' buys an always-on database for a few euros a month; the default keeps a fresh
+// clone free. Empty-guarded like every other API parameter - see the note above.
+param sqlSku = empty(readEnvironmentVariable('JP_SQL_SKU', ''))
+  ? 'free-serverless'
+  : readEnvironmentVariable('JP_SQL_SKU', '')
 param matchingProvider = empty(readEnvironmentVariable('JP_MATCHING_PROVIDER', ''))
   ? 'keyword'
   : readEnvironmentVariable('JP_MATCHING_PROVIDER', '')

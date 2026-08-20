@@ -242,7 +242,7 @@ Designed to sit inside the free tiers, not merely to be cheap:
 | Service | Free allowance | How this stays inside it |
 | --- | --- | --- |
 | Cosmos DB | 1,000 RU/s + 25 GB, lifetime | Database-level shared autoscale capped at exactly 1,000 RU/s |
-| Azure SQL | 100,000 vCore-seconds/month | Serverless, `minCapacity 0.5`, 60-minute auto-pause |
+| Azure SQL | 100,000 vCore-seconds/month | Serverless, `minCapacity 0.5`, 60-minute auto-pause — **the default; this deployment opts out, see below** |
 | Functions | Monthly grant on Flex Consumption | One short execution per day |
 | Container Apps | 180k vCPU-s + 360k GiB-s/month | API scales to zero when idle; max 3 replicas |
 | Container registry | — | Public image on GHCR, so no ACR (~$5/month) and no registry credential |
@@ -262,6 +262,35 @@ about 54k/month against the 100k grant. Several runs a day would exceed it. The 
 configured with `freeLimitExhaustionBehavior: AutoPause`, so if the grant does run out it
 pauses until the first of the next month rather than falling through to paid rates. Cost is
 structurally capped at zero; the failure mode is unavailability, not a bill.
+
+### The one place this deployment spends money
+
+`sqlSku` defaults to `free-serverless`, so cloning this repository still deploys at zero
+cost. This particular deployment sets it to `basic`, and the reason is the cold start rather
+than the money.
+
+The free offer bills wall-clock seconds *online*, which makes always-on and free mutually
+exclusive: the 100,000 vCore-second grant buys about **55 hours a month** at `minCapacity
+0.5`, against 730 hours in a month. So the database must pause, and every wake costs a
+~1 minute resume before the first query returns — fine for a daily batch, unacceptable when
+someone opens the dashboard to look at it.
+
+Basic is the DTU purchasing model, which has no serverless option at all, so it simply never
+pauses. At 5 DTU and a 2 GB ceiling — against single-digit megabytes stored — it is the
+cheapest always-on tier Azure sells: **€5.37/month** in France Central (€0.1766/day, retail,
+verified against the Azure Retail Prices API). For comparison, the same database kept online
+under the serverless meter would be roughly €209/month, and provisioned General Purpose
+about €107.
+
+Two things worth knowing before copying this:
+
+- **It is one way.** Microsoft's docs: *"Once you convert a free offer database to a paid
+  service tier, you can't revert to the free offer."* Going back means a new database — cheap
+  here, because ingestion is idempotent and every source CSV is still in the landing
+  container, so a replay rebuilds it.
+- **`JP_SQL_SKU` must be set before the change is deployed.** CI redeploys the template on
+  every push; with the variable unset the parameter defaults back to `free-serverless` and
+  the pipeline would try to revert a database that cannot return to the free offer.
 
 That number is also what dictates the API's shape rather than being a footnote to it. An API
 serving dashboard reads from SQL would keep the database awake for as long as anyone had a

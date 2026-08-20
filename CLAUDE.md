@@ -113,6 +113,12 @@ nothing to leak.
   SQL servers entirely. France Central works. Probe with a throwaway server before changing
   it, and remember a server's region is immutable — changing it means deleting and
   recreating.
+- **The deployed database is Basic (DTU), not the free serverless offer.** `sqlSku` in
+  `infra/modules/sql.bicep` selects; it defaults to `free-serverless` so a clone stays free,
+  and the repository variable `JP_SQL_SKU=basic` opts this deployment in. Never remove that
+  variable: CI redeploys on every push, the parameter would fall back to the free offer, and
+  a database cannot be converted *back* to it. Basic has no auto-pause because the DTU model
+  has no serverless tier — that is what removed the ~1 minute cold start.
 - **Free-tier ceilings are load-bearing**, not incidental: Cosmos autoscale max 1000 RU/s,
   SQL `useFreeLimit` with `freeLimitExhaustionBehavior: AutoPause`. Raising either starts
   billing.
