@@ -29,6 +29,7 @@ internal static class Program
                 Usage:
                   dbadmin migrate         "<connection-string>"
                   dbadmin grant-identity  "<connection-string>" <managed-identity-name>
+                  dbadmin grant-migrator  "<connection-string>" <principal-name>
                   dbadmin status          "<connection-string>"
                   dbadmin metrics         "<cosmos-account-endpoint>" [search-term]
 
@@ -48,6 +49,8 @@ internal static class Program
                 "migrate" => await MigrateAsync(connectionString),
                 "grant-identity" when args.Length >= 3 => await GrantIdentityAsync(connectionString, args[2]),
                 "grant-identity" => Fail("grant-identity needs the managed identity name."),
+                "grant-migrator" when args.Length >= 3 => await GrantMigratorAsync(connectionString, args[2]),
+                "grant-migrator" => Fail("grant-migrator needs the principal name."),
                 "status" => await StatusAsync(connectionString),
                 // Second positional argument is the Cosmos endpoint, not a SQL connection.
                 "metrics" => await MetricsAsync(connectionString, args.Length >= 3 ? args[2] : null),
@@ -120,6 +123,51 @@ internal static class Program
         // Deliberately not db_ddladmin: the app only reads and writes rows. Schema changes
         // go through `migrate`, run by an administrator.
         Console.WriteLine($"Granted db_datareader and db_datawriter to '{identityName}'.");
+        return 0;
+    }
+
+    /// <summary>
+    /// Gives a principal exactly what running EF migrations needs, and no more.
+    /// </summary>
+    /// <remarks>
+    /// The alternative was making the deploy principal an Entra admin on the server,
+    /// which is what the deploy workflow originally assumed. That hands CI the ability to
+    /// drop the database in order to let it add a column. This is scoped to one database
+    /// and revoked with a DROP USER.
+    ///
+    /// db_ddladmin covers the schema changes; the reader and writer roles are there
+    /// because EF also reads and writes __EFMigrationsHistory, which db_ddladmin alone
+    /// does not grant. Deliberately not db_owner: that would include managing users.
+    /// </remarks>
+    private static async Task<int> GrantMigratorAsync(string connectionString, string principalName)
+    {
+        // Names come from our own deployment, but a bracket in one would still break out
+        // of the quoted identifier, so escape it the way T-SQL expects.
+        var escaped = principalName.Replace("]", "]]", StringComparison.Ordinal);
+
+        var statements = new[]
+        {
+            $"""
+             IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = @name)
+                 CREATE USER [{escaped}] FROM EXTERNAL PROVIDER;
+             """,
+            $"ALTER ROLE db_ddladmin   ADD MEMBER [{escaped}];",
+            $"ALTER ROLE db_datareader ADD MEMBER [{escaped}];",
+            $"ALTER ROLE db_datawriter ADD MEMBER [{escaped}];",
+        };
+
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+
+        foreach (var sql in statements)
+        {
+            await using var command = new SqlCommand(sql, connection);
+            command.Parameters.AddWithValue("@name", principalName);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        Console.WriteLine(
+            $"Granted db_ddladmin, db_datareader and db_datawriter to '{principalName}'.");
         return 0;
     }
 

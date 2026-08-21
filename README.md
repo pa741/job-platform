@@ -385,6 +385,7 @@ Then:
 ```bash
 CONN="Server=tcp:<server>.database.windows.net,1433;Database=jobsdb;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=90;"
 dotnet run --project tools/JobPlatform.DbAdmin -- status  "$CONN"
+dotnet run --project tools/JobPlatform.DbAdmin -- grant-migrator "$CONN" job-platform-deploy
 dotnet run --project tools/JobPlatform.DbAdmin -- metrics "https://<cosmos-account>.documents.azure.com:443/"
 ```
 

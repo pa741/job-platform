@@ -226,8 +226,9 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # Requires the deploy principal to be a member of the SQL server's Entra admin
-      # group. If it is not, run this from a workstation instead - see README.
+      # The deploy principal is a contained user in jobsdb with db_ddladmin, granted by
+      # `dbadmin grant-migrator` - not an Entra admin on the server. It can change the
+      # schema and nothing else. Re-run that grant if this ever starts failing to log in.
       - name: Migrate
         run: |
           set -euo pipefail
