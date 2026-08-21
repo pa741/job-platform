@@ -64,17 +64,15 @@ public sealed class JobPostingEntity
     public int? RepostCount { get; set; }
     public bool? FakeFreshness { get; set; }
 
+    /// <summary>Across every search. Per-search timings live on <see cref="SearchTerms"/>.</summary>
     public DateTimeOffset FirstSeenUtc { get; set; }
     public DateTimeOffset LastSeenUtc { get; set; }
-
-    /// <summary>Runs in which this posting appeared. Drives the "new today" metric.</summary>
-    public int FirstSeenRunId { get; set; }
-    public int LastSeenRunId { get; set; }
     public int SeenCount { get; set; }
 
-    /// <summary>Search term that surfaced this posting; the Cosmos partition key mirrors it.</summary>
-    public required string SearchTerm { get; set; }
-
-    public ScrapeRun? FirstSeenRun { get; set; }
-    public ScrapeRun? LastSeenRun { get; set; }
+    /// <summary>
+    /// Which configured searches turned this posting up. A posting can match several, so
+    /// this is a collection rather than a column — see <see cref="JobPostingSearchTerm"/>.
+    /// The run ids that drive the "new today" metric live here, per term.
+    /// </summary>
+    public ICollection<JobPostingSearchTerm> SearchTerms { get; set; } = [];
 }

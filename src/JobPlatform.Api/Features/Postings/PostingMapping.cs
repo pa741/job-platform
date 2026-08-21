@@ -31,7 +31,7 @@ internal static class PostingMapping
         FirstSeenUtc = entity.FirstSeenUtc,
         LastSeenUtc = entity.LastSeenUtc,
         SeenCount = entity.SeenCount,
-        SearchTerm = entity.SearchTerm,
+        SearchTerms = entity.SearchTerms.Select(l => l.SearchTerm).ToList(),
     };
 
     public static PostingDetail ToDetail(this JobPostingEntity entity) => new()
@@ -48,8 +48,8 @@ internal static class PostingMapping
         ExperienceRange = entity.ExperienceRange,
         CompanyNumEmployees = entity.CompanyNumEmployees,
         ContentHash = entity.ContentHash,
-        FirstSeenRunId = entity.FirstSeenRunId,
-        LastSeenRunId = entity.LastSeenRunId,
+        FirstSeenRunId = entity.SearchTerms.Count == 0 ? 0 : entity.SearchTerms.Min(l => l.FirstSeenRunId),
+        LastSeenRunId = entity.SearchTerms.Count == 0 ? 0 : entity.SearchTerms.Max(l => l.LastSeenRunId),
     };
 
     public static FacetsResponse ToResponse(this PostingFacets facets) => new()

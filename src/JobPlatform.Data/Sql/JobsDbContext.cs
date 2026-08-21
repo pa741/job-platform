@@ -9,6 +9,7 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
     public DbSet<ScrapeRun> ScrapeRuns => Set<ScrapeRun>();
 
     public DbSet<JobPostingEntity> JobPostings => Set<JobPostingEntity>();
+    public DbSet<JobPostingSearchTerm> JobPostingSearchTerms => Set<JobPostingSearchTerm>();
 
     /// <summary>
     /// On SQLite, stores <see cref="DateTimeOffset"/> as ticks.
@@ -69,18 +70,14 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
 
             entity.HasIndex(e => e.SourceKey).IsUnique();
             entity.HasIndex(e => e.ContentHash);
-            entity.HasIndex(e => new { e.SearchTerm, e.FirstSeenUtc });
-            entity.HasIndex(e => new { e.SearchTerm, e.LastSeenUtc });
+            entity.HasIndex(e => e.LastSeenUtc);
             entity.HasIndex(e => e.Company);
-            // Filtering out recycled postings is the reason these columns exist, so the
-            // dashboard will ask for them alongside the search term it already keys on.
-            entity.HasIndex(e => new { e.SearchTerm, e.FreshnessClass });
+            entity.HasIndex(e => e.FreshnessClass);
 
             entity.Property(e => e.SourceKey).HasMaxLength(200).IsRequired();
             entity.Property(e => e.Site).HasMaxLength(50).IsRequired();
             entity.Property(e => e.ExternalId).HasMaxLength(150).IsRequired();
             entity.Property(e => e.ContentHash).HasMaxLength(64).IsFixedLength().IsRequired();
-            entity.Property(e => e.SearchTerm).HasMaxLength(200).IsRequired();
 
             entity.Property(e => e.Title).HasMaxLength(500).IsRequired();
             entity.Property(e => e.Company).HasMaxLength(300);
@@ -116,6 +113,30 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
             // Server; spelling that type out explicitly would also make the model
             // unbuildable on any other provider, including the SQLite used by the tests.
             entity.Property(e => e.Description);
+
+        });
+
+        modelBuilder.Entity<JobPostingSearchTerm>(entity =>
+        {
+            entity.ToTable("JobPostingSearchTerms");
+            entity.HasKey(e => new { e.PostingId, e.SearchTerm });
+
+            // The two axes every per-term query reads: which postings a term holds, and
+            // which of them a given day's runs surfaced.
+            entity.HasIndex(e => new { e.SearchTerm, e.FirstSeenUtc });
+            entity.HasIndex(e => new { e.SearchTerm, e.LastSeenUtc });
+            entity.HasIndex(e => e.FirstSeenRunId);
+            entity.HasIndex(e => e.LastSeenRunId);
+
+            entity.Property(e => e.SearchTerm).HasMaxLength(200).IsRequired();
+
+            // Cascade: an attribution has no meaning without its posting. The runs are
+            // Restrict, matching what the posting's own run links used to do - a run is
+            // history and should not be deletable out from under what references it.
+            entity.HasOne(e => e.Posting)
+                .WithMany(p => p.SearchTerms)
+                .HasForeignKey(e => e.PostingId)
+                .OnDelete(DeleteBehavior.Cascade);
 
             entity.HasOne(e => e.FirstSeenRun)
                 .WithMany()

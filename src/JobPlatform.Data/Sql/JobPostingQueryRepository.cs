@@ -27,7 +27,7 @@ public sealed class JobPostingQueryRepository(JobsDbContext db) : IMatchCandidat
         ArgumentNullException.ThrowIfNull(criteria);
 
         var limit = Math.Clamp(criteria.Limit, 1, MaxLimit);
-        var query = Filter(db.JobPostings.AsNoTracking(), criteria);
+        var query = Filter(db.JobPostings.AsNoTracking().Include(p => p.SearchTerms), criteria);
 
         int? total = criteria.IncludeTotal ? await query.CountAsync(ct) : null;
 
@@ -47,10 +47,14 @@ public sealed class JobPostingQueryRepository(JobsDbContext db) : IMatchCandidat
     }
 
     public Task<JobPostingEntity?> GetByIdAsync(long id, CancellationToken ct = default)
-        => db.JobPostings.AsNoTracking().FirstOrDefaultAsync(p => p.Id == id, ct);
+        => db.JobPostings.AsNoTracking()
+            .Include(p => p.SearchTerms)
+            .FirstOrDefaultAsync(p => p.Id == id, ct);
 
     public Task<JobPostingEntity?> GetBySourceKeyAsync(string sourceKey, CancellationToken ct = default)
-        => db.JobPostings.AsNoTracking().FirstOrDefaultAsync(p => p.SourceKey == sourceKey, ct);
+        => db.JobPostings.AsNoTracking()
+            .Include(p => p.SearchTerms)
+            .FirstOrDefaultAsync(p => p.SourceKey == sourceKey, ct);
 
     /// <summary>
     /// The filter vocabulary a UI needs to build its controls, in one round trip.
@@ -65,7 +69,7 @@ public sealed class JobPostingQueryRepository(JobsDbContext db) : IMatchCandidat
 
         if (!string.IsNullOrWhiteSpace(searchTerm))
         {
-            query = query.Where(p => p.SearchTerm == searchTerm);
+            query = query.Where(p => p.SearchTerms.Any(l => l.SearchTerm == searchTerm));
         }
 
         var sites = await CountByAsync(query, p => p.Site, take: null, ct);
@@ -115,13 +119,15 @@ public sealed class JobPostingQueryRepository(JobsDbContext db) : IMatchCandidat
     /// <summary>The axis everything else partitions on.</summary>
     public async Task<IReadOnlyList<SearchTermSummary>> ListSearchTermsAsync(CancellationToken ct = default)
     {
-        var postings = await db.JobPostings.AsNoTracking()
-            .GroupBy(p => p.SearchTerm)
+        // Grouped on the attributions, so a posting shared by two searches counts under
+        // both. LastSeen is this search's, not the posting's newest across all of them.
+        var postings = await db.JobPostingSearchTerms.AsNoTracking()
+            .GroupBy(l => l.SearchTerm)
             .Select(g => new
             {
                 SearchTerm = g.Key,
                 Postings = g.Count(),
-                LastSeen = g.Max(p => p.LastSeenUtc),
+                LastSeen = g.Max(l => l.LastSeenUtc),
             })
             .ToListAsync(ct);
 
@@ -194,7 +200,7 @@ public sealed class JobPostingQueryRepository(JobsDbContext db) : IMatchCandidat
 
         if (!string.IsNullOrWhiteSpace(query.SearchTerm))
         {
-            postings = postings.Where(p => p.SearchTerm == query.SearchTerm);
+            postings = postings.Where(p => p.SearchTerms.Any(l => l.SearchTerm == query.SearchTerm));
         }
 
         if (query.IsRemote is { } remote)
@@ -272,7 +278,10 @@ public sealed class JobPostingQueryRepository(JobsDbContext db) : IMatchCandidat
     {
         if (!string.IsNullOrWhiteSpace(criteria.SearchTerm))
         {
-            query = query.Where(p => p.SearchTerm == criteria.SearchTerm);
+            // Any() over the attributions rather than a column comparison: a posting can
+            // belong to several searches, and filtering by one must not hide it from the
+            // others.
+            query = query.Where(p => p.SearchTerms.Any(l => l.SearchTerm == criteria.SearchTerm));
         }
 
         if (!string.IsNullOrWhiteSpace(criteria.Query))

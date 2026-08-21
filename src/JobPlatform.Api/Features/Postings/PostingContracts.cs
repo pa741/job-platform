@@ -57,7 +57,12 @@ public sealed record PostingSummary
     public DateTimeOffset FirstSeenUtc { get; init; }
     public DateTimeOffset LastSeenUtc { get; init; }
     public int SeenCount { get; init; }
-    public required string SearchTerm { get; init; }
+
+    /// <summary>
+    /// Every configured search that turned this posting up, not just the one being viewed.
+    /// A posting can match several, and a single value here would have to pick one.
+    /// </summary>
+    public required IReadOnlyList<string> SearchTerms { get; init; }
 }
 
 /// <summary>One posting in full. The only contract carrying the description.</summary>

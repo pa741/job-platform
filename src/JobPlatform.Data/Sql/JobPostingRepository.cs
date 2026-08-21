@@ -72,6 +72,13 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
             .Where(p => sourceKeys.Contains(p.SourceKey))
             .ToDictionaryAsync(p => p.SourceKey, StringComparer.OrdinalIgnoreCase, ct);
 
+        // This search's existing attributions, loaded once. A posting can already be here
+        // from a different search, which is exactly the case the link table exists for.
+        var existingIds = existing.Values.Select(p => p.Id).ToList();
+        var links = await db.JobPostingSearchTerms
+            .Where(l => l.SearchTerm == context.SearchTerm && existingIds.Contains(l.PostingId))
+            .ToDictionaryAsync(l => l.PostingId, ct);
+
         int added = 0, updated = 0, unchanged = 0;
 
         foreach (var posting in postings)
@@ -83,18 +90,33 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
             {
                 var changed = HasMaterialChange(entity, posting, contentHash);
 
-                Apply(entity, posting, contentHash, location, context.SearchTerm);
+                Apply(entity, posting, contentHash, location);
                 entity.LastSeenUtc = now;
-                entity.LastSeenRunId = run.Id;
                 entity.SeenCount++;
 
-                if (changed)
+                if (links.TryGetValue(entity.Id, out var link))
                 {
-                    updated++;
+                    link.LastSeenUtc = now;
+                    link.LastSeenRunId = run.Id;
+                    link.SeenCount++;
+
+                    if (changed)
+                    {
+                        updated++;
+                    }
+                    else
+                    {
+                        unchanged++;
+                    }
                 }
                 else
                 {
-                    unchanged++;
+                    // Already in the table, but this search had not turned it up before.
+                    // New to this run, whether or not the posting itself changed - which is
+                    // what makes "new today" mean something per search rather than only for
+                    // whichever search happened to see it first.
+                    db.JobPostingSearchTerms.Add(NewLink(entity.Id, context.SearchTerm, run.Id, now));
+                    added++;
                 }
             }
             else
@@ -106,15 +128,17 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
                     ExternalId = posting.ExternalId,
                     ContentHash = contentHash,
                     Title = posting.Title,
-                    SearchTerm = context.SearchTerm,
                     FirstSeenUtc = now,
                     LastSeenUtc = now,
-                    FirstSeenRunId = run.Id,
-                    LastSeenRunId = run.Id,
                     SeenCount = 1,
                 };
 
-                Apply(entity, posting, contentHash, location, context.SearchTerm);
+                Apply(entity, posting, contentHash, location);
+
+                // Through the navigation, not the DbSet: the posting has no Id until
+                // SaveChanges, and EF fills the foreign key from the relationship.
+                entity.SearchTerms.Add(NewLink(0, context.SearchTerm, run.Id, now));
+
                 db.JobPostings.Add(entity);
                 added++;
             }
@@ -162,14 +186,19 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
             ? 0
             : await runsOnDate.SumAsync(r => r.ParsedCount, ct);
 
-        var newPostings = await db.JobPostings
-            .CountAsync(p => runIds.Contains(p.FirstSeenRunId), ct);
+        // Counted on the attribution rows, not the postings: the run ids that matter are
+        // this search's, and a posting first surfaced by a different search is still new
+        // to this one the day it turns up here.
+        var newPostings = await db.JobPostingSearchTerms
+            .CountAsync(l => runIds.Contains(l.FirstSeenRunId), ct);
 
-        var cumulative = await db.JobPostings
-            .CountAsync(p => runsUpToDate.Contains(p.FirstSeenRunId), ct);
+        var cumulative = await db.JobPostingSearchTerms
+            .CountAsync(l => runsUpToDate.Contains(l.FirstSeenRunId), ct);
 
         // Characteristics are taken from the postings as the day last saw them.
-        var lastSeenOnDate = db.JobPostings.Where(p => runIds.Contains(p.LastSeenRunId));
+        var lastSeenOnDate = db.JobPostingSearchTerms
+            .Where(l => runIds.Contains(l.LastSeenRunId))
+            .Select(l => l.Posting!);
         var distinctSeen = await lastSeenOnDate.CountAsync(ct);
 
         var bySite = await lastSeenOnDate
@@ -228,12 +257,23 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
             // on every run, which is precisely what this metric exists to distinguish.
             || entity.RepostCount != posting.RepostCount;
 
+    private static JobPostingSearchTerm NewLink(
+        long postingId, string searchTerm, int runId, DateTimeOffset now) => new()
+    {
+        PostingId = postingId,
+        SearchTerm = searchTerm,
+        FirstSeenRunId = runId,
+        LastSeenRunId = runId,
+        FirstSeenUtc = now,
+        LastSeenUtc = now,
+        SeenCount = 1,
+    };
+
     private static void Apply(
         JobPostingEntity entity,
         JobPosting posting,
         string contentHash,
-        JobLocation location,
-        string searchTerm)
+        JobLocation location)
     {
         entity.ContentHash = contentHash;
         entity.Title = posting.Title;
@@ -265,6 +305,5 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
         entity.PostingAgeDays = posting.PostingAgeDays;
         entity.RepostCount = posting.RepostCount;
         entity.FakeFreshness = posting.FakeFreshness;
-        entity.SearchTerm = searchTerm;
     }
 }

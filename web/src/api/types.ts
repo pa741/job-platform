@@ -45,7 +45,8 @@ export interface PostingSummary {
   firstSeenUtc: string;
   lastSeenUtc: string;
   seenCount: number;
-  searchTerm: string;
+  /** Every search that turned this posting up - it can match more than one. */
+  searchTerms: string[];
 }
 
 export interface PostingDetail {

@@ -39,13 +39,14 @@ public sealed class JobPostingRepositoryTests : IDisposable
     private static JobPostingRepository CreateRepository(JobsDbContext db)
         => new(db, NullLogger<JobPostingRepository>.Instance);
 
-    private static ScrapeRunContext Context(string blobName, DateOnly? date = null)
+    private static ScrapeRunContext Context(
+        string blobName, DateOnly? date = null, string searchTerm = SearchTerm)
     {
         var day = date ?? ScrapeDate;
         return new ScrapeRunContext
         {
             BlobPath = $"jobs/{blobName}",
-            SearchTerm = SearchTerm,
+            SearchTerm = searchTerm,
             ScrapedAtUtc = new DateTimeOffset(day.ToDateTime(new TimeOnly(20, 30)), TimeSpan.Zero),
         };
     }
@@ -214,5 +215,93 @@ public sealed class JobPostingRepositoryTests : IDisposable
         Assert.Equal(0, rollup.PostingsSeen);
         Assert.Equal(0, rollup.RemoteShare);
         Assert.Empty(rollup.BySite);
+    }
+
+    /// <summary>
+    /// The reason attribution lives in its own table. Before it did, the second search's
+    /// upsert overwrote the posting's single SearchTerm column, and the posting silently
+    /// dropped out of the first search's list.
+    /// </summary>
+    [Fact]
+    public async Task A_posting_found_by_two_searches_belongs_to_both()
+    {
+        var posting = Posting("indeed", "a1");
+
+        await using (var db = CreateContext())
+        {
+            await CreateRepository(db).IngestAsync(
+                Context("software-engineer_1.csv", searchTerm: "software-engineer"), [posting], 1, 0);
+        }
+
+        await using (var db = CreateContext())
+        {
+            await CreateRepository(db).IngestAsync(
+                Context("python-developer_1.csv", searchTerm: "python-developer"), [posting], 1, 0);
+        }
+
+        await using (var db = CreateContext())
+        {
+            // Still one posting - the searches share it rather than duplicating it.
+            var stored = Assert.Single(await db.JobPostings.Include(p => p.SearchTerms).ToListAsync());
+
+            Assert.Equal(
+                ["python-developer", "software-engineer"],
+                stored.SearchTerms.Select(l => l.SearchTerm).OrderBy(s => s).ToArray());
+        }
+    }
+
+    [Fact]
+    public async Task A_posting_is_new_to_each_search_that_first_finds_it()
+    {
+        var posting = Posting("indeed", "a1");
+
+        await using (var db = CreateContext())
+        {
+            var outcome = await CreateRepository(db).IngestAsync(
+                Context("software-engineer_1.csv", searchTerm: "software-engineer"), [posting], 1, 0);
+            Assert.Equal(1, outcome.Outcome.New);
+        }
+
+        await using (var db = CreateContext())
+        {
+            // New to this search, even though the row already existed. Counting it as
+            // "unchanged" would make a second search look like it never found anything.
+            var outcome = await CreateRepository(db).IngestAsync(
+                Context("python-developer_1.csv", searchTerm: "python-developer"), [posting], 1, 0);
+            Assert.Equal(1, outcome.Outcome.New);
+        }
+
+        await using (var db = CreateContext())
+        {
+            var rollup = await CreateRepository(db)
+                .BuildDailyRollupAsync("python-developer", ScrapeDate);
+
+            Assert.Equal(1, rollup.NewPostings);
+            Assert.Equal(1, rollup.BySite["indeed"]);
+        }
+    }
+
+    [Fact]
+    public async Task A_second_run_of_the_same_search_does_not_re_add_the_posting()
+    {
+        var posting = Posting("indeed", "a1");
+
+        await using (var db = CreateContext())
+        {
+            await CreateRepository(db).IngestAsync(Context("run1.csv"), [posting], 1, 0);
+        }
+
+        await using (var db = CreateContext())
+        {
+            var outcome = await CreateRepository(db).IngestAsync(Context("run2.csv"), [posting], 1, 0);
+            Assert.Equal(0, outcome.Outcome.New);
+            Assert.Equal(1, outcome.Outcome.Unchanged);
+        }
+
+        await using (var db = CreateContext())
+        {
+            var link = Assert.Single(await db.JobPostingSearchTerms.ToListAsync());
+            Assert.Equal(2, link.SeenCount);
+        }
     }
 }
