@@ -18,8 +18,8 @@ public static class OpenApiSetup
                     Version = "v1",
                     Description =
                         "Read access to scraped job postings and the market metrics derived " +
-                        "from them, plus CV-to-posting matching. Metrics are served from " +
-                        "Cosmos DB; postings from Azure SQL.",
+                        "from them. Metrics are served from Cosmos DB; postings from " +
+                        "Azure SQL.",
                 };
 
                 return Task.CompletedTask;

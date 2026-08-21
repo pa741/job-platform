@@ -14,7 +14,7 @@ public static class CacheSetup
     /// <remarks>
     /// Responses are cached by full query string, so different filters do not share an entry.
     /// Nothing user-specific is ever cached: no endpoint under these policies varies by
-    /// principal, and <c>/me</c> and <c>/match</c> deliberately carry no policy at all.
+    /// principal, and <c>/me</c> deliberately carries no policy at all.
     /// </remarks>
     public static IServiceCollection AddApiOutputCache(
         this IServiceCollection services, CacheOptions options)

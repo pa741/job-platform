@@ -81,10 +81,8 @@ builder.Services.AddDbContext<JobsDbContext>(options =>
 builder.Services.AddScoped<JobPostingQueryRepository>();
 builder.Services.AddScoped<MetricsQueryRepository>();
 builder.Services.AddScoped<IMetricsSource>(sp => sp.GetRequiredService<MetricsQueryRepository>());
-builder.Services.AddScoped<JobPlatform.Core.Matching.IMatchCandidateSource>(
-    sp => sp.GetRequiredService<JobPostingQueryRepository>());
 
-builder.Services.AddCvMatching(configuration);
+builder.Services.AddAiProvider(configuration);
 
 // ---------------------------------------------------------------------------
 // Cross-cutting

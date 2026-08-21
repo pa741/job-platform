@@ -5,17 +5,15 @@ import { apiRequest } from './auth/msalConfig';
 import type { SearchTermResponse } from './api/types';
 import { Overview } from './pages/Overview';
 import { Postings } from './pages/Postings';
-import { Match } from './pages/Match';
 import { ErrorNote } from './components/Primitives';
 import { useTheme, type Theme } from './theme/useTheme';
 import './theme/app.css';
 
-type Page = 'overview' | 'postings' | 'match';
+type Page = 'overview' | 'postings';
 
 const PAGES: { id: Page; label: string }[] = [
   { id: 'overview', label: 'Overview' },
   { id: 'postings', label: 'Postings' },
-  { id: 'match', label: 'CV match' },
 ];
 
 export function App() {
@@ -83,9 +81,9 @@ function Dashboard({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => 
   const [searchTerm, setSearchTerm] = useState<string>();
   const [error, setError] = useState<unknown>();
 
-  // The search term is the axis everything else partitions on - postings, metrics and
-  // matching are all scoped by it - so it is resolved once here and passed down, rather
-  // than each page discovering it independently.
+  // The search term is the axis everything else partitions on - postings and metrics are
+  // both scoped by it - so it is resolved once here and passed down, rather than each page
+  // discovering it independently.
   //
   // This call gates the entire dashboard, which is why the API serves it from Cosmos rather
   // than SQL: when it read SQL, opening the dashboard while the serverless database was
@@ -159,7 +157,6 @@ function Dashboard({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => 
 
         {searchTerm && page === 'overview' && <Overview api={api} searchTerm={searchTerm} />}
         {searchTerm && page === 'postings' && <Postings api={api} searchTerm={searchTerm} />}
-        {searchTerm && page === 'match' && <Match api={api} searchTerm={searchTerm} />}
       </main>
     </>
   );

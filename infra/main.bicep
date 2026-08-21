@@ -47,14 +47,15 @@ param apiAllowAnonymousReads bool = false
 @description('Browser origins allowed to call the API, e.g. the Static Web App.')
 param apiAllowedOrigins array = []
 
-// Defaults to keyword so a fresh deploy needs no Key Vault, no key and no third-party
-// account, and still has a working matching endpoint.
-@description('Which CV ranker the API uses. "anthropic" additionally provisions a Key Vault.')
+// Defaults to none so a fresh deploy needs no Key Vault, no key and no third-party account.
+// Nothing consumes the model yet - this is the credential path standing ready for whatever
+// AI-backed feature lands next.
+@description('Which AI provider the API is configured for. "anthropic" additionally provisions a Key Vault.')
 @allowed([
-  'keyword'
+  'none'
   'anthropic'
 ])
-param matchingProvider string = 'keyword'
+param aiProvider string = 'none'
 
 // Separate from `location` for the same reason `sqlLocation` is, and with the same trap:
 // Static Web Apps is offered in a handful of regions, and a region can additionally stop
@@ -185,9 +186,9 @@ module functionApp 'modules/functionapp.bicep' = {
   }
 }
 
-// Provisioned only when an LLM ranker is selected. The keyword default deploys no vault at
-// all, which keeps the "no secret exists to leak" property intact for anyone cloning this.
-module keyVault 'modules/keyvault.bicep' = if (matchingProvider == 'anthropic') {
+// Provisioned only when an LLM provider is selected. The default deploys no vault at all,
+// which keeps the "no secret exists to leak" property intact for anyone cloning this.
+module keyVault 'modules/keyvault.bicep' = if (aiProvider == 'anthropic') {
   name: 'keyVault'
   params: {
     location: location
@@ -231,8 +232,8 @@ module containerApp 'modules/containerapp.bicep' = {
     allowedOrigins: deployWeb
       ? union(apiAllowedOrigins, [staticWebApp!.outputs.url])
       : apiAllowedOrigins
-    matchingProvider: matchingProvider
-    anthropicSecretUri: matchingProvider == 'anthropic' ? keyVault!.outputs.anthropicSecretUri : ''
+    aiProvider: aiProvider
+    anthropicSecretUri: aiProvider == 'anthropic' ? keyVault!.outputs.anthropicSecretUri : ''
   }
 }
 
@@ -284,8 +285,8 @@ output landingContainerName string = landingContainerName
 output apiName string = containerApp.outputs.name
 output apiUrl string = containerApp.outputs.url
 output apiFqdn string = containerApp.outputs.fqdn
-output matchingProvider string = matchingProvider
+output aiProvider string = aiProvider
 output webName string = deployWeb ? staticWebApp!.outputs.name : ''
 output webUrl string = deployWeb ? staticWebApp!.outputs.url : ''
-output keyVaultName string = matchingProvider == 'anthropic' ? keyVault!.outputs.vaultName : ''
-output anthropicSecretName string = matchingProvider == 'anthropic' ? keyVault!.outputs.anthropicSecretName : ''
+output keyVaultName string = aiProvider == 'anthropic' ? keyVault!.outputs.vaultName : ''
+output anthropicSecretName string = aiProvider == 'anthropic' ? keyVault!.outputs.anthropicSecretName : ''

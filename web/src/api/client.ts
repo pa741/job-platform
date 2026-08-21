@@ -1,5 +1,5 @@
 import type {
-  DailyRollup, FacetsResponse, MatchResponse, MeResponse, MetricsSummary,
+  DailyRollup, FacetsResponse, MeResponse, MetricsSummary,
   PageResponse, PostingDetail, PostingSummary, RunResponse, ScraperHealth, SearchTermResponse,
 } from './types';
 
@@ -128,9 +128,6 @@ export class JobPlatformApi {
 
   scraperHealth = (searchTerm: string) =>
     this.request<ScraperHealth>(`/api/v1/metrics/scraper-health${JobPlatformApi.query({ searchTerm })}`);
-
-  match = (body: MatchRequest) =>
-    this.request<MatchResponse>('/api/v1/match', { method: 'POST', body: JSON.stringify(body) });
 }
 
 export interface PostingQuery {
@@ -149,11 +146,4 @@ export interface PostingQuery {
   limit?: number;
   offset?: number;
   includeTotal?: boolean;
-}
-
-export interface MatchRequest {
-  cvText: string;
-  searchTerm?: string;
-  remote?: boolean;
-  topN?: number;
 }

@@ -4,10 +4,11 @@ namespace JobPlatform.Core.Text;
 /// Normalises free text into the tokens the platform treats as demand signal.
 /// </summary>
 /// <remarks>
-/// Shared deliberately. The run digest's <c>titleKeywords</c> and CV matching must agree on
-/// what a "word" is — if they tokenise differently, a CV that matches a posting by the
-/// dashboard's own measure can score zero, and neither side is obviously wrong. One
-/// normaliser means that class of discrepancy cannot exist.
+/// Deliberately one normaliser rather than one per caller. Anything that reads the same text
+/// has to agree on what a "word" is — the run digest's <c>titleKeywords</c> is the only
+/// consumer today, but two tokenisers disagreeing produces numbers that contradict each other
+/// with neither side obviously wrong. One normaliser means that class of discrepancy cannot
+/// exist.
 /// </remarks>
 public static class TitleTokenizer
 {

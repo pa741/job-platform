@@ -85,9 +85,9 @@ $scopePatch = @{
                 type                    = 'User'
                 isEnabled               = $true
                 adminConsentDisplayName = 'Read job-platform data'
-                adminConsentDescription = 'Allows the app to read job postings and market metrics, and to run CV matching on behalf of the signed-in user.'
+                adminConsentDescription = 'Allows the app to read job postings and market metrics on behalf of the signed-in user.'
                 userConsentDisplayName  = 'Read job market data'
-                userConsentDescription  = 'Lets the app read job postings and market metrics, and match your CV against them.'
+                userConsentDescription  = 'Lets the app read job postings and market metrics.'
             }
         )
     }

@@ -25,7 +25,7 @@ param tenantId = readEnvironmentVariable('JP_TENANT_ID')
 // readEnvironmentVariable's own fallback argument. GitHub Actions maps an undefined
 // `vars.X` to an env var that is set-and-empty rather than absent, so the fallback never
 // fires and the empty string is passed through - which failed a deploy with BCP033,
-// "Expected a value of type 'anthropic' | 'keyword' but the provided value is of type ''".
+// "Expected a value of type 'anthropic' | 'none' but the provided value is of type ''".
 param apiContainerImage = empty(readEnvironmentVariable('JP_API_IMAGE', ''))
   ? 'ghcr.io/pa741/job-platform-api:latest'
   : readEnvironmentVariable('JP_API_IMAGE', '')
@@ -38,9 +38,9 @@ param apiAllowAnonymousReads = empty(readEnvironmentVariable('JP_API_ALLOW_ANONY
 param sqlSku = empty(readEnvironmentVariable('JP_SQL_SKU', ''))
   ? 'free-serverless'
   : readEnvironmentVariable('JP_SQL_SKU', '')
-param matchingProvider = empty(readEnvironmentVariable('JP_MATCHING_PROVIDER', ''))
-  ? 'keyword'
-  : readEnvironmentVariable('JP_MATCHING_PROVIDER', '')
+param aiProvider = empty(readEnvironmentVariable('JP_AI_PROVIDER', ''))
+  ? 'none'
+  : readEnvironmentVariable('JP_AI_PROVIDER', '')
 // Comma-separated in the environment, e.g. "https://app.example.net,https://localhost:5173".
 param apiAllowedOrigins = empty(readEnvironmentVariable('JP_API_ALLOWED_ORIGINS', ''))
   ? []

@@ -24,7 +24,7 @@ NAS scraper ──CSV──> Blob Storage: jobs-landing/jobs/*.csv
               └───────────┬────────────┘
                           ▼
                  API  (Container Apps, scale-to-zero)
-                 postings, metrics, CV matching
+                 postings, metrics
 ```
 
 ## What it does
@@ -83,8 +83,6 @@ ingest function uses.
 | `GET /api/v1/metrics/rollups` | Daily rollups, oldest first — the dashboard time series |
 | `GET /api/v1/metrics/summary` | Headline numbers and a day-over-day delta |
 | `GET /api/v1/metrics/scraper-health` | Which columns have silently gone empty |
-| `POST /api/v1/match` | Rank stored postings against a CV |
-| `POST /api/v1/match/profile` | The structured profile a match runs from |
 | `GET /health`, `/health/ready` | Liveness (touches nothing), readiness (Cosmos only) |
 
 OpenAPI at `/openapi/v1.json`, with a Scalar UI at `/scalar/v1`.
@@ -95,37 +93,38 @@ OpenAPI at `/openapi/v1.json`, with a Scalar UI at `/scalar/v1`.
 digest or daily rollup. That is not a shortcut — see the cost section below: SQL here is
 billed on wall-clock time *online*, and a dashboard polling it would exhaust the monthly
 grant and take the database offline until the following month. SQL serves posting search and
-CV-match retrieval only, behind output caching and a rate limiter. For the same reason the
+detail only, behind output caching and a rate limiter. For the same reason the
 readiness probe checks Cosmos and never SQL: a probe alone would hold the database awake
 around the clock.
-
-**Matching degrades rather than fails.** `ICvRanker` has two implementations. The default is
-a deterministic keyword ranker — no credentials, no cost, no network — and it also serves as
-the retrieval prefilter that narrows candidates before a paid ranker sees them, which is what
-bounds the cost of a request by configuration rather than by how many postings exist. The
-Claude-backed ranker runs through **Semantic Kernel** and returns a score, a rationale, and
-matched/missing skills. If it throws, is rate-limited, or returns nothing, the keyword
-ordering is already computed and is returned instead, with `degradedToFallback: true` saying
-so.
 
 **Semantic Kernel is the LLM abstraction, with a composed connector.** There is no official
 Microsoft SK connector for Anthropic — the only NuGet packages are third-party alphas, which
 is not a dependency worth carrying. So the Kernel is assembled from supported parts: the
 official Anthropic SDK exposes an `IChatClient` through `Microsoft.Extensions.AI`, and SK
 consumes any `IChatClient` as an `IChatCompletionService`. SK owns the prompt templates and
-the chat abstraction; the SDK owns the wire. Swapping provider is a change to one method.
+the chat abstraction; the SDK owns the wire. Swapping provider is a change to one method,
+`AiRegistration.BuildKernel`.
 
 That choice has a visible cost, which is the honest part: SK's execution settings are
-provider-neutral, so they cannot express Anthropic's structured-output constraint. The model
-may wrap its JSON in a code fence or a sentence of preamble, and the ranker has to tolerate
-that rather than being guaranteed a bare body. `SemanticKernelRankerTests` pins that
-behaviour.
+provider-neutral, so they cannot express Anthropic's structured-output constraint. A model
+may wrap its JSON in a code fence or a sentence of preamble, so a caller has to tolerate that
+rather than being guaranteed a bare body. `AiJson.ExtractJsonObject` absorbs it and
+`AiJsonTests` pins the behaviour.
+
+**Nothing calls the model yet.** The API's first AI-backed feature — CV-to-posting matching —
+was removed: it is being rebuilt with a different structure and flow. What was kept is the
+provider layer and its credential path, because that part is orthogonal to whatever consumes
+it. `AddAiProvider` registers a `Kernel` only when `Ai:Provider` is `anthropic` *and* a key is
+present; anything else registers nothing rather than throwing, so an absent environment
+variable cannot take down endpoints that have nothing to do with AI. `AiRegistrationTests`
+resolves the service rather than merely registering it, since a Kernel that cannot be built is
+otherwise silent until something asks for one.
 
 ## The dashboard
 
 A React SPA on Static Web Apps (Free tier), signing in with MSAL and calling the API with
-an Entra bearer token. Three pages: an overview of the market metrics, a filterable postings
-browser, and CV matching.
+an Entra bearer token. Two pages: an overview of the market metrics, and a filterable
+postings browser.
 
 **Charts follow one rule set rather than taste.** The categorical palette is validated for
 colour-vision deficiency rather than eyeballed — every adjacent pair clears a ΔE separation
@@ -144,8 +143,8 @@ floor under deuteranopia, protanopia and tritanopia, in both light and dark. Dar
 
 **Nothing the dashboard needs to start touches SQL.** The search-term list, the summary, the
 trend and the scraper health all come from Cosmos, so opening the dashboard cold does not
-wake the serverless database. Only the postings browser and CV matching read SQL, and those
-requests carry a deadline: if the database is mid-wake they fail with an explanation and a
+wake the serverless database. Only the postings browser reads SQL, and those requests carry
+a deadline: if the database is mid-wake they fail with an explanation and a
 retry rather than a spinner. This is the property the whole read design exists for, and it
 is easy to lose — an earlier version resolved the search term from SQL, which quietly put
 every page, Cosmos-backed ones included, behind a database wake-up.
@@ -159,10 +158,10 @@ component changing. The UI shows which feed is live so freshness is never a gues
 ## Repository layout
 
 ```
-src/JobPlatform.Core         Domain, CSV parsing, metrics, matching. No Azure dependencies.
+src/JobPlatform.Core         Domain, CSV parsing, metrics. No Azure dependencies.
 src/JobPlatform.Data         EF Core (SQL) + Cosmos repositories, read and write sides.
 src/JobPlatform.Ingestion    The Azure Function.
-src/JobPlatform.Ai           Semantic Kernel + Claude ranker. Isolated so the SDK reaches nothing else.
+src/JobPlatform.Ai           Semantic Kernel + Claude provider. Standalone, so the SDK reaches nothing else.
 src/JobPlatform.Api          The API. Vertical slices under Features/.
 web/                         React dashboard. Vite, MSAL, Recharts.
 tools/JobPlatform.DbAdmin    Schema migration and identity grants.
@@ -184,9 +183,9 @@ dotnet test
 ```
 
 That includes the API's integration tests, which boot the real application against SQLite and
-an in-memory metrics source. The keyword ranker being the default is what makes the matching
-feature testable here at all — retrieval, prefiltering, ranking and fallback are all
-exercised without a key.
+an in-memory metrics source, and the Semantic Kernel composition, which is built with a
+throwaway string in place of a key — enough to prove every link in the graph resolves without
+reaching the network.
 
 The fixture is **synthetic** — hand-built to reproduce the shape of real scraper output
 (empty salary columns, 40% date coverage, a description full of newlines and quotes)
@@ -296,8 +295,8 @@ That number is also what dictates the API's shape rather than being a footnote t
 serving dashboard reads from SQL would keep the database awake for as long as anyone had a
 tab open, and the remaining ~46k vCore-seconds is a few days of that. So metrics are served
 from Cosmos, which is always on and RU-billed inside its own free ceiling; SQL is reached
-only for posting search and match retrieval, behind output caching; and no health probe
-touches it at all.
+only for posting search and detail, behind output caching; and no health probe touches it at
+all.
 
 ## Calling the API
 
@@ -316,22 +315,22 @@ API=https://<container-app>.<region>.azurecontainerapps.io
 curl -H "Authorization: Bearer $TOKEN" "$API/api/v1/search-terms"
 curl -H "Authorization: Bearer $TOKEN" "$API/api/v1/metrics/summary?searchTerm=software-engineer"
 curl -H "Authorization: Bearer $TOKEN" "$API/api/v1/postings?searchTerm=software-engineer&remote=true&limit=5"
-
-curl -X POST "$API/api/v1/match" -H "Authorization: Bearer $TOKEN"      -H 'Content-Type: application/json'      -d '{"cvText":"Backend engineer, 7 years. C#, .NET, Azure, Kubernetes.","topN":5}'
 ```
 
 `/health` needs no token, by design — the platform's probe does not carry one.
 
 Setting `Api:AllowAnonymousReads` opens the read endpoints so a frontend can be built against
-real data before app registrations exist. It never opens `/match` (which costs money per
-call) or `/me` (which is meaningless without a principal), and it is keyed on the flag alone
-rather than on whether an identity provider happens to be configured — otherwise a mistyped
-config section would silently publish the whole dataset.
+real data before app registrations exist. It never opens `/me`, which is meaningless without
+a principal, and it is keyed on the flag alone rather than on whether an identity provider
+happens to be configured — otherwise a mistyped config section would silently publish the
+whole dataset.
 
-### Enabling the Claude-backed ranker
+### Enabling the AI provider
+
+Nothing calls the model yet — this provisions the credential path, not a feature.
 
 ```powershell
-./scripts/provision.ps1 -ResourceGroup <rg> -LandingStorageAccount <account> -MatchingProvider anthropic
+./scripts/provision.ps1 -ResourceGroup <rg> -LandingStorageAccount <account> -AiProvider anthropic
 az keyvault secret set --vault-name <vault> --name anthropic-api-key --value '<key>'
 az containerapp revision restart -g <rg> -n <api-app>
 ```
@@ -352,11 +351,11 @@ There is exactly one secret in this design, and it is optional:
   managed identity — no inbound key, no outbound connection secret.
 - The API image is **public on GHCR**, so pulling it needs no registry credential either.
 
-The single exception is the **Anthropic API key**, and only when the Claude-backed ranker is
-enabled. It lives in Key Vault, read by the managed identity through a Container Apps secret
-reference; its value is set with `az keyvault secret set` and appears in no template,
-parameter file, output or deployment history. The default ranker needs no key and provisions
-no vault, so a fresh clone of this repository still deploys with nothing to leak.
+The single exception is the **Anthropic API key**, and only when the AI provider is enabled.
+It lives in Key Vault, read by the managed identity through a Container Apps secret reference;
+its value is set with `az keyvault secret set` and appears in no template, parameter file,
+output or deployment history. The default is `none`, which needs no key and provisions no
+vault, so a fresh clone of this repository still deploys with nothing to leak.
 
 What still needs care, and how it is handled:
 
@@ -398,9 +397,9 @@ three uploads totalling 455 rows reduced to 286 distinct postings, with a re-upl
 correctly reporting 0 new and leaving the row count unchanged — idempotency demonstrated on
 live data rather than asserted. CI and the OIDC deployment workflow both run green.
 
-The API is built, tested and deployed to Container Apps: 47 tests cover the route surface,
-the authorization rules, the matching pipeline, the Semantic Kernel composition and its
-response handling. It runs under the same managed identity as the ingest function and needed
+The API is built, tested and deployed to Container Apps: 36 tests cover the route surface,
+the authorization rules, and the Semantic Kernel composition and its response handling. It
+runs under the same managed identity as the ingest function and needed
 no new role assignment and no new database user to do it - which is what the user-assigned
 identity was chosen for in the first place.
 
@@ -414,11 +413,11 @@ Verified live against the real ingested data, with a real Entra token:
 | `/api/v1/postings?remote=true` | 39 of 286, correct paging and totals, no description in list rows |
 | `/api/v1/postings/facets` | linkedin 161 / indeed 125; London 94; salary coverage 0% |
 | `/api/v1/metrics/summary` | served from Cosmos, SQL untouched |
-| `/api/v1/match` | 14 skills parsed, 286 candidates ranked, top hit "Backend Software Engineer C# .Net" |
 
 The cold start is the cost of `minReplicas: 0`, and it is the right trade here: the API is
 idle most of the day, and an always-warm replica would burn the free grant serving nobody.
 
 Still to come, per the architecture in `model.md`: a Cosmos change-feed function driving
-Web PubSub for live metrics (the `leases` container is already provisioned), and a React
-dashboard.
+Web PubSub for live metrics (the `leases` container is already provisioned), and CV matching,
+which is being rebuilt with a different structure and flow — the AI provider layer it will run
+on is already in place.

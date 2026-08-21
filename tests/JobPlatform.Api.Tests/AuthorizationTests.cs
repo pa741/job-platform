@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Http.Json;
 using Xunit;
 
 namespace JobPlatform.Api.Tests;
@@ -33,20 +32,8 @@ public sealed class AuthorizationTests
 
     /// <summary>
     /// The guarantee worth asserting: opening reads for convenience must never open an
-    /// endpoint that costs money per call.
+    /// endpoint that is not a read.
     /// </summary>
-    [Fact]
-    public async Task Matching_stays_closed_even_when_anonymous_reads_are_allowed()
-    {
-        using var factory = new ApiFactory { AllowAnonymousReads = true };
-        using var client = factory.CreateClient();
-
-        var response = await client.PostAsJsonAsync(
-            "/api/v1/match", new { cvText = "C# and Azure engineer." });
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
     [Fact]
     public async Task Me_stays_closed_even_when_anonymous_reads_are_allowed()
     {

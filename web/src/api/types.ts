@@ -164,30 +164,6 @@ export interface RunResponse {
   unchangedCount: number;
 }
 
-export interface PostingMatch {
-  postingId: number;
-  score: number;
-  rationale: string | null;
-  matchedSkills: string[];
-  missingSkills: string[];
-}
-
-export interface MatchResponse {
-  matches: PostingMatch[];
-  profile: {
-    skills: string[];
-    titles: string[];
-    locations: string[];
-    yearsExperience: number | null;
-    prefersRemote: boolean | null;
-    tokenCount: number;
-  };
-  provider: string;
-  candidatesConsidered: number;
-  degradedToFallback: boolean;
-  degradationReason: string | null;
-}
-
 export interface MeResponse {
   name: string | null;
   isAuthenticated: boolean;
