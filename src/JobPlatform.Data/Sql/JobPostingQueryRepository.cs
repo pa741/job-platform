@@ -1,4 +1,3 @@
-using JobPlatform.Core.Matching;
 using JobPlatform.Data.Sql.Entities;
 using Microsoft.EntityFrameworkCore;
 
@@ -16,7 +15,7 @@ namespace JobPlatform.Data.Sql;
 /// online, so a query that degrades to a scan does not merely run slowly - it holds the
 /// database awake and spends the monthly grant.
 /// </remarks>
-public sealed class JobPostingQueryRepository(JobsDbContext db) : IMatchCandidateSource
+public sealed class JobPostingQueryRepository(JobsDbContext db)
 {
     /// <summary>Hard ceiling regardless of what a caller asks for.</summary>
     public const int MaxLimit = 100;
@@ -181,68 +180,6 @@ public sealed class JobPostingQueryRepository(JobsDbContext db) : IMatchCandidat
 
     public Task<ScrapeRun?> GetRunAsync(int id, CancellationToken ct = default)
         => db.ScrapeRuns.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id, ct);
-
-    /// <summary>
-    /// Postings for CV matching, with descriptions trimmed to a budget.
-    /// </summary>
-    /// <remarks>
-    /// The trim happens in SQL via Substring, not in memory afterwards. Pulling several
-    /// hundred full descriptions across the wire to then discard most of each would dominate
-    /// both the query time and the database's awake time.
-    /// </remarks>
-    public async Task<IReadOnlyList<MatchCandidate>> GetCandidatesAsync(
-        MatchCandidateQuery query, CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(query);
-
-        var budget = Math.Max(query.DescriptionCharacterBudget, 1);
-        var postings = db.JobPostings.AsNoTracking();
-
-        if (!string.IsNullOrWhiteSpace(query.SearchTerm))
-        {
-            postings = postings.Where(p => p.SearchTerms.Any(l => l.SearchTerm == query.SearchTerm));
-        }
-
-        if (query.IsRemote is { } remote)
-        {
-            postings = postings.Where(p => p.IsRemote == remote);
-        }
-
-        if (!string.IsNullOrWhiteSpace(query.Site))
-        {
-            postings = postings.Where(p => p.Site == query.Site);
-        }
-
-        if (!string.IsNullOrWhiteSpace(query.Country))
-        {
-            postings = postings.Where(p => p.LocationCountry == query.Country);
-        }
-
-        if (query.PostedFrom is { } from)
-        {
-            postings = postings.Where(p => p.DatePosted >= from);
-        }
-
-        return await postings
-            .OrderByDescending(p => p.LastSeenUtc)
-            .Take(Math.Clamp(query.Limit, 1, 1000))
-            .Select(p => new MatchCandidate
-            {
-                PostingId = p.Id,
-                Title = p.Title,
-                Company = p.Company,
-                Location = p.LocationRaw,
-                IsRemote = p.IsRemote,
-                JobType = p.JobType,
-                MinAmount = p.MinAmount,
-                MaxAmount = p.MaxAmount,
-                Currency = p.Currency,
-                Description = p.Description == null
-                    ? null
-                    : p.Description.Substring(0, p.Description.Length < budget ? p.Description.Length : budget),
-            })
-            .ToListAsync(ct);
-    }
 
     /// <summary>
     /// Groups and counts, newest EF-translatable form.

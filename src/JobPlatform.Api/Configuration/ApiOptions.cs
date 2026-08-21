@@ -10,8 +10,7 @@ public sealed class ApiOptions
     /// <remarks>
     /// An iteration convenience, not a deployment mode: it exists so the React dashboard can
     /// be built against a running API before Entra app registrations are sorted out. It never
-    /// opens <c>/match</c> or <c>/me</c> - the first costs money per call, the second is
-    /// meaningless without a principal.
+    /// opens <c>/me</c>, which is meaningless without a principal.
     /// </remarks>
     public bool AllowAnonymousReads { get; set; }
 
@@ -51,9 +50,6 @@ public sealed class RateLimitOptions
     public const string SectionName = "RateLimit";
 
     public int ReadsPerMinute { get; set; } = 120;
-
-    /// <summary>Matching is billed per call, so its bucket is small and separate.</summary>
-    public int MatchesPerMinute { get; set; } = 10;
 
     public bool Enabled { get; set; } = true;
 }

@@ -7,15 +7,13 @@ namespace JobPlatform.Api.Infrastructure;
 public static class RateLimitSetup
 {
     public const string ReadPolicy = "reads";
-    public const string MatchPolicy = "matches";
 
     /// <summary>
     /// Per-caller rate limits.
     /// </summary>
     /// <remarks>
-    /// Protecting two budgets, not the server: the SQL free grant, which a tight polling loop
-    /// could drain in days, and the Anthropic bill, where a single caller could otherwise run
-    /// up real money. Matching gets its own much smaller bucket for that reason.
+    /// Protecting a budget, not the server: the SQL free grant, which a tight polling loop
+    /// could drain in days.
     ///
     /// Partitioned by authenticated principal where there is one, falling back to remote IP.
     /// Behind Container Apps' ingress that IP is the forwarded client address, which is why
@@ -38,15 +36,6 @@ public static class RateLimitSetup
                     _ => new FixedWindowRateLimiterOptions
                     {
                         PermitLimit = options.ReadsPerMinute,
-                        Window = TimeSpan.FromMinutes(1),
-                    }));
-
-            limiter.AddPolicy(MatchPolicy, context =>
-                RateLimitPartition.GetFixedWindowLimiter(
-                    PartitionKey(context),
-                    _ => new FixedWindowRateLimiterOptions
-                    {
-                        PermitLimit = options.MatchesPerMinute,
                         Window = TimeSpan.FromMinutes(1),
                     }));
         });

@@ -1,4 +1,3 @@
-using JobPlatform.Api.Features.Matching;
 using JobPlatform.Api.Features.Meta;
 using JobPlatform.Api.Features.Metrics;
 using JobPlatform.Api.Features.Postings;
@@ -14,7 +13,6 @@ public static class EndpointGroupExtensions
         new PostingEndpoints(),
         new RunEndpoints(),
         new MetricEndpoints(),
-        new MatchEndpoints(),
     ];
 
     /// <summary>

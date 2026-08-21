@@ -30,8 +30,8 @@ param(
     [string]$LandingContainer = 'jobs-landing',
     [string]$DeploymentName = 'jobplatform-ingest',
 
-    [ValidateSet('keyword', 'anthropic')]
-    [string]$MatchingProvider = 'keyword',
+    [ValidateSet('none', 'anthropic')]
+    [string]$AiProvider = 'none',
 
     [string]$ApiClientId = '',
     [string[]]$ApiAllowedOrigins = @(),
@@ -75,7 +75,7 @@ $env:JP_LANDING_CONTAINER = $LandingContainer
 $env:JP_ADMIN_OBJECT_ID = $adminObjectId
 $env:JP_ADMIN_LOGIN_NAME = $adminLoginName
 $env:JP_TENANT_ID = $tenantId
-$env:JP_MATCHING_PROVIDER = $MatchingProvider
+$env:JP_AI_PROVIDER = $AiProvider
 $env:JP_API_CLIENT_ID = $ApiClientId
 $env:JP_API_ALLOWED_ORIGINS = ($ApiAllowedOrigins -join ',')
 
@@ -132,7 +132,7 @@ if (-not $SkipMigrations) {
 
 # The vault is created empty and the key is set by hand, deliberately: passing it as a
 # parameter would put it in the deployment history, where it would outlive any rotation.
-if ($MatchingProvider -eq 'anthropic') {
+if ($AiProvider -eq 'anthropic') {
     $vaultName = $outputs.keyVaultName.value
     $secretName = $outputs.anthropicSecretName.value
 
@@ -140,8 +140,8 @@ if ($MatchingProvider -eq 'anthropic') {
 
     if (-not $existing) {
         Write-Host ''
-        Write-Host 'Matching provider is "anthropic" but the key vault has no key yet.' -ForegroundColor Yellow
-        Write-Host 'The API will fall back to the keyword ranker until you set it:' -ForegroundColor Yellow
+        Write-Host 'AI provider is "anthropic" but the key vault has no key yet.' -ForegroundColor Yellow
+        Write-Host 'No model is reachable until you set it:' -ForegroundColor Yellow
         Write-Host "  az keyvault secret set --vault-name $vaultName --name $secretName --value '<your-key>'" -ForegroundColor Yellow
         Write-Host 'Then restart the container app to pick it up:' -ForegroundColor Yellow
         Write-Host "  az containerapp revision restart -g $ResourceGroup -n $($outputs.apiName.value)" -ForegroundColor Yellow

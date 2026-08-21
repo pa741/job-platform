@@ -8,22 +8,10 @@
     <PackageReference Include="Microsoft.SemanticKernel" />
     <PackageReference Include="Anthropic" />
     <PackageReference Include="Microsoft.Extensions.Options" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <!-- The JSON extraction that tolerates fenced or prefixed model output is internal, but
-         it is the piece most worth testing: SK's provider-neutral settings cannot express a
-         structured-output constraint, so the response shape is not guaranteed. -->
-    <InternalsVisibleTo Include="JobPlatform.Api.Tests" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\JobPlatform.Core\JobPlatform.Core.csproj" />
   </ItemGroup>
 
 </Project>

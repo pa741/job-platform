@@ -44,7 +44,7 @@ public sealed class JobPostingEntity
     public string? JobUrlDirect { get; set; }
     public string? CompanyUrl { get; set; }
 
-    /// <summary>Full text. The API's CV-matching needs it; it is the bulk of the row.</summary>
+    /// <summary>Full text. Only the posting detail returns it; it is the bulk of the row.</summary>
     public string? Description { get; set; }
     public int DescriptionLength { get; set; }
 

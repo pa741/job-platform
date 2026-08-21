@@ -52,12 +52,13 @@ The function runs under a **user-assigned** managed identity, deliberately: the 
 Apps API needs the same grants, and a shared identity means granting once. That has now paid
 off — the API required no new role assignment and no new database user.
 
-**The one exception is the Anthropic API key**, needed only when `Matching:Provider` is
+**The one exception is the Anthropic API key**, needed only when `Ai:Provider` is
 `anthropic`. It lives in Key Vault, is read by the shared identity through a Container Apps
 secret reference, and its *value* is set out of band with `az keyvault secret set` — never a
 Bicep parameter, never a template output, never in deployment history. The default provider
-is `keyword`, which provisions no vault and needs no key, so a fresh clone still deploys with
-nothing to leak.
+is `none`, which provisions no vault and needs no key, so a fresh clone still deploys with
+nothing to leak. Nothing consumes the model yet: CV matching was removed and is being rebuilt
+with a different structure, and the provider layer was kept rather than torn out and redone.
 
 ## Key files
 
@@ -75,9 +76,10 @@ nothing to leak.
 - `src/JobPlatform.Api/Program.cs` — composition only. Routes live in `Features/<Name>/`, one
   `IEndpointGroup` each, registered in `Endpoints/EndpointGroupExtensions.cs`. Adding a
   feature is a folder plus one line there.
-- `src/JobPlatform.Core/Matching/CvMatchingService.cs` — the retrieve → prefilter → rerank
-  pipeline, and the fallback that keeps matching working when a paid ranker is not.
 - `src/JobPlatform.Data/Sql/JobPostingQueryRepository.cs` — every SQL read the API makes.
+- `src/JobPlatform.Ai/AiRegistration.cs` — the whole LLM abstraction: `BuildKernel` composes
+  Semantic Kernel over the Anthropic SDK. Registered but unconsumed, awaiting the rebuilt CV
+  matching.
 
 ## Conventions and constraints
 
@@ -196,8 +198,8 @@ Each of these cost a red CI run; none of them fail locally.
 - **The API must never serve dashboard metrics from Azure SQL.** They all exist in Cosmos
   already. SQL is billed on wall-clock time *online* against a monthly grant one daily ingest
   half-consumes; a polling dashboard reading SQL exhausts it and the database auto-pauses
-  until the 1st of the next month. SQL is for posting browse/search/detail and match
-  retrieval, behind output caching, and nothing else.
+  until the 1st of the next month. SQL is for posting browse/search/detail, behind output
+  caching, and nothing else.
 - **Nothing a client needs before its first real request may touch SQL.** `/search-terms` is
   the call every page waits on, so it is served from Cosmos. When it read SQL, opening the
   dashboard while the database was paused hung *every* page - the Cosmos-only overview
@@ -215,24 +217,25 @@ Each of these cost a red CI run; none of them fail locally.
   `PostingDetail` returns it. `PostingEndpointTests` asserts this, because nothing else fails
   when it regresses.
 - **`Api:AllowAnonymousReads` is the only switch that opens reads**, and it never opens
-  `/match` or `/me`. Do not make it depend on whether `AzureAd` happens to be configured — a
-  mistyped section name would then silently publish the whole dataset.
-- **Matching must degrade, not fail.** `CvMatchingService` computes the keyword ordering
-  first and returns it if the configured ranker throws or returns nothing, reporting
-  `degradedToFallback`. A third party's rate limit must not 500 the endpoint.
+  `/me`. Do not make it depend on whether `AzureAd` happens to be configured — a mistyped
+  section name would then silently publish the whole dataset.
 - **Semantic Kernel is the LLM abstraction, deliberately.** There is no official Microsoft SK
-  connector for Anthropic - only third-party alphas - so `MatchingRegistration.BuildKernel`
+  connector for Anthropic - only third-party alphas - so `AiRegistration.BuildKernel`
   composes one: the Anthropic SDK's `AsIChatClient()` handed to SK's `AsChatCompletionService()`.
   Keep prompts as Kernel prompt templates with `KernelArguments`; do not reach past the Kernel
-  to the SDK, or the point of the abstraction is lost.
+  to the SDK, or the point of the abstraction is lost. `AddAiProvider` registers a `Kernel`
+  only when `Ai:Provider` is `anthropic` *and* a key is present; anything else registers
+  nothing rather than throwing, so a missing environment variable cannot take down endpoints
+  that have nothing to do with AI. `AiRegistrationTests` resolves the service, because
+  registration is lazy and a Kernel that cannot be built is otherwise silent.
 - **`TreatWarningsAsErrors` is off** because SK's Extensions.AI bridge is experimental
   (SKEXP0001). Warnings still appear in build output - do not let them accumulate.
 - **`Microsoft.Extensions.*` is pinned to 10.x on a net9.0 target**, because SK and the
   Anthropic SDK both require `Microsoft.Extensions.AI` 10.5. With transitive pinning on,
   dropping these back to 9.0.0 fails the build with CS1705.
 - **The SK path cannot use structured outputs.** SK's execution settings are provider-neutral,
-  so the model may return fenced or prose-wrapped JSON; `ExtractJsonObject` absorbs that and
-  `SemanticKernelRankerTests` pins the behaviour. Do not assume a bare JSON body.
+  so the model may return fenced or prose-wrapped JSON; `AiJson.ExtractJsonObject` absorbs that
+  and `AiJsonTests` pins the behaviour. Do not assume a bare JSON body.
 
 ## Common tasks
 
@@ -250,8 +253,8 @@ dotnet run --project tools/JobPlatform.DbAdmin -- migrate "<connection-string>"
 # Full provision (idempotent)
 ./scripts/provision.ps1 -ResourceGroup <rg> -LandingStorageAccount <account>
 
-# ...with the Claude-backed ranker; the script prints the `az keyvault secret set` to run
-./scripts/provision.ps1 -ResourceGroup <rg> -LandingStorageAccount <account> -MatchingProvider anthropic
+# ...with the AI provider enabled; the script prints the `az keyvault secret set` to run
+./scripts/provision.ps1 -ResourceGroup <rg> -LandingStorageAccount <account> -AiProvider anthropic
 
 # Build the API image the way CI does (context is the repo root, not the project directory)
 docker build -f src/JobPlatform.Api/Dockerfile -t job-platform-api .

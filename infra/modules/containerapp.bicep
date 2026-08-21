@@ -38,17 +38,17 @@ param allowAnonymousReads bool = false
 @description('Origins allowed to call the API from a browser, e.g. the Static Web App.')
 param allowedOrigins array = []
 
-@description('Which ICvRanker the API resolves: keyword (no credentials) or anthropic.')
+@description('Which AI provider the API resolves: none (no credentials) or anthropic.')
 @allowed([
-  'keyword'
+  'none'
   'anthropic'
 ])
-param matchingProvider string = 'keyword'
+param aiProvider string = 'none'
 
-@description('Key Vault secret URI holding the Anthropic key. Required only when matchingProvider is anthropic.')
+@description('Key Vault secret URI holding the Anthropic key. Required only when aiProvider is anthropic.')
 param anthropicSecretUri string = ''
 
-var useAnthropic = matchingProvider == 'anthropic' && !empty(anthropicSecretUri)
+var useAnthropic = aiProvider == 'anthropic' && !empty(anthropicSecretUri)
 var anthropicSecretName = 'anthropic-api-key'
 
 // Array-typed configuration binds by index, so each origin becomes its own variable. Hoisted
@@ -184,8 +184,8 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
               value: string(allowAnonymousReads)
             }
             {
-              name: 'Matching__Provider'
-              value: matchingProvider
+              name: 'Ai__Provider'
+              value: aiProvider
             }
             {
               name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
@@ -197,7 +197,7 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
             }
           ], allowedOriginEnv, useAnthropic ? [
             {
-              name: 'Matching__Anthropic__ApiKey'
+              name: 'Ai__Anthropic__ApiKey'
               secretRef: anthropicSecretName
             }
           ] : [])

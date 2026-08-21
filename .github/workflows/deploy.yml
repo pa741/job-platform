@@ -35,7 +35,7 @@ env:
   JP_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
   JP_API_CLIENT_ID: ${{ vars.JP_API_CLIENT_ID }}
   JP_API_ALLOWED_ORIGINS: ${{ vars.JP_API_ALLOWED_ORIGINS }}
-  JP_MATCHING_PROVIDER: ${{ vars.JP_MATCHING_PROVIDER }}
+  JP_AI_PROVIDER: ${{ vars.JP_AI_PROVIDER }}
   # Load-bearing. Unset, the template parameter falls back to the free serverless offer and
   # the deployment tries to downgrade a paid database, which Azure rejects outright with
   # "Cannot update paid database to free database" - a failed pipeline, every push.

@@ -21,8 +21,7 @@ public static class AuthSetup
     /// <see cref="PublicReadPolicy"/> collapses to anonymous when
     /// <c>Api:AllowAnonymousReads</c> is set, so a frontend can be developed against real
     /// data before app registrations exist. <see cref="AuthenticatedPolicy"/> ignores that
-    /// flag entirely and guards matching, which costs money per call, and <c>/me</c>, which
-    /// has no meaning without a principal.
+    /// flag entirely and guards <c>/me</c>, which has no meaning without a principal.
     ///
     /// The Microsoft Identity Web scheme is only added when an <c>AzureAd</c> section with a
     /// client id exists; it throws at startup otherwise, which would make a local run without
