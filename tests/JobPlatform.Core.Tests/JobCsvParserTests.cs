@@ -1,3 +1,4 @@
+using System.Text;
 using JobPlatform.Core.Parsing;
 using JobPlatform.Core.Tests.Fixtures;
 using Xunit;
@@ -107,6 +108,48 @@ public sealed class JobCsvParserTests
 
         Assert.Empty(result.Postings);
         Assert.Equal(0, result.RowsInFile);
+    }
+
+    /// <summary>
+    /// Two rows in the shape the scraper actually writes: freehire fills the freshness
+    /// columns, a scraped board leaves them empty. Written inline rather than added to
+    /// the shared fixture, which the row-count and fill-rate assertions above pin.
+    /// </summary>
+    private static CsvParseResult ParseFreehireRows()
+    {
+        const string csv = """
+            id,site,title,company,summary,freshness_class,posting_age_days,repost_count,fake_freshness,experience_range,company_num_employees
+            fh-a,freehire,Backend Engineer,Northwind,Builds the ledger.,stale,65,3,False,3+ Yrs,51-200
+            in-b,indeed,Frontend Developer,Contoso,,,,,,,
+            """;
+
+        return new JobCsvParser().Parse(new MemoryStream(Encoding.UTF8.GetBytes(csv)));
+    }
+
+    [Fact]
+    public void Parse_reads_the_freehire_freshness_columns()
+    {
+        var posting = Assert.Single(ParseFreehireRows().Postings, p => p.Site == "freehire");
+
+        Assert.Equal("stale", posting.FreshnessClass);
+        Assert.Equal(65, posting.PostingAgeDays);
+        Assert.Equal(3, posting.RepostCount);
+        Assert.Equal("Builds the ledger.", posting.Summary);
+        Assert.Equal("3+ Yrs", posting.ExperienceRange);
+        Assert.Equal("51-200", posting.CompanyNumEmployees);
+    }
+
+    [Fact]
+    public void Parse_keeps_a_stated_false_distinct_from_an_unchecked_posting()
+    {
+        var postings = ParseFreehireRows().Postings;
+
+        // freehire looked and found nothing suspect.
+        Assert.False(Assert.Single(postings, p => p.Site == "freehire").FakeFreshness);
+
+        // Indeed never looked. Reading this as false would let every scraped row assert
+        // a verdict it never made - the whole reason the column is nullable.
+        Assert.Null(Assert.Single(postings, p => p.Site == "indeed").FakeFreshness);
     }
 
     [Fact]

@@ -31,7 +31,7 @@ NAS scraper ──CSV──> Blob Storage: jobs-landing/jobs/*.csv
 
 On every uploaded CSV the function:
 
-1. **Parses** the 34-column JobSpy export, tolerating what that data actually contains —
+1. **Parses** the JobSpy export, tolerating what that data actually contains —
    descriptions with embedded newlines and quotes, Python `True`/`False`, columns that are
    empty in every row, multi-valued `job_type`. A row it cannot parse is counted, not fatal.
 2. **Reconciles** postings against Azure SQL, keyed by `site:external_id`, tracking

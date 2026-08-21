@@ -48,6 +48,22 @@ public sealed class JobPostingEntity
     public string? Description { get; set; }
     public int DescriptionLength { get; set; }
 
+    public string? CompanyNumEmployees { get; set; }
+    public string? ExperienceRange { get; set; }
+
+    /// <summary>freehire's synopsis. Null for every scraped board.</summary>
+    public string? Summary { get; set; }
+
+    /// <summary>
+    /// freehire's read on whether the posting is a real, current opening.
+    /// <see cref="FakeFreshness"/> stays nullable: false is a verdict, null is silence.
+    /// </summary>
+    public string? FreshnessClass { get; set; }
+
+    public int? PostingAgeDays { get; set; }
+    public int? RepostCount { get; set; }
+    public bool? FakeFreshness { get; set; }
+
     public DateTimeOffset FirstSeenUtc { get; set; }
     public DateTimeOffset LastSeenUtc { get; set; }
 

@@ -72,6 +72,9 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
             entity.HasIndex(e => new { e.SearchTerm, e.FirstSeenUtc });
             entity.HasIndex(e => new { e.SearchTerm, e.LastSeenUtc });
             entity.HasIndex(e => e.Company);
+            // Filtering out recycled postings is the reason these columns exist, so the
+            // dashboard will ask for them alongside the search term it already keys on.
+            entity.HasIndex(e => new { e.SearchTerm, e.FreshnessClass });
 
             entity.Property(e => e.SourceKey).HasMaxLength(200).IsRequired();
             entity.Property(e => e.Site).HasMaxLength(50).IsRequired();
@@ -96,6 +99,13 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
             entity.Property(e => e.JobLevel).HasMaxLength(100);
             entity.Property(e => e.JobFunction).HasMaxLength(150);
             entity.Property(e => e.CompanyIndustry).HasMaxLength(200);
+
+            entity.Property(e => e.CompanyNumEmployees).HasMaxLength(50);
+            entity.Property(e => e.ExperienceRange).HasMaxLength(100);
+            entity.Property(e => e.FreshnessClass).HasMaxLength(30);
+            // Two sentences in practice, but it is model-generated, so the bound is
+            // generous rather than measured.
+            entity.Property(e => e.Summary).HasMaxLength(1000);
 
             entity.Property(e => e.JobUrl).HasMaxLength(1000);
             entity.Property(e => e.JobUrlDirect).HasMaxLength(1000);

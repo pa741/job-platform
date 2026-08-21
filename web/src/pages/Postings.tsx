@@ -12,6 +12,47 @@ const PAGE_SIZE = 25;
  * fetching everything and filtering in the browser - the table has hundreds of rows now but
  * grows daily, and the database is billed by the second it spends awake.
  */
+/**
+ * Only freehire supplies these, and only the unflattering ones earn a badge: a "fresh"
+ * pill on most of the table would be noise, while a recycled posting is exactly what a
+ * job hunter wants to spot before spending an afternoon on it.
+ *
+ * fakeFreshness is compared against true rather than tested for truthiness - null means
+ * the posting came from a board that never checked, not that it passed.
+ */
+function FreshnessPills({ posting }: { posting: PostingSummary }) {
+  const stale = posting.freshnessClass === 'stale' || posting.freshnessClass === 'likely-evergreen';
+  const reposted = (posting.repostCount ?? 0) > 1;
+
+  return (
+    <>
+      {stale && (
+        <span
+          className="pill warning"
+          style={{ marginLeft: 8 }}
+          title={posting.postingAgeDays !== null ? `${posting.postingAgeDays} days old` : undefined}
+        >
+          {posting.freshnessClass === 'stale' ? 'stale' : 'evergreen'}
+        </span>
+      )}
+      {reposted && (
+        <span className="pill warning" style={{ marginLeft: 8 }}>
+          reposted &times;{posting.repostCount}
+        </span>
+      )}
+      {posting.fakeFreshness === true && (
+        <span
+          className="pill critical"
+          style={{ marginLeft: 8 }}
+          title="The stated posting date looks refreshed rather than real"
+        >
+          date refreshed
+        </span>
+      )}
+    </>
+  );
+}
+
 export function Postings({ api, searchTerm }: { api: JobPlatformApi; searchTerm: string | undefined }) {
   const [facets, setFacets] = useState<FacetsResponse>();
   const [page, setPage] = useState<PageResponse<PostingSummary>>();
@@ -133,6 +174,7 @@ export function Postings({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
                     ? <a href={posting.jobUrl} target="_blank" rel="noreferrer noopener">{posting.title}</a>
                     : posting.title}
                   {posting.isRemote && <span className="pill" style={{ marginLeft: 8 }}>remote</span>}
+                  <FreshnessPills posting={posting} />
                 </td>
                 <td>{posting.company ?? '—'}</td>
                 <td>{posting.city ?? posting.location ?? '—'}</td>

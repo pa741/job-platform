@@ -42,6 +42,30 @@ public sealed record JobPosting
 
     public string? Description { get; init; }
 
+    /// <summary>Employee band, e.g. <c>"51-200"</c>. Indeed and freehire.</summary>
+    public string? CompanyNumEmployees { get; init; }
+
+    /// <summary>Experience asked for, e.g. <c>"3+ Yrs"</c>. Naukri and freehire.</summary>
+    public string? ExperienceRange { get; init; }
+
+    /// <summary>One or two sentence synopsis. freehire only.</summary>
+    public string? Summary { get; init; }
+
+    /// <summary>
+    /// How much of a posting's own freshness claim to believe. freehire only —
+    /// a scraped board can only repeat what the listing says about itself.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="FakeFreshness"/> is nullable on purpose. <c>false</c> means freehire
+    /// looked and found nothing suspect; null means nobody looked. Collapsing the two
+    /// would let every Indeed row claim it had been checked.
+    /// </remarks>
+    public string? FreshnessClass { get; init; }
+
+    public int? PostingAgeDays { get; init; }
+    public int? RepostCount { get; init; }
+    public bool? FakeFreshness { get; init; }
+
     public int DescriptionLength => Description?.Length ?? 0;
 
     /// <summary>Natural key within a source board. Stable across runs.</summary>

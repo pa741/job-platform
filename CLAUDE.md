@@ -62,7 +62,9 @@ nothing to leak.
 ## Key files
 
 - `src/JobPlatform.Core/Parsing/JobCsvParser.cs` — the JobSpy CSV contract. Written against
-  the real 34-column export; changes here need a fixture case.
+  the real export; changes here need a fixture case. The column count is not fixed - the
+  scraper runs a JobSpy fork that adds columns (freehire's freshness signals, LinkedIn
+  applicant counts), so the parser reads by name and ignores what it does not model.
 - `src/JobPlatform.Core/Metrics/MetricsCalculator.cs` — every metric. Pure and Azure-free,
   which is why the metric surface is fully unit-testable.
 - `src/JobPlatform.Data/Sql/JobPostingRepository.cs` — the upsert, and the daily rollup

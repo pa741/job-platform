@@ -36,6 +36,24 @@ public sealed record PostingSummary
     /// tell a substantive posting from a stub before fetching it.</summary>
     public int DescriptionLength { get; init; }
 
+    /// <summary>
+    /// Whether the posting is a real, current opening — <c>fresh</c>, <c>stale</c> or
+    /// <c>likely-evergreen</c>. Only freehire supplies these; null on every scraped board,
+    /// which is why they sit in the list contract: they are triage, not detail.
+    /// </summary>
+    public string? FreshnessClass { get; init; }
+
+    public int? PostingAgeDays { get; init; }
+
+    /// <summary>How many times the role has been reposted.</summary>
+    public int? RepostCount { get; init; }
+
+    /// <summary>
+    /// True when the stated posting date looks refreshed rather than real. Null means
+    /// nobody checked, which is not the same as false.
+    /// </summary>
+    public bool? FakeFreshness { get; init; }
+
     public DateTimeOffset FirstSeenUtc { get; init; }
     public DateTimeOffset LastSeenUtc { get; init; }
     public int SeenCount { get; init; }
@@ -53,6 +71,16 @@ public sealed record PostingDetail
     public string? JobFunction { get; init; }
     public string? CompanyIndustry { get; init; }
     public string? SalarySource { get; init; }
+
+    /// <summary>
+    /// freehire's one or two sentence synopsis. Named Synopsis rather than Summary
+    /// because <see cref="Summary"/> on this record is already the list contract.
+    /// </summary>
+    public string? Synopsis { get; init; }
+
+    public string? ExperienceRange { get; init; }
+    public string? CompanyNumEmployees { get; init; }
+
     public required string ContentHash { get; init; }
     public int FirstSeenRunId { get; init; }
     public int LastSeenRunId { get; init; }

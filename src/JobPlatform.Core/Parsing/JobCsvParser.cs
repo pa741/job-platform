@@ -29,6 +29,9 @@ public sealed class JobCsvParser(ILogger<JobCsvParser>? logger = null)
         "company_url_direct", "company_addresses", "company_num_employees",
         "company_revenue", "company_description", "skills", "experience_range",
         "company_rating", "company_reviews_count", "vacancy_count", "work_from_home_type",
+        "applicants", "applicant_count",
+        "source_board", "summary", "freshness_class", "posting_age_days",
+        "repost_count", "fake_freshness",
     ];
 
     private static readonly CsvConfiguration Configuration = new(CultureInfo.InvariantCulture)
@@ -147,6 +150,13 @@ public sealed class JobCsvParser(ILogger<JobCsvParser>? logger = null)
             JobUrlDirect = Field(csv, "job_url_direct"),
             CompanyUrl = Field(csv, "company_url"),
             Description = Field(csv, "description"),
+            CompanyNumEmployees = Field(csv, "company_num_employees"),
+            ExperienceRange = Field(csv, "experience_range"),
+            Summary = Field(csv, "summary"),
+            FreshnessClass = Field(csv, "freshness_class"),
+            PostingAgeDays = ParseInt(Field(csv, "posting_age_days")),
+            RepostCount = ParseInt(Field(csv, "repost_count")),
+            FakeFreshness = ParseNullableBool(Field(csv, "fake_freshness")),
         };
     }
 
@@ -161,6 +171,23 @@ public sealed class JobCsvParser(ILogger<JobCsvParser>? logger = null)
         "true" or "1" or "yes" => true,
         _ => false,
     };
+
+    /// <summary>
+    /// Distinguishes "checked, and it looked fine" from "nobody checked". Only freehire
+    /// fills these columns, so <see cref="ParseBool"/>'s false-for-everything default
+    /// would have every scraped row asserting a verdict it never made.
+    /// </summary>
+    private static bool? ParseNullableBool(string? raw) => raw?.Trim().ToLowerInvariant() switch
+    {
+        "true" or "1" or "yes" => true,
+        "false" or "0" or "no" => false,
+        _ => null,
+    };
+
+    private static int? ParseInt(string? raw)
+        => int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : null;
 
     private static DateOnly? ParseDate(string? raw)
         => DateOnly.TryParseExact(raw, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)

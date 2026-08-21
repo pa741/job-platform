@@ -33,6 +33,15 @@ export interface PostingSummary {
   jobUrl: string | null;
   /** Length only - the description itself is on the detail endpoint. */
   descriptionLength: number;
+  /**
+   * How much of the posting's own freshness claim to believe. freehire only, so null
+   * on every scraped board - and `fakeFreshness: null` means nobody checked, which is
+   * not the same as `false`.
+   */
+  freshnessClass: string | null;
+  postingAgeDays: number | null;
+  repostCount: number | null;
+  fakeFreshness: boolean | null;
   firstSeenUtc: string;
   lastSeenUtc: string;
   seenCount: number;
@@ -48,6 +57,10 @@ export interface PostingDetail {
   jobFunction: string | null;
   companyIndustry: string | null;
   salarySource: string | null;
+  /** freehire's synopsis. Named synopsis because `summary` here is the list contract. */
+  synopsis: string | null;
+  experienceRange: string | null;
+  companyNumEmployees: string | null;
   contentHash: string;
   firstSeenRunId: number;
   lastSeenRunId: number;

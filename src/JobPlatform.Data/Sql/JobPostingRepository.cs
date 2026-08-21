@@ -221,7 +221,12 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
             || entity.MaxAmount != posting.MaxAmount
             || entity.IsRemote != posting.IsRemote
             || entity.DatePosted != posting.DatePosted
-            || !string.Equals(entity.JobType, posting.JobType, StringComparison.Ordinal);
+            || !string.Equals(entity.JobType, posting.JobType, StringComparison.Ordinal)
+            // A repost is a real event about the job, so it counts as a change.
+            // PostingAgeDays and FreshnessClass deliberately do not: both move with the
+            // clock alone, and including them would mark every freehire posting updated
+            // on every run, which is precisely what this metric exists to distinguish.
+            || entity.RepostCount != posting.RepostCount;
 
     private static void Apply(
         JobPostingEntity entity,
@@ -253,6 +258,13 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
         entity.CompanyUrl = posting.CompanyUrl;
         entity.Description = posting.Description;
         entity.DescriptionLength = posting.DescriptionLength;
+        entity.CompanyNumEmployees = posting.CompanyNumEmployees;
+        entity.ExperienceRange = posting.ExperienceRange;
+        entity.Summary = posting.Summary;
+        entity.FreshnessClass = posting.FreshnessClass;
+        entity.PostingAgeDays = posting.PostingAgeDays;
+        entity.RepostCount = posting.RepostCount;
+        entity.FakeFreshness = posting.FakeFreshness;
         entity.SearchTerm = searchTerm;
     }
 }
