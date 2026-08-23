@@ -46,7 +46,7 @@ public sealed class MetricEndpointTests : IDisposable
         Counts = new RunCounts { RowsInFile = parsed + 5, Parsed = parsed, Invalid = 5, New = isNew, Updated = 10 },
         BySite = new Dictionary<string, int> { ["indeed"] = parsed / 2, ["linkedin"] = parsed / 2 },
         ByJobType = new Dictionary<string, int> { ["fulltime"] = parsed },
-        Remote = new RemoteBreakdown(parsed / 4, parsed - (parsed / 4), 0.25),
+        Remote = new RemoteBreakdown(parsed / 4, parsed - (parsed / 4), 0, 0.25),
         Freshness = new FreshnessBreakdown { Coverage = 0.4, MedianAgeDays = 3 },
         Salary = new SalaryBreakdown { Coverage = 0.0 },
         TopCompanies = [new NamedCount("Northwind", 12)],

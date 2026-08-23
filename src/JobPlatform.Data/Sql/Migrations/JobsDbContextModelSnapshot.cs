@@ -22,6 +22,176 @@ namespace JobPlatform.Data.Sql.Migrations
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.CompanyEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("CompanyKey")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<string>("EmployeesBand")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<int?>("EmployeesMax")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("EmployeesMin")
+                        .HasColumnType("int");
+
+                    b.Property<DateTimeOffset>("FirstSeenUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("Industry")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTimeOffset>("LastSeenUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<double?>("Rating")
+                        .HasColumnType("float");
+
+                    b.Property<string>("Revenue")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<int?>("ReviewsCount")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Url")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CompanyKey")
+                        .IsUnique();
+
+                    b.ToTable("Companies", (string)null);
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.ConceptClosureEntity", b =>
+                {
+                    b.Property<int>("AncestorId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("DescendantId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Depth")
+                        .HasColumnType("int");
+
+                    b.HasKey("AncestorId", "DescendantId");
+
+                    b.HasIndex("DescendantId", "AncestorId");
+
+                    b.ToTable("ConceptClosure", (string)null);
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.ConceptEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("ConceptKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("int");
+
+                    b.Property<string>("PrefLabel")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int>("TaxonomyVersion")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ConceptKey")
+                        .IsUnique();
+
+                    b.HasIndex("Kind");
+
+                    b.ToTable("Concepts", (string)null);
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.ConceptLabelEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("ConceptId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("NormalizedLabel")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NormalizedLabel");
+
+                    b.HasIndex("ConceptId", "NormalizedLabel")
+                        .IsUnique();
+
+                    b.ToTable("ConceptLabels", (string)null);
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.ConceptRelationEntity", b =>
+                {
+                    b.Property<int>("FromConceptId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ToConceptId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("RelationType")
+                        .HasColumnType("int");
+
+                    b.HasKey("FromConceptId", "ToConceptId", "RelationType");
+
+                    b.HasIndex("ToConceptId", "RelationType");
+
+                    b.ToTable("ConceptRelations", (string)null);
+                });
+
             modelBuilder.Entity("JobPlatform.Data.Sql.Entities.JobPostingEntity", b =>
                 {
                     b.Property<long>("Id")
@@ -30,9 +200,31 @@ namespace JobPlatform.Data.Sql.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
 
+                    b.Property<string>("AnnualSalaryCurrency")
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)");
+
+                    b.Property<decimal?>("AnnualSalaryMax")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("decimal(12,2)");
+
+                    b.Property<decimal?>("AnnualSalaryMin")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("decimal(12,2)");
+
+                    b.Property<int?>("ApplicantCount")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Applicants")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
                     b.Property<string>("Company")
                         .HasMaxLength(300)
                         .HasColumnType("nvarchar(300)");
+
+                    b.Property<int?>("CompanyId")
+                        .HasColumnType("int");
 
                     b.Property<string>("CompanyIndustry")
                         .HasMaxLength(200)
@@ -65,6 +257,9 @@ namespace JobPlatform.Data.Sql.Migrations
                     b.Property<int>("DescriptionLength")
                         .HasColumnType("int");
 
+                    b.Property<int>("EnrichmentVersion")
+                        .HasColumnType("int");
+
                     b.Property<string>("ExperienceRange")
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
@@ -84,7 +279,17 @@ namespace JobPlatform.Data.Sql.Migrations
                         .HasMaxLength(30)
                         .HasColumnType("nvarchar(30)");
 
-                    b.Property<bool>("IsRemote")
+                    b.Property<bool>("HasContactEmail")
+                        .HasColumnType("bit");
+
+                    b.Property<int?>("HybridDaysInOffice")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Ir35")
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)");
+
+                    b.Property<bool?>("IsRemote")
                         .HasColumnType("bit");
 
                     b.Property<string>("JobFunction")
@@ -109,6 +314,10 @@ namespace JobPlatform.Data.Sql.Migrations
 
                     b.Property<DateTimeOffset>("LastSeenUtc")
                         .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("ListingType")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
 
                     b.Property<string>("LocationCity")
                         .HasMaxLength(150)
@@ -140,6 +349,18 @@ namespace JobPlatform.Data.Sql.Migrations
                     b.Property<int?>("RepostCount")
                         .HasColumnType("int");
 
+                    b.Property<bool>("RequiresDegree")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("RequiresSecurityClearance")
+                        .HasColumnType("bit");
+
+                    b.Property<int>("RoleFamily")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("SalaryFromText")
+                        .HasColumnType("bit");
+
                     b.Property<string>("SalaryInterval")
                         .HasMaxLength(30)
                         .HasColumnType("nvarchar(30)");
@@ -148,13 +369,24 @@ namespace JobPlatform.Data.Sql.Migrations
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
 
+                    b.Property<string>("SalaryStatedInterval")
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
                     b.Property<int>("SeenCount")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Seniority")
                         .HasColumnType("int");
 
                     b.Property<string>("Site")
                         .IsRequired()
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("SourceBoard")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
 
                     b.Property<string>("SourceKey")
                         .IsRequired()
@@ -170,20 +402,67 @@ namespace JobPlatform.Data.Sql.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
+                    b.Property<int?>("VacancyCount")
+                        .HasColumnType("int");
+
+                    b.Property<bool?>("VisaSponsorship")
+                        .HasColumnType("bit");
+
+                    b.Property<int>("WorkArrangement")
+                        .HasColumnType("int");
+
+                    b.Property<string>("WorkFromHomeType")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<int?>("YearsExperienceMax")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("YearsExperienceMin")
+                        .HasColumnType("int");
+
                     b.HasKey("Id");
 
                     b.HasIndex("Company");
 
+                    b.HasIndex("CompanyId");
+
                     b.HasIndex("ContentHash");
+
+                    b.HasIndex("EnrichmentVersion");
 
                     b.HasIndex("FreshnessClass");
 
                     b.HasIndex("LastSeenUtc");
 
+                    b.HasIndex("RoleFamily");
+
+                    b.HasIndex("Seniority");
+
+                    b.HasIndex("SourceBoard");
+
                     b.HasIndex("SourceKey")
                         .IsUnique();
 
+                    b.HasIndex("WorkArrangement");
+
                     b.ToTable("JobPostings", (string)null);
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.JobPostingJobTypeEntity", b =>
+                {
+                    b.Property<long>("PostingId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("JobType")
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.HasKey("PostingId", "JobType");
+
+                    b.HasIndex("JobType");
+
+                    b.ToTable("JobPostingJobTypes", (string)null);
                 });
 
             modelBuilder.Entity("JobPlatform.Data.Sql.Entities.JobPostingSearchTerm", b =>
@@ -221,6 +500,128 @@ namespace JobPlatform.Data.Sql.Migrations
                     b.HasIndex("SearchTerm", "LastSeenUtc");
 
                     b.ToTable("JobPostingSearchTerms", (string)null);
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.PostingConceptEntity", b =>
+                {
+                    b.Property<long>("PostingId")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("ConceptId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Source")
+                        .HasColumnType("int");
+
+                    b.Property<double?>("Confidence")
+                        .HasColumnType("float");
+
+                    b.Property<string>("EvidenceText")
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
+
+                    b.Property<int>("Polarity")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ResolverVersion")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("YearsMax")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("YearsMin")
+                        .HasColumnType("int");
+
+                    b.HasKey("PostingId", "ConceptId", "Source");
+
+                    b.HasIndex("ResolverVersion");
+
+                    b.HasIndex("ConceptId", "PostingId");
+
+                    b.ToTable("PostingConcepts", (string)null);
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.PostingExtractionEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset>("ExtractedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<int>("ExtractorVersion")
+                        .HasColumnType("int");
+
+                    b.Property<string>("InputHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nchar(64)")
+                        .IsFixedLength();
+
+                    b.Property<string>("Model")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("PayloadJson")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<long>("PostingId")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PostingId", "ExtractorVersion", "InputHash")
+                        .IsUnique();
+
+                    b.ToTable("PostingExtractions", (string)null);
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.PostingMentionEntity", b =>
+                {
+                    b.Property<long>("PostingId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("SurfaceForm")
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
+
+                    b.Property<int>("Occurrences")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Reason")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ResolverVersion")
+                        .HasColumnType("int");
+
+                    b.HasKey("PostingId", "SurfaceForm");
+
+                    b.HasIndex("Reason", "SurfaceForm");
+
+                    b.ToTable("PostingMentions", (string)null);
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.PostingTagEntity", b =>
+                {
+                    b.Property<long>("PostingId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Tag")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("Value")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.HasKey("PostingId", "Tag");
+
+                    b.HasIndex("Tag");
+
+                    b.ToTable("PostingTags", (string)null);
                 });
 
             modelBuilder.Entity("JobPlatform.Data.Sql.Entities.ScrapeRun", b =>
@@ -288,6 +689,76 @@ namespace JobPlatform.Data.Sql.Migrations
                     b.ToTable("ScrapeRuns", (string)null);
                 });
 
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.ConceptClosureEntity", b =>
+                {
+                    b.HasOne("JobPlatform.Data.Sql.Entities.ConceptEntity", "Ancestor")
+                        .WithMany()
+                        .HasForeignKey("AncestorId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("JobPlatform.Data.Sql.Entities.ConceptEntity", "Descendant")
+                        .WithMany()
+                        .HasForeignKey("DescendantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Ancestor");
+
+                    b.Navigation("Descendant");
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.ConceptLabelEntity", b =>
+                {
+                    b.HasOne("JobPlatform.Data.Sql.Entities.ConceptEntity", "Concept")
+                        .WithMany("Labels")
+                        .HasForeignKey("ConceptId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Concept");
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.ConceptRelationEntity", b =>
+                {
+                    b.HasOne("JobPlatform.Data.Sql.Entities.ConceptEntity", "FromConcept")
+                        .WithMany()
+                        .HasForeignKey("FromConceptId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("JobPlatform.Data.Sql.Entities.ConceptEntity", "ToConcept")
+                        .WithMany()
+                        .HasForeignKey("ToConceptId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("FromConcept");
+
+                    b.Navigation("ToConcept");
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.JobPostingEntity", b =>
+                {
+                    b.HasOne("JobPlatform.Data.Sql.Entities.CompanyEntity", "CompanyRef")
+                        .WithMany()
+                        .HasForeignKey("CompanyId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("CompanyRef");
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.JobPostingJobTypeEntity", b =>
+                {
+                    b.HasOne("JobPlatform.Data.Sql.Entities.JobPostingEntity", "Posting")
+                        .WithMany("JobTypes")
+                        .HasForeignKey("PostingId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Posting");
+                });
+
             modelBuilder.Entity("JobPlatform.Data.Sql.Entities.JobPostingSearchTerm", b =>
                 {
                     b.HasOne("JobPlatform.Data.Sql.Entities.ScrapeRun", "FirstSeenRun")
@@ -315,9 +786,76 @@ namespace JobPlatform.Data.Sql.Migrations
                     b.Navigation("Posting");
                 });
 
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.PostingConceptEntity", b =>
+                {
+                    b.HasOne("JobPlatform.Data.Sql.Entities.ConceptEntity", "Concept")
+                        .WithMany()
+                        .HasForeignKey("ConceptId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("JobPlatform.Data.Sql.Entities.JobPostingEntity", "Posting")
+                        .WithMany("Concepts")
+                        .HasForeignKey("PostingId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Concept");
+
+                    b.Navigation("Posting");
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.PostingExtractionEntity", b =>
+                {
+                    b.HasOne("JobPlatform.Data.Sql.Entities.JobPostingEntity", "Posting")
+                        .WithMany("Extractions")
+                        .HasForeignKey("PostingId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Posting");
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.PostingMentionEntity", b =>
+                {
+                    b.HasOne("JobPlatform.Data.Sql.Entities.JobPostingEntity", "Posting")
+                        .WithMany("Mentions")
+                        .HasForeignKey("PostingId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Posting");
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.PostingTagEntity", b =>
+                {
+                    b.HasOne("JobPlatform.Data.Sql.Entities.JobPostingEntity", "Posting")
+                        .WithMany("Tags")
+                        .HasForeignKey("PostingId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Posting");
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.ConceptEntity", b =>
+                {
+                    b.Navigation("Labels");
+                });
+
             modelBuilder.Entity("JobPlatform.Data.Sql.Entities.JobPostingEntity", b =>
                 {
+                    b.Navigation("Concepts");
+
+                    b.Navigation("Extractions");
+
+                    b.Navigation("JobTypes");
+
+                    b.Navigation("Mentions");
+
                     b.Navigation("SearchTerms");
+
+                    b.Navigation("Tags");
                 });
 #pragma warning restore 612, 618
         }

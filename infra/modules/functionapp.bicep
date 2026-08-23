@@ -18,6 +18,9 @@ param applicationInsightsConnectionString string
 param landingStorageAccountName string
 param landingContainerName string
 
+@description('Container the curated Parquet export writes into.')
+param curatedContainerName string
+
 param cosmosAccountEndpoint string
 param cosmosDatabaseName string
 
@@ -174,6 +177,10 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'LandingContainerName'
           value: landingContainerName
+        }
+        {
+          name: 'CuratedContainerName'
+          value: curatedContainerName
         }
         {
           name: 'ManagedIdentityClientId'

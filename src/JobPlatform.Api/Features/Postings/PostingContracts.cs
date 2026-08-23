@@ -21,7 +21,8 @@ public sealed record PostingSummary
     public string? City { get; init; }
     public string? Country { get; init; }
 
-    public bool IsRemote { get; init; }
+    /// <summary>Null where the board said nothing, which is most of the corpus.</summary>
+    public bool? IsRemote { get; init; }
     public string? JobType { get; init; }
     public DateOnly? DatePosted { get; init; }
 

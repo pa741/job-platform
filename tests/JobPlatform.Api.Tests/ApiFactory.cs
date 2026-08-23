@@ -56,7 +56,12 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         // mid-registration creates a second container whose singletons are not the ones the
         // application ends up using.
         using var scope = host.Services.CreateScope();
-        scope.ServiceProvider.GetRequiredService<JobsDbContext>().Database.EnsureCreated();
+        var db = scope.ServiceProvider.GetRequiredService<JobsDbContext>();
+        db.Database.EnsureCreated();
+
+        // EnsureCreated leaves the concept tables empty; the repository needs the vocabulary
+        // projected into them before it can resolve anything.
+        ConceptSeeder.SeedAsync(db).GetAwaiter().GetResult();
 
         return host;
     }

@@ -17,6 +17,12 @@
   "extensions": {
     "blobs": {
       "maxDegreeOfParallelism": 1
+    },
+    "queues": {
+      "batchSize": 4,
+      "newBatchThreshold": 2,
+      "maxDequeueCount": 3,
+      "visibilityTimeout": "00:05:00"
     }
   }
 }

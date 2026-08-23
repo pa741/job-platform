@@ -77,10 +77,22 @@ public sealed class MetricsCalculator(TimeProvider? timeProvider = null)
     private static int CountCrossSiteDuplicates(IReadOnlyList<JobPosting> postings)
         => postings.Count - postings.Select(JobFingerprint.ContentHash).Distinct(StringComparer.Ordinal).Count();
 
+    /// <remarks>
+    /// The share counts against postings that stated a work mode, not against every posting.
+    /// <c>IsRemote</c> is nullable because silence is common and is not a "no" - and a share
+    /// computed over the whole population would fall whenever coverage fell, turning a
+    /// scraper regression into an apparent market shift.
+    /// </remarks>
     private static RemoteBreakdown CalculateRemote(IReadOnlyList<JobPosting> postings)
     {
-        var remote = postings.Count(p => p.IsRemote);
-        return new RemoteBreakdown(remote, postings.Count - remote, Share(remote, postings.Count));
+        var remote = postings.Count(p => p.IsRemote == true);
+        var onSite = postings.Count(p => p.IsRemote == false);
+
+        return new RemoteBreakdown(
+            remote,
+            onSite,
+            postings.Count - remote - onSite,
+            Share(remote, remote + onSite));
     }
 
     private static FreshnessBreakdown CalculateFreshness(IReadOnlyList<JobPosting> postings, DateOnly scrapeDate)

@@ -237,3 +237,8 @@ jobs:
             --name "jobplatform-ingest-${GITHUB_RUN_NUMBER}" \
             --query properties.outputs.sqlConnectionString.value -o tsv)
           dotnet run --project tools/JobPlatform.DbAdmin -- migrate "$CONNECTION"
+          # Same job as the migration, deliberately. The concept tables are a projection of
+          # the vocabulary shipped in the build, and a schema that has moved without them is
+          # a database that silently stops recording assertions for anything new. Idempotent,
+          # so it costs nothing on a run where the vocabulary has not changed.
+          dotnet run --project tools/JobPlatform.DbAdmin -- seed-concepts "$CONNECTION"

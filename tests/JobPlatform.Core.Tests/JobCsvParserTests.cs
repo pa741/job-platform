@@ -62,8 +62,8 @@ public sealed class JobCsvParserTests
     {
         var result = ParseFixture();
 
-        Assert.Equal(6, result.Postings.Count(p => p.IsRemote));
-        Assert.Equal(24, result.Postings.Count(p => !p.IsRemote));
+        Assert.Equal(6, result.Postings.Count(p => p.IsRemote == true));
+        Assert.Equal(24, result.Postings.Count(p => p.IsRemote == false));
     }
 
     [Fact]
@@ -71,7 +71,8 @@ public sealed class JobCsvParserTests
     {
         var result = ParseFixture();
 
-        Assert.Equal(12, result.Postings.Count(p => p.DatePosted is not null));
+        // 12 from the scraped boards, plus all six freehire rows, which always date theirs.
+        Assert.Equal(18, result.Postings.Count(p => p.DatePosted is not null));
         Assert.All(result.Postings, p =>
         {
             Assert.Null(p.MinAmount);
@@ -93,8 +94,17 @@ public sealed class JobCsvParserTests
         Assert.Equal(0.0, result.FieldFillRates["min_amount"]);
         Assert.Equal(0.0, result.FieldFillRates["currency"]);
 
-        // No scraped contact data in the fixture, by design.
-        Assert.Equal(0.0, result.FieldFillRates["emails"]);
+        // Two rows carry a synthetic address at example.com, which RFC 2606 reserves so it
+        // can never belong to a real person. Enough to prove the column is read; the parser
+        // keeps only the boolean derived from it, never the address.
+        Assert.Equal(2d / SampleCsv.RowsInFile, result.FieldFillRates["emails"], 4);
+
+        // The fork columns are populated only on the freehire rows, which is what a
+        // board-specific signal looks like: low but non-zero, not silently absent.
+        Assert.Equal(
+            (double)SampleCsv.FreehireRows / SampleCsv.RowsInFile,
+            result.FieldFillRates["source_board"],
+            4);
 
         Assert.Equal(JobCsvParser.TrackedColumns.Length, result.FieldFillRates.Count);
     }

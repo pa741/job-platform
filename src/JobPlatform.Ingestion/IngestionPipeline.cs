@@ -3,6 +3,7 @@ using JobPlatform.Core.Metrics;
 using JobPlatform.Core.Parsing;
 using JobPlatform.Data.Cosmos;
 using JobPlatform.Data.Sql;
+using JobPlatform.Ingestion.Extraction;
 using Microsoft.Extensions.Logging;
 
 namespace JobPlatform.Ingestion;
@@ -17,7 +18,8 @@ public sealed class IngestionPipeline(
     MetricsCalculator calculator,
     JobPostingRepository postings,
     MetricsRepository metrics,
-    ILogger<IngestionPipeline> logger)
+    ILogger<IngestionPipeline> logger,
+    IExtractionQueue? extractionQueue = null)
 {
     public async Task<RunDigest> ProcessAsync(
         Stream content,
@@ -39,8 +41,15 @@ public sealed class IngestionPipeline(
 
         var parsed = parser.Parse(content);
 
-        var (run, outcome) = await postings.IngestAsync(
+        var (run, outcome, needingExtraction) = await postings.IngestAsync(
             context, parsed.Postings, parsed.RowsInFile, parsed.InvalidRows, ct);
+
+        // Null whenever no AI provider is configured, which is how this ships. Nothing is
+        // written to the queue rather than accumulating work for a consumer that never runs.
+        if (extractionQueue is not null)
+        {
+            await extractionQueue.EnqueueAsync(needingExtraction, ct);
+        }
 
         var digest = calculator.Calculate(context, parsed, outcome, stopwatch.ElapsedMilliseconds);
         await metrics.UpsertRunDigestAsync(digest, ct);

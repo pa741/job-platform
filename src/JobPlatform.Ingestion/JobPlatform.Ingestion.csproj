@@ -13,17 +13,22 @@
     <PackageReference Include="Microsoft.Azure.Functions.Worker" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Sdk" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Storage.Blobs" />
+    <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Storage.Queues" />
+    <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Timer" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Http" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Http.AspNetCore" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.ApplicationInsights" />
     <PackageReference Include="Microsoft.ApplicationInsights.WorkerService" />
     <PackageReference Include="Azure.Storage.Blobs" />
+    <PackageReference Include="Azure.Storage.Queues" />
+    <PackageReference Include="Parquet.Net" />
     <PackageReference Include="Azure.Identity" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\JobPlatform.Core\JobPlatform.Core.csproj" />
     <ProjectReference Include="..\JobPlatform.Data\JobPlatform.Data.csproj" />
+    <ProjectReference Include="..\JobPlatform.Ai\JobPlatform.Ai.csproj" />
   </ItemGroup>
 
   <ItemGroup>

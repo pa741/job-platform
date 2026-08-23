@@ -9,6 +9,8 @@
     <PackageVersion Include="Microsoft.Azure.Functions.Worker" Version="2.0.0" />
     <PackageVersion Include="Microsoft.Azure.Functions.Worker.Sdk" Version="2.0.5" />
     <PackageVersion Include="Microsoft.Azure.Functions.Worker.Extensions.Storage.Blobs" Version="6.6.0" />
+    <PackageVersion Include="Microsoft.Azure.Functions.Worker.Extensions.Storage.Queues" Version="5.5.0" />
+    <PackageVersion Include="Microsoft.Azure.Functions.Worker.Extensions.Timer" Version="4.3.1" />
     <PackageVersion Include="Microsoft.Azure.Functions.Worker.Extensions.Http" Version="3.3.0" />
     <PackageVersion Include="Microsoft.Azure.Functions.Worker.Extensions.Http.AspNetCore" Version="2.0.0" />
     <PackageVersion Include="Microsoft.Azure.Functions.Worker.ApplicationInsights" Version="2.0.0" />
@@ -29,6 +31,10 @@
   <ItemGroup Label="Azure SDK">
     <PackageVersion Include="Azure.Identity" Version="1.13.1" />
     <PackageVersion Include="Azure.Storage.Blobs" Version="12.23.0" />
+    <PackageVersion Include="Azure.Storage.Queues" Version="12.22.0" />
+    <!-- MIT. Columnar, typed, and readable by DuckDB, pandas, Fabric and Synapse
+         serverless with nothing running - which is the whole point of the curated zone. -->
+    <PackageVersion Include="Parquet.Net" Version="6.1.0" />
   </ItemGroup>
 
   <!-- Microsoft.Extensions.* sits on the 10.x line, ahead of the net9.0 target framework.

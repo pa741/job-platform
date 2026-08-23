@@ -30,6 +30,7 @@ internal static class Program
                   dbadmin migrate         "<connection-string>"
                   dbadmin grant-identity  "<connection-string>" <managed-identity-name>
                   dbadmin grant-migrator  "<connection-string>" <principal-name>
+                  dbadmin seed-concepts   "<connection-string>"
                   dbadmin status          "<connection-string>"
                   dbadmin metrics         "<cosmos-account-endpoint>" [search-term]
 
@@ -51,6 +52,7 @@ internal static class Program
                 "grant-identity" => Fail("grant-identity needs the managed identity name."),
                 "grant-migrator" when args.Length >= 3 => await GrantMigratorAsync(connectionString, args[2]),
                 "grant-migrator" => Fail("grant-migrator needs the principal name."),
+                "seed-concepts" => await SeedConceptsAsync(connectionString),
                 "status" => await StatusAsync(connectionString),
                 // Second positional argument is the Cosmos endpoint, not a SQL connection.
                 "metrics" => await MetricsAsync(connectionString, args.Length >= 3 ? args[2] : null),
@@ -62,6 +64,45 @@ internal static class Program
             Console.Error.WriteLine($"FAILED: {ex.Message}");
             return 1;
         }
+    }
+
+    /// <summary>
+    /// Projects the embedded vocabulary into the concept tables.
+    /// </summary>
+    /// <remarks>
+    /// Run after any migration that touches the vocabulary, and after any change to
+    /// <c>concepts.json</c>. Skipping it is quiet rather than loud: the ingest keeps working
+    /// and simply stops recording assertions for concepts the database does not know, so
+    /// every count involving them is low with nothing to say why. The ingest logs a warning
+    /// naming this command when it notices.
+    ///
+    /// Idempotent. Running it twice changes nothing the second time.
+    /// </remarks>
+    private static async Task<int> SeedConceptsAsync(string connectionString)
+    {
+        var options = new DbContextOptionsBuilder<JobsDbContext>()
+            .UseSqlServer(connectionString, sql =>
+            {
+                sql.EnableRetryOnFailure(maxRetryCount: 5, TimeSpan.FromSeconds(20), null);
+                sql.CommandTimeout(300);
+            })
+            .Options;
+
+        await using var db = new JobsDbContext(options);
+
+        Console.WriteLine("Seeding concept vocabulary...");
+
+        var result = await ConceptSeeder.SeedAsync(db);
+
+        Console.WriteLine($"Vocabulary version : {result.Version}");
+        Console.WriteLine($"Concepts added     : {result.ConceptsAdded}");
+        Console.WriteLine($"Concepts updated   : {result.ConceptsUpdated}");
+        Console.WriteLine($"Concepts retired   : {result.ConceptsDeactivated}");
+        Console.WriteLine($"Labels             : {result.Labels}");
+        Console.WriteLine($"Relations          : {result.Relations}");
+        Console.WriteLine($"Closure rows       : {result.ClosureRows}");
+
+        return 0;
     }
 
     private static async Task<int> MigrateAsync(string connectionString)
@@ -214,10 +255,12 @@ internal static class Program
                 Console.WriteLine($"  {site.Site,-12} {site.Count}");
             }
 
-            var remote = await db.JobPostings.CountAsync(p => p.IsRemote);
+            var remote = await db.JobPostings.CountAsync(p => p.IsRemote == true);
+            var remoteNotStated = await db.JobPostings.CountAsync(p => p.IsRemote == null);
             var withDescription = await db.JobPostings.CountAsync(p => p.DescriptionLength > 0);
             Console.WriteLine();
             Console.WriteLine($"Remote           : {remote}");
+            Console.WriteLine($"Remote not stated: {remoteNotStated}");
             Console.WriteLine($"With description : {withDescription}");
         }
 

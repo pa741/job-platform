@@ -6,4 +6,11 @@
     <PackageReference Include="Microsoft.Extensions.Options" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- ConceptGraph reads this at runtime and throws a pointed error without it. It is a
+         resource rather than a table because the resolver runs inside the ingest function,
+         where a SQL round trip to read labels would hold a connection open for no reason. -->
+    <EmbeddedResource Include="Enrichment/concepts.json" />
+  </ItemGroup>
+
 </Project>

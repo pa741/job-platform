@@ -34,13 +34,13 @@ public sealed class MetricsCalculatorTests
     [Fact]
     public void Digest_counts_reconcile_with_what_the_parser_saw()
     {
-        var digest = Digest(new UpsertOutcome(New: 25, Updated: 4, Unchanged: 1));
+        var digest = Digest(new UpsertOutcome(New: 31, Updated: 4, Unchanged: 1));
 
         Assert.Equal(SampleCsv.RowsInFile, digest.Counts.RowsInFile);
         Assert.Equal(SampleCsv.ParsedPostings, digest.Counts.Parsed);
         Assert.Equal(2, digest.Counts.Invalid);
         Assert.Equal(1, digest.Counts.InFileDuplicates);
-        Assert.Equal(25, digest.Counts.New);
+        Assert.Equal(31, digest.Counts.New);
         Assert.Equal(4, digest.Counts.Updated);
         Assert.Equal(1, digest.Counts.Unchanged);
         Assert.Equal(SampleCsv.ParsedPostings, digest.Counts.New + digest.Counts.Updated + digest.Counts.Unchanged);
@@ -63,6 +63,7 @@ public sealed class MetricsCalculatorTests
         Assert.Equal(18, digest.BySite["linkedin"]);
         Assert.Equal(10, digest.BySite["indeed"]);
         Assert.Equal(2, digest.BySite["google"]);
+        Assert.Equal(SampleCsv.FreehireRows, digest.BySite["freehire"]);
         Assert.Equal(SampleCsv.ParsedPostings, digest.BySite.Values.Sum());
     }
 
@@ -71,7 +72,7 @@ public sealed class MetricsCalculatorTests
     {
         var digest = Digest();
 
-        Assert.Equal(26, digest.ByJobType["fulltime"]);
+        Assert.Equal(32, digest.ByJobType["fulltime"]);
         Assert.Equal(3, digest.ByJobType["contract"]);
         Assert.Equal(1, digest.ByJobType["parttime"]);
         Assert.Equal(1, digest.ByJobType["unspecified"]);
@@ -84,6 +85,13 @@ public sealed class MetricsCalculatorTests
 
         Assert.Equal(6, digest.Remote.Remote);
         Assert.Equal(24, digest.Remote.OnSite);
+
+        // The freehire rows state no work mode at all, so they land here rather than being
+        // counted as office-based. That is the distinction the nullable column exists for.
+        Assert.Equal(SampleCsv.RemoteNotStated, digest.Remote.NotStated);
+
+        // Six of the thirty that stated one - the share must not be diluted by the six that
+        // said nothing, or it would move whenever coverage moved.
         Assert.Equal(0.2, digest.Remote.RemoteShare);
     }
 
@@ -92,12 +100,14 @@ public sealed class MetricsCalculatorTests
     {
         var digest = Digest();
 
-        Assert.Equal(12, digest.Freshness.WithDatePosted);
+        Assert.Equal(18, digest.Freshness.WithDatePosted);
         Assert.Equal(18, digest.Freshness.MissingDatePosted);
-        Assert.Equal(0.4, digest.Freshness.Coverage);
+        Assert.Equal(0.5, digest.Freshness.Coverage);
 
-        // Six postings carry the scrape date itself.
-        Assert.Equal(6, digest.Freshness.PostedToday);
+        // Six scraped postings carry the scrape date itself, and all six freehire rows do -
+        // that board publishes a date on everything, which is most of why its coverage is
+        // worth measuring separately.
+        Assert.Equal(12, digest.Freshness.PostedToday);
 
         // 2026-08-09 and 2026-08-10 are more than seven days before 2026-08-18.
         Assert.Equal(2, digest.Freshness.OlderThanSevenDays);

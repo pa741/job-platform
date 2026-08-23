@@ -90,7 +90,7 @@ public sealed class JobPostingQueryRepository(JobsDbContext db)
             .Select(g => new
             {
                 Total = g.Count(),
-                Remote = g.Count(p => p.IsRemote),
+                Remote = g.Count(p => p.IsRemote == true),
                 WithSalary = g.Count(p => p.MinAmount != null || p.MaxAmount != null),
                 EarliestPosted = g.Min(p => p.DatePosted),
                 LatestPosted = g.Max(p => p.DatePosted),

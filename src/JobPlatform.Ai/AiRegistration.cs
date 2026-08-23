@@ -1,4 +1,6 @@
 using Anthropic;
+using JobPlatform.Ai.Extraction;
+using JobPlatform.Core.Enrichment;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -42,6 +44,11 @@ public static class AiRegistration
         }
 
         services.AddSingleton(BuildKernel(apiKey, model));
+
+        // Inside the same `if`, deliberately. No Kernel means no extractor, so a consumer
+        // resolving IDocumentExtractor? gets null and skips the step - the pipeline still
+        // runs and nothing is enqueued for a model that does not exist.
+        services.AddSingleton<IDocumentExtractor, KernelDocumentExtractor>();
 
         return services;
     }

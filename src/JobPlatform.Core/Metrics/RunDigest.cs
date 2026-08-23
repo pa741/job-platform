@@ -49,7 +49,20 @@ public sealed record RunCounts
     public int Unchanged { get; init; }
 }
 
-public sealed record RemoteBreakdown(int Remote, int OnSite, double RemoteShare);
+/// <summary>How the run's postings split across work arrangement.</summary>
+/// <param name="Remote">Postings the board said are remote.</param>
+/// <param name="OnSite">Postings the board said are not remote.</param>
+/// <param name="NotStated">
+/// Postings that said nothing. Not a rounding error: freehire returns null whenever it has no
+/// work mode, and on Indeed the flag is computed by searching the text for "remote", so its
+/// absence means the words were absent rather than that the employer said office-based.
+/// </param>
+/// <param name="RemoteShare">
+/// Remote as a fraction of the postings that <b>stated</b> a mode, not of all postings.
+/// Dividing by the whole population would let the share move because coverage changed, which
+/// is the metric reporting on the scraper rather than on the market.
+/// </param>
+public sealed record RemoteBreakdown(int Remote, int OnSite, int NotStated, double RemoteShare);
 
 public sealed record FreshnessBreakdown
 {

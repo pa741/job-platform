@@ -1,10 +1,15 @@
 using Azure.Identity;
 using Azure.Storage.Blobs;
+using Azure.Storage.Queues;
 using JobPlatform.Core.Metrics;
 using JobPlatform.Core.Parsing;
 using JobPlatform.Data.Cosmos;
 using JobPlatform.Data.Sql;
+using JobPlatform.Ai;
+using JobPlatform.Core.Enrichment;
 using JobPlatform.Ingestion;
+using JobPlatform.Ingestion.Curated;
+using JobPlatform.Ingestion.Extraction;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Builder;
 using Microsoft.EntityFrameworkCore;
@@ -74,6 +79,63 @@ builder.Services.AddSingleton(provider =>
     return new BlobServiceClient(new Uri(serviceUri), credential)
         .GetBlobContainerClient(containerName);
 });
+
+// Registers a Kernel and an IDocumentExtractor only when Ai:Provider is anthropic and a
+// key is present. Anything else registers nothing and does not throw - a missing environment
+// variable must not take down an ingest that has nothing to do with AI.
+builder.Services.AddAiProvider(configuration);
+
+// The producer is registered under exactly the same condition as the consumer it feeds.
+// Without it the pipeline receives a null queue and writes nothing, so an unconfigured
+// deployment never accumulates work for a model that will never run.
+if (builder.Services.Any(d => d.ServiceType == typeof(IDocumentExtractor)))
+{
+    builder.Services.AddSingleton(provider =>
+    {
+        var serviceUri = configuration["AzureWebJobsStorage:queueServiceUri"]
+            ?? configuration["AzureWebJobsStorage__queueServiceUri"]
+            ?? throw new InvalidOperationException(
+                "AzureWebJobsStorage:queueServiceUri is not configured, but an AI provider is. "
+                + "The extraction queue lives on the host storage account.");
+
+        var credential = string.IsNullOrWhiteSpace(managedIdentityClientId)
+            ? new DefaultAzureCredential()
+            : new DefaultAzureCredential(new DefaultAzureCredentialOptions
+            {
+                ManagedIdentityClientId = managedIdentityClientId,
+            });
+
+        return new QueueServiceClient(new Uri(serviceUri), credential)
+            .GetQueueClient(ExtractionQueue.Name);
+    });
+
+    builder.Services.AddSingleton<IExtractionQueue, StorageExtractionQueue>();
+}
+
+// A second container on the same account. Wrapped rather than registered as another
+// BlobContainerClient, because two registrations of one type resolve by whichever was last
+// and the failure - the export writing into the landing container - would be silent, and
+// would be exactly the write the scoped RBAC grant exists to prevent.
+builder.Services.AddSingleton(provider =>
+{
+    var serviceUri = configuration["LandingStorage:serviceUri"]
+        ?? configuration["LandingStorage__serviceUri"]
+        ?? throw new InvalidOperationException("LandingStorage:serviceUri is not configured.");
+
+    var containerName = configuration["CuratedContainerName"] ?? "jobs-curated";
+
+    var credential = string.IsNullOrWhiteSpace(managedIdentityClientId)
+        ? new DefaultAzureCredential()
+        : new DefaultAzureCredential(new DefaultAzureCredentialOptions
+        {
+            ManagedIdentityClientId = managedIdentityClientId,
+        });
+
+    return new CuratedContainer(
+        new BlobServiceClient(new Uri(serviceUri), credential).GetBlobContainerClient(containerName));
+});
+
+builder.Services.AddScoped<CuratedExporter>();
 
 builder.Services.AddSingleton<JobCsvParser>();
 builder.Services.AddSingleton<MetricsCalculator>();

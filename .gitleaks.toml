@@ -30,4 +30,6 @@ id = "generic-api-key"
     '''3913510d-42f4-4e42-8a64-420c390055eb''',
     # Key Vault Secrets User
     '''4633458b-17de-408a-b874-0445c86b69e6''',
+    # Storage Blob Data Contributor - scoped to the jobs-curated container only
+    '''ba92f5b4-2d11-453d-a403-e96b0029c9fe''',
   ]

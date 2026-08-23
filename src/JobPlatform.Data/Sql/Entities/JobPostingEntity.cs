@@ -1,3 +1,5 @@
+using JobPlatform.Core.Enrichment;
+
 namespace JobPlatform.Data.Sql.Entities;
 
 /// <summary>
@@ -26,7 +28,12 @@ public sealed class JobPostingEntity
     public string? LocationRegion { get; set; }
     public string? LocationCountry { get; set; }
 
-    public bool IsRemote { get; set; }
+    /// <summary>
+    /// Nullable because silence is common and is not a "no". freehire returns null whenever
+    /// it has no work mode, and Indeed computes the flag by searching the text for "remote" -
+    /// so false means those words were absent, not that the employer said office-based.
+    /// </summary>
+    public bool? IsRemote { get; set; }
     public string? JobType { get; set; }
     public DateOnly? DatePosted { get; set; }
 
@@ -63,6 +70,97 @@ public sealed class JobPostingEntity
     public int? PostingAgeDays { get; set; }
     public int? RepostCount { get; set; }
     public bool? FakeFreshness { get; set; }
+
+    // --- recovered from columns the parser used to read and discard -------------------
+
+    /// <summary>freehire's real origin board: a first-party ATS versus a re-aggregation.</summary>
+    public string? SourceBoard { get; set; }
+
+    /// <summary>LinkedIn's competition signal, as published and as a number.</summary>
+    public string? Applicants { get; set; }
+    public int? ApplicantCount { get; set; }
+
+    public string? ListingType { get; set; }
+
+    /// <summary>The board's own work-mode string. What fixes the hybrid/on-site collapse.</summary>
+    public string? WorkFromHomeType { get; set; }
+
+    public int? VacancyCount { get; set; }
+
+    /// <summary>
+    /// Whether the listing exposed a direct contact address. The addresses themselves are
+    /// never stored: they are recruiter PII and this repository is public. The signal is kept,
+    /// the personal data is not.
+    /// </summary>
+    public bool HasContactEmail { get; set; }
+
+    // --- derived by PostingEnricher ----------------------------------------------------
+
+    public int? CompanyId { get; set; }
+    public CompanyEntity? CompanyRef { get; set; }
+
+    public Seniority Seniority { get; set; }
+    public RoleFamily RoleFamily { get; set; }
+
+    public WorkArrangement WorkArrangement { get; set; }
+    public int? HybridDaysInOffice { get; set; }
+
+    public int? YearsExperienceMin { get; set; }
+    public int? YearsExperienceMax { get; set; }
+
+    /// <summary>
+    /// Salary on one scale, from the board's columns where it filled them and from the
+    /// description where it did not.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="MinAmount"/> rather than overwriting it: that column is what
+    /// the scraper delivered and is what <c>fieldFillRates</c> measures. Filling it with an
+    /// inferred value would make coverage look like it improved when only the inference did.
+    /// </remarks>
+    public decimal? AnnualSalaryMin { get; set; }
+    public decimal? AnnualSalaryMax { get; set; }
+    public string? AnnualSalaryCurrency { get; set; }
+
+    /// <summary>
+    /// True where the figure came from prose. A weaker number, and an average that mixes the
+    /// two without distinguishing them is measuring two different things at once.
+    /// </summary>
+    public bool SalaryFromText { get; set; }
+
+    /// <summary>
+    /// What the source said before annualisation. A GBP 600/day contract annualised to 156,000
+    /// is not the same offer as a 156,000 salary, and this is the only field that can tell them
+    /// apart afterwards.
+    /// </summary>
+    public string? SalaryStatedInterval { get; set; }
+
+    /// <summary>Null where the posting said nothing, rather than false.</summary>
+    public bool? VisaSponsorship { get; set; }
+
+    /// <summary>Derived from the concept closure, not extracted separately.</summary>
+    public bool RequiresSecurityClearance { get; set; }
+    public bool RequiresDegree { get; set; }
+
+    /// <summary><c>inside</c>, <c>outside</c>, or null. UK contract market only.</summary>
+    public string? Ir35 { get; set; }
+
+    /// <summary>
+    /// Which enricher wrote the derived columns. Rows below the current value are stale and
+    /// can be recomputed from the stored description without re-scraping.
+    /// </summary>
+    public int EnrichmentVersion { get; set; }
+
+    /// <summary>What the posting asks for. See <see cref="PostingConceptEntity"/>.</summary>
+    public ICollection<PostingConceptEntity> Concepts { get; set; } = [];
+
+    /// <summary>Surface forms seen and deliberately not resolved.</summary>
+    public ICollection<PostingMentionEntity> Mentions { get; set; } = [];
+
+    public ICollection<JobPostingJobTypeEntity> JobTypes { get; set; } = [];
+
+    public ICollection<PostingTagEntity> Tags { get; set; } = [];
+
+    public ICollection<PostingExtractionEntity> Extractions { get; set; } = [];
 
     /// <summary>Across every search. Per-search timings live on <see cref="SearchTerms"/>.</summary>
     public DateTimeOffset FirstSeenUtc { get; set; }

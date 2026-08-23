@@ -1,0 +1,2594 @@
+{
+  "version": 2,
+  "notes": [
+    "The concept key is the identity; the label is an attribute. Renaming a label is an",
+    "edit, renaming a key is a data migration.",
+    "",
+    "broader is a DAG, not a tree: a concept may sit under several parents, and the",
+    "existing data needs it - Python is a language and is used in data and in ML, and",
+    "forcing one parent was what made the old flat category field lossy.",
+    "",
+    "Two parent axes. type.* says what kind of thing a concept is; area.* says where it",
+    "is used. Every skill carries exactly one type and zero or more areas.",
+    "",
+    "Labels are matched case-insensitively with word-like boundaries that treat # + . as",
+    "part of a token, so C# cannot match inside C#-adjacent and C cannot match inside C++.",
+    "",
+    "ambiguous lists surface forms that indicate a concept but cannot be trusted to mean",
+    "it - Go, R, C and Julia are ordinary words or names. A hit on one is recorded as an",
+    "unresolved mention and never asserted, so the size of the gap stays measurable",
+    "instead of being silently dropped.",
+    "",
+    "requiresCapital marks concepts whose label is also an ordinary English word but which",
+    "are normally capitalised. They match only where the text kept a capital, so REST API",
+    "counts and the rest of the team does not."
+  ],
+  "concepts": [
+    {
+      "key": "type.language",
+      "kind": "domain",
+      "label": "Programming Language"
+    },
+    {
+      "key": "type.framework",
+      "kind": "domain",
+      "label": "Framework or Library"
+    },
+    {
+      "key": "type.database",
+      "kind": "domain",
+      "label": "Database"
+    },
+    {
+      "key": "type.platform",
+      "kind": "domain",
+      "label": "Platform or Service"
+    },
+    {
+      "key": "type.tool",
+      "kind": "domain",
+      "label": "Tool"
+    },
+    {
+      "key": "type.practice",
+      "kind": "domain",
+      "label": "Practice or Methodology"
+    },
+    {
+      "key": "type.concept",
+      "kind": "domain",
+      "label": "Technical Concept"
+    },
+    {
+      "key": "type.certification",
+      "kind": "domain",
+      "label": "Certification"
+    },
+    {
+      "key": "type.clearance",
+      "kind": "domain",
+      "label": "Security Clearance"
+    },
+    {
+      "key": "type.degree",
+      "kind": "domain",
+      "label": "Academic Qualification"
+    },
+    {
+      "key": "area.software-development",
+      "kind": "domain",
+      "label": "Software Development"
+    },
+    {
+      "key": "area.backend",
+      "kind": "domain",
+      "label": "Backend Development",
+      "broader": [
+        "area.software-development"
+      ]
+    },
+    {
+      "key": "area.frontend",
+      "kind": "domain",
+      "label": "Frontend Development",
+      "broader": [
+        "area.software-development"
+      ]
+    },
+    {
+      "key": "area.mobile",
+      "kind": "domain",
+      "label": "Mobile Development",
+      "broader": [
+        "area.software-development"
+      ]
+    },
+    {
+      "key": "area.gamedev",
+      "kind": "domain",
+      "label": "Game Development",
+      "broader": [
+        "area.software-development"
+      ]
+    },
+    {
+      "key": "area.data-and-ai",
+      "kind": "domain",
+      "label": "Data and AI"
+    },
+    {
+      "key": "area.data",
+      "kind": "domain",
+      "label": "Data Engineering",
+      "broader": [
+        "area.data-and-ai"
+      ]
+    },
+    {
+      "key": "area.analytics",
+      "kind": "domain",
+      "label": "Analytics and BI",
+      "broader": [
+        "area.data-and-ai"
+      ]
+    },
+    {
+      "key": "area.ml",
+      "kind": "domain",
+      "label": "Machine Learning",
+      "broader": [
+        "area.data-and-ai"
+      ]
+    },
+    {
+      "key": "area.infrastructure",
+      "kind": "domain",
+      "label": "Infrastructure and Operations"
+    },
+    {
+      "key": "area.cloud",
+      "kind": "domain",
+      "label": "Cloud",
+      "broader": [
+        "area.infrastructure"
+      ]
+    },
+    {
+      "key": "area.devops",
+      "kind": "domain",
+      "label": "DevOps",
+      "broader": [
+        "area.infrastructure"
+      ]
+    },
+    {
+      "key": "area.observability",
+      "kind": "domain",
+      "label": "Observability",
+      "broader": [
+        "area.infrastructure"
+      ]
+    },
+    {
+      "key": "area.quality",
+      "kind": "domain",
+      "label": "Quality Engineering"
+    },
+    {
+      "key": "area.security",
+      "kind": "domain",
+      "label": "Security"
+    },
+    {
+      "key": "area.design",
+      "kind": "domain",
+      "label": "Design"
+    },
+    {
+      "key": "area.delivery",
+      "kind": "domain",
+      "label": "Delivery and Ways of Working"
+    },
+    {
+      "key": "skill.csharp",
+      "kind": "skill",
+      "label": "C#",
+      "aliases": [
+        "csharp",
+        "c sharp"
+      ],
+      "broader": [
+        "type.language",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.fsharp",
+      "kind": "skill",
+      "label": "F#",
+      "aliases": [
+        "fsharp"
+      ],
+      "broader": [
+        "type.language",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.java",
+      "kind": "skill",
+      "label": "Java",
+      "broader": [
+        "type.language",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.kotlin",
+      "kind": "skill",
+      "label": "Kotlin",
+      "broader": [
+        "type.language",
+        "area.backend",
+        "area.mobile"
+      ]
+    },
+    {
+      "key": "skill.scala",
+      "kind": "skill",
+      "label": "Scala",
+      "broader": [
+        "type.language",
+        "area.backend",
+        "area.data"
+      ]
+    },
+    {
+      "key": "skill.python",
+      "kind": "skill",
+      "label": "Python",
+      "broader": [
+        "type.language",
+        "area.backend",
+        "area.data",
+        "area.ml"
+      ]
+    },
+    {
+      "key": "skill.javascript",
+      "kind": "skill",
+      "label": "JavaScript",
+      "aliases": [
+        "js",
+        "ecmascript"
+      ],
+      "broader": [
+        "type.language",
+        "area.frontend",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.typescript",
+      "kind": "skill",
+      "label": "TypeScript",
+      "aliases": [
+        "ts"
+      ],
+      "broader": [
+        "type.language",
+        "area.frontend",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.go",
+      "kind": "skill",
+      "label": "Go",
+      "matchLabel": false,
+      "aliases": [
+        "golang",
+        "go lang",
+        "go programming"
+      ],
+      "ambiguous": [
+        "go"
+      ],
+      "broader": [
+        "type.language",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.rust",
+      "kind": "skill",
+      "label": "Rust",
+      "requiresCapital": true,
+      "broader": [
+        "type.language",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.ruby",
+      "kind": "skill",
+      "label": "Ruby",
+      "broader": [
+        "type.language",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.php",
+      "kind": "skill",
+      "label": "PHP",
+      "broader": [
+        "type.language",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.swift",
+      "kind": "skill",
+      "label": "Swift",
+      "requiresCapital": true,
+      "broader": [
+        "type.language",
+        "area.mobile"
+      ]
+    },
+    {
+      "key": "skill.objective-c",
+      "kind": "skill",
+      "label": "Objective-C",
+      "aliases": [
+        "objc"
+      ],
+      "broader": [
+        "type.language",
+        "area.mobile"
+      ]
+    },
+    {
+      "key": "skill.c",
+      "kind": "skill",
+      "label": "C",
+      "matchLabel": false,
+      "aliases": [
+        "c/c++",
+        "ansi c",
+        "c language",
+        "c programming"
+      ],
+      "ambiguous": [
+        "c"
+      ],
+      "broader": [
+        "type.language",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.cpp",
+      "kind": "skill",
+      "label": "C++",
+      "aliases": [
+        "cpp",
+        "c plus plus"
+      ],
+      "broader": [
+        "type.language",
+        "area.backend",
+        "area.gamedev"
+      ]
+    },
+    {
+      "key": "skill.elixir",
+      "kind": "skill",
+      "label": "Elixir",
+      "broader": [
+        "type.language",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.erlang",
+      "kind": "skill",
+      "label": "Erlang",
+      "broader": [
+        "type.language",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.haskell",
+      "kind": "skill",
+      "label": "Haskell",
+      "broader": [
+        "type.language",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.clojure",
+      "kind": "skill",
+      "label": "Clojure",
+      "broader": [
+        "type.language",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.perl",
+      "kind": "skill",
+      "label": "Perl",
+      "broader": [
+        "type.language",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.r",
+      "kind": "skill",
+      "label": "R",
+      "matchLabel": false,
+      "aliases": [
+        "r language",
+        "rstats",
+        "r programming"
+      ],
+      "ambiguous": [
+        "r"
+      ],
+      "broader": [
+        "type.language",
+        "area.data",
+        "area.ml",
+        "area.analytics"
+      ]
+    },
+    {
+      "key": "skill.matlab",
+      "kind": "skill",
+      "label": "MATLAB",
+      "broader": [
+        "type.language",
+        "area.data",
+        "area.ml"
+      ]
+    },
+    {
+      "key": "skill.dart",
+      "kind": "skill",
+      "label": "Dart",
+      "requiresCapital": true,
+      "broader": [
+        "type.language",
+        "area.mobile"
+      ]
+    },
+    {
+      "key": "skill.groovy",
+      "kind": "skill",
+      "label": "Groovy",
+      "broader": [
+        "type.language",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.lua",
+      "kind": "skill",
+      "label": "Lua",
+      "broader": [
+        "type.language",
+        "area.gamedev"
+      ]
+    },
+    {
+      "key": "skill.julia",
+      "kind": "skill",
+      "label": "Julia",
+      "matchLabel": false,
+      "aliases": [
+        "julialang",
+        "julia lang"
+      ],
+      "ambiguous": [
+        "julia"
+      ],
+      "broader": [
+        "type.language",
+        "area.data",
+        "area.ml"
+      ]
+    },
+    {
+      "key": "skill.solidity",
+      "kind": "skill",
+      "label": "Solidity",
+      "broader": [
+        "type.language",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.bash",
+      "kind": "skill",
+      "label": "Bash",
+      "aliases": [
+        "shell scripting",
+        "shell script"
+      ],
+      "broader": [
+        "type.language",
+        "area.devops"
+      ]
+    },
+    {
+      "key": "skill.powershell",
+      "kind": "skill",
+      "label": "PowerShell",
+      "broader": [
+        "type.language",
+        "area.devops"
+      ]
+    },
+    {
+      "key": "skill.sql",
+      "kind": "skill",
+      "label": "SQL",
+      "aliases": [
+        "t-sql",
+        "tsql",
+        "pl/sql",
+        "plsql"
+      ],
+      "broader": [
+        "type.language",
+        "area.data",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.vb-net",
+      "kind": "skill",
+      "label": "VB.NET",
+      "aliases": [
+        "visual basic",
+        "vbnet"
+      ],
+      "broader": [
+        "type.language",
+        "area.backend"
+      ],
+      "implies": [
+        "skill.dotnet"
+      ]
+    },
+    {
+      "key": "skill.cobol",
+      "kind": "skill",
+      "label": "COBOL",
+      "broader": [
+        "type.language",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.assembly",
+      "kind": "skill",
+      "label": "Assembly",
+      "requiresCapital": true,
+      "aliases": [
+        "assembler"
+      ],
+      "broader": [
+        "type.language",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.dotnet",
+      "kind": "skill",
+      "label": ".NET",
+      "aliases": [
+        "dotnet",
+        "dot net",
+        ".net core",
+        "net core"
+      ],
+      "broader": [
+        "type.platform",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.aspnet-core",
+      "kind": "skill",
+      "label": "ASP.NET Core",
+      "aliases": [
+        "asp.net",
+        "aspnet",
+        "asp net"
+      ],
+      "broader": [
+        "type.framework",
+        "area.backend"
+      ],
+      "implies": [
+        "skill.dotnet",
+        "skill.csharp"
+      ]
+    },
+    {
+      "key": "skill.entity-framework",
+      "kind": "skill",
+      "label": "Entity Framework",
+      "aliases": [
+        "ef core",
+        "efcore"
+      ],
+      "broader": [
+        "type.framework",
+        "area.backend"
+      ],
+      "implies": [
+        "skill.dotnet"
+      ]
+    },
+    {
+      "key": "skill.blazor",
+      "kind": "skill",
+      "label": "Blazor",
+      "broader": [
+        "type.framework",
+        "area.frontend"
+      ],
+      "implies": [
+        "skill.dotnet",
+        "skill.csharp"
+      ]
+    },
+    {
+      "key": "skill.spring",
+      "kind": "skill",
+      "label": "Spring",
+      "requiresCapital": true,
+      "broader": [
+        "type.framework",
+        "area.backend"
+      ],
+      "implies": [
+        "skill.java"
+      ]
+    },
+    {
+      "key": "skill.spring-boot",
+      "kind": "skill",
+      "label": "Spring Boot",
+      "aliases": [
+        "springboot"
+      ],
+      "broader": [
+        "type.framework",
+        "area.backend"
+      ],
+      "implies": [
+        "skill.spring",
+        "skill.java"
+      ]
+    },
+    {
+      "key": "skill.hibernate",
+      "kind": "skill",
+      "label": "Hibernate",
+      "broader": [
+        "type.framework",
+        "area.backend"
+      ],
+      "implies": [
+        "skill.java"
+      ]
+    },
+    {
+      "key": "skill.django",
+      "kind": "skill",
+      "label": "Django",
+      "broader": [
+        "type.framework",
+        "area.backend"
+      ],
+      "implies": [
+        "skill.python"
+      ],
+      "related": [
+        "skill.flask"
+      ]
+    },
+    {
+      "key": "skill.flask",
+      "kind": "skill",
+      "label": "Flask",
+      "broader": [
+        "type.framework",
+        "area.backend"
+      ],
+      "implies": [
+        "skill.python"
+      ],
+      "related": [
+        "skill.django",
+        "skill.fastapi"
+      ]
+    },
+    {
+      "key": "skill.fastapi",
+      "kind": "skill",
+      "label": "FastAPI",
+      "broader": [
+        "type.framework",
+        "area.backend"
+      ],
+      "implies": [
+        "skill.python"
+      ],
+      "related": [
+        "skill.flask"
+      ]
+    },
+    {
+      "key": "skill.ruby-on-rails",
+      "kind": "skill",
+      "label": "Ruby on Rails",
+      "aliases": [
+        "rails",
+        "ror"
+      ],
+      "broader": [
+        "type.framework",
+        "area.backend"
+      ],
+      "implies": [
+        "skill.ruby"
+      ]
+    },
+    {
+      "key": "skill.laravel",
+      "kind": "skill",
+      "label": "Laravel",
+      "broader": [
+        "type.framework",
+        "area.backend"
+      ],
+      "implies": [
+        "skill.php"
+      ]
+    },
+    {
+      "key": "skill.symfony",
+      "kind": "skill",
+      "label": "Symfony",
+      "broader": [
+        "type.framework",
+        "area.backend"
+      ],
+      "implies": [
+        "skill.php"
+      ]
+    },
+    {
+      "key": "skill.nodejs",
+      "kind": "skill",
+      "label": "Node.js",
+      "aliases": [
+        "nodejs",
+        "node js"
+      ],
+      "broader": [
+        "type.platform",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.express",
+      "kind": "skill",
+      "label": "Express",
+      "requiresCapital": true,
+      "aliases": [
+        "express.js",
+        "expressjs"
+      ],
+      "broader": [
+        "type.framework",
+        "area.backend"
+      ],
+      "implies": [
+        "skill.nodejs",
+        "skill.javascript"
+      ]
+    },
+    {
+      "key": "skill.nestjs",
+      "kind": "skill",
+      "label": "NestJS",
+      "aliases": [
+        "nest.js"
+      ],
+      "broader": [
+        "type.framework",
+        "area.backend"
+      ],
+      "implies": [
+        "skill.nodejs",
+        "skill.typescript"
+      ]
+    },
+    {
+      "key": "skill.react",
+      "kind": "skill",
+      "label": "React",
+      "requiresCapital": true,
+      "aliases": [
+        "react.js",
+        "reactjs"
+      ],
+      "broader": [
+        "type.framework",
+        "area.frontend"
+      ],
+      "related": [
+        "skill.angular",
+        "skill.vue"
+      ]
+    },
+    {
+      "key": "skill.angular",
+      "kind": "skill",
+      "label": "Angular",
+      "broader": [
+        "type.framework",
+        "area.frontend"
+      ],
+      "related": [
+        "skill.react",
+        "skill.vue"
+      ]
+    },
+    {
+      "key": "skill.vue",
+      "kind": "skill",
+      "label": "Vue.js",
+      "aliases": [
+        "vuejs",
+        "vue"
+      ],
+      "broader": [
+        "type.framework",
+        "area.frontend"
+      ],
+      "related": [
+        "skill.react",
+        "skill.angular"
+      ]
+    },
+    {
+      "key": "skill.svelte",
+      "kind": "skill",
+      "label": "Svelte",
+      "aliases": [
+        "sveltekit"
+      ],
+      "broader": [
+        "type.framework",
+        "area.frontend"
+      ]
+    },
+    {
+      "key": "skill.nextjs",
+      "kind": "skill",
+      "label": "Next.js",
+      "aliases": [
+        "nextjs"
+      ],
+      "broader": [
+        "type.framework",
+        "area.frontend"
+      ],
+      "implies": [
+        "skill.react"
+      ]
+    },
+    {
+      "key": "skill.nuxt",
+      "kind": "skill",
+      "label": "Nuxt",
+      "aliases": [
+        "nuxt.js",
+        "nuxtjs"
+      ],
+      "broader": [
+        "type.framework",
+        "area.frontend"
+      ],
+      "implies": [
+        "skill.vue"
+      ]
+    },
+    {
+      "key": "skill.jquery",
+      "kind": "skill",
+      "label": "jQuery",
+      "broader": [
+        "type.framework",
+        "area.frontend"
+      ]
+    },
+    {
+      "key": "skill.tailwind",
+      "kind": "skill",
+      "label": "Tailwind CSS",
+      "aliases": [
+        "tailwind",
+        "tailwindcss"
+      ],
+      "broader": [
+        "type.framework",
+        "area.frontend"
+      ]
+    },
+    {
+      "key": "skill.flutter",
+      "kind": "skill",
+      "label": "Flutter",
+      "broader": [
+        "type.framework",
+        "area.mobile"
+      ],
+      "implies": [
+        "skill.dart"
+      ]
+    },
+    {
+      "key": "skill.react-native",
+      "kind": "skill",
+      "label": "React Native",
+      "broader": [
+        "type.framework",
+        "area.mobile"
+      ],
+      "implies": [
+        "skill.react"
+      ]
+    },
+    {
+      "key": "skill.swiftui",
+      "kind": "skill",
+      "label": "SwiftUI",
+      "broader": [
+        "type.framework",
+        "area.mobile"
+      ],
+      "implies": [
+        "skill.swift"
+      ]
+    },
+    {
+      "key": "skill.jetpack-compose",
+      "kind": "skill",
+      "label": "Jetpack Compose",
+      "broader": [
+        "type.framework",
+        "area.mobile"
+      ],
+      "implies": [
+        "skill.kotlin"
+      ]
+    },
+    {
+      "key": "skill.qt",
+      "kind": "skill",
+      "label": "Qt",
+      "broader": [
+        "type.framework",
+        "area.software-development"
+      ]
+    },
+    {
+      "key": "skill.unity",
+      "kind": "skill",
+      "label": "Unity",
+      "requiresCapital": true,
+      "aliases": [
+        "unity3d"
+      ],
+      "broader": [
+        "type.framework",
+        "area.gamedev"
+      ],
+      "implies": [
+        "skill.csharp"
+      ]
+    },
+    {
+      "key": "skill.unreal-engine",
+      "kind": "skill",
+      "label": "Unreal Engine",
+      "aliases": [
+        "unreal"
+      ],
+      "broader": [
+        "type.framework",
+        "area.gamedev"
+      ],
+      "implies": [
+        "skill.cpp"
+      ]
+    },
+    {
+      "key": "skill.tensorflow",
+      "kind": "skill",
+      "label": "TensorFlow",
+      "broader": [
+        "type.framework",
+        "area.ml"
+      ],
+      "implies": [
+        "skill.python"
+      ]
+    },
+    {
+      "key": "skill.pytorch",
+      "kind": "skill",
+      "label": "PyTorch",
+      "aliases": [
+        "torch"
+      ],
+      "broader": [
+        "type.framework",
+        "area.ml"
+      ],
+      "implies": [
+        "skill.python"
+      ]
+    },
+    {
+      "key": "skill.scikit-learn",
+      "kind": "skill",
+      "label": "scikit-learn",
+      "aliases": [
+        "sklearn"
+      ],
+      "broader": [
+        "type.framework",
+        "area.ml"
+      ],
+      "implies": [
+        "skill.python"
+      ]
+    },
+    {
+      "key": "skill.pandas",
+      "kind": "skill",
+      "label": "Pandas",
+      "requiresCapital": true,
+      "broader": [
+        "type.framework",
+        "area.data",
+        "area.ml"
+      ],
+      "implies": [
+        "skill.python"
+      ]
+    },
+    {
+      "key": "skill.numpy",
+      "kind": "skill",
+      "label": "NumPy",
+      "broader": [
+        "type.framework",
+        "area.data",
+        "area.ml"
+      ],
+      "implies": [
+        "skill.python"
+      ]
+    },
+    {
+      "key": "skill.hugging-face",
+      "kind": "skill",
+      "label": "Hugging Face",
+      "aliases": [
+        "huggingface",
+        "transformers"
+      ],
+      "broader": [
+        "type.platform",
+        "area.ml"
+      ]
+    },
+    {
+      "key": "skill.langchain",
+      "kind": "skill",
+      "label": "LangChain",
+      "broader": [
+        "type.framework",
+        "area.ml"
+      ],
+      "implies": [
+        "skill.python"
+      ]
+    },
+    {
+      "key": "skill.mlflow",
+      "kind": "skill",
+      "label": "MLflow",
+      "broader": [
+        "type.tool",
+        "area.ml"
+      ]
+    },
+    {
+      "key": "skill.computer-vision",
+      "kind": "skill",
+      "label": "Computer Vision",
+      "aliases": [
+        "opencv"
+      ],
+      "broader": [
+        "type.concept",
+        "area.ml"
+      ]
+    },
+    {
+      "key": "skill.nlp",
+      "kind": "skill",
+      "label": "NLP",
+      "aliases": [
+        "natural language processing"
+      ],
+      "broader": [
+        "type.concept",
+        "area.ml"
+      ]
+    },
+    {
+      "key": "skill.llms",
+      "kind": "skill",
+      "label": "LLMs",
+      "aliases": [
+        "large language models",
+        "llm",
+        "genai",
+        "generative ai"
+      ],
+      "broader": [
+        "type.concept",
+        "area.ml"
+      ]
+    },
+    {
+      "key": "skill.apache-spark",
+      "kind": "skill",
+      "label": "Apache Spark",
+      "aliases": [
+        "spark",
+        "pyspark"
+      ],
+      "broader": [
+        "type.framework",
+        "area.data"
+      ],
+      "implies": [
+        "skill.scala"
+      ]
+    },
+    {
+      "key": "skill.hadoop",
+      "kind": "skill",
+      "label": "Hadoop",
+      "aliases": [
+        "hdfs",
+        "mapreduce"
+      ],
+      "broader": [
+        "type.platform",
+        "area.data"
+      ]
+    },
+    {
+      "key": "skill.apache-kafka",
+      "kind": "skill",
+      "label": "Apache Kafka",
+      "aliases": [
+        "kafka"
+      ],
+      "broader": [
+        "type.platform",
+        "area.data",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.apache-airflow",
+      "kind": "skill",
+      "label": "Apache Airflow",
+      "aliases": [
+        "airflow"
+      ],
+      "broader": [
+        "type.tool",
+        "area.data"
+      ]
+    },
+    {
+      "key": "skill.dbt",
+      "kind": "skill",
+      "label": "dbt",
+      "aliases": [
+        "data build tool"
+      ],
+      "broader": [
+        "type.tool",
+        "area.data",
+        "area.analytics"
+      ],
+      "implies": [
+        "skill.sql"
+      ]
+    },
+    {
+      "key": "skill.databricks",
+      "kind": "skill",
+      "label": "Databricks",
+      "broader": [
+        "type.platform",
+        "area.data",
+        "area.ml"
+      ]
+    },
+    {
+      "key": "skill.snowflake",
+      "kind": "skill",
+      "label": "Snowflake",
+      "broader": [
+        "type.platform",
+        "area.data",
+        "area.analytics"
+      ]
+    },
+    {
+      "key": "skill.power-bi",
+      "kind": "skill",
+      "label": "Power BI",
+      "aliases": [
+        "powerbi"
+      ],
+      "broader": [
+        "type.tool",
+        "area.analytics"
+      ],
+      "implies": [
+        "skill.azure"
+      ],
+      "related": [
+        "skill.tableau"
+      ]
+    },
+    {
+      "key": "skill.tableau",
+      "kind": "skill",
+      "label": "Tableau",
+      "broader": [
+        "type.tool",
+        "area.analytics"
+      ],
+      "related": [
+        "skill.power-bi",
+        "skill.looker"
+      ]
+    },
+    {
+      "key": "skill.looker",
+      "kind": "skill",
+      "label": "Looker",
+      "requiresCapital": true,
+      "broader": [
+        "type.tool",
+        "area.analytics"
+      ],
+      "related": [
+        "skill.tableau"
+      ]
+    },
+    {
+      "key": "skill.apache-flink",
+      "kind": "skill",
+      "label": "Apache Flink",
+      "aliases": [
+        "flink"
+      ],
+      "broader": [
+        "type.framework",
+        "area.data"
+      ]
+    },
+    {
+      "key": "skill.postgresql",
+      "kind": "skill",
+      "label": "PostgreSQL",
+      "aliases": [
+        "postgres",
+        "psql"
+      ],
+      "broader": [
+        "type.database",
+        "area.backend",
+        "area.data"
+      ],
+      "related": [
+        "skill.mysql",
+        "skill.sql-server"
+      ]
+    },
+    {
+      "key": "skill.mysql",
+      "kind": "skill",
+      "label": "MySQL",
+      "broader": [
+        "type.database",
+        "area.backend",
+        "area.data"
+      ],
+      "related": [
+        "skill.postgresql"
+      ]
+    },
+    {
+      "key": "skill.sql-server",
+      "kind": "skill",
+      "label": "SQL Server",
+      "aliases": [
+        "mssql",
+        "microsoft sql server"
+      ],
+      "broader": [
+        "type.database",
+        "area.backend",
+        "area.data"
+      ],
+      "related": [
+        "skill.postgresql"
+      ]
+    },
+    {
+      "key": "skill.oracle-database",
+      "kind": "skill",
+      "label": "Oracle Database",
+      "aliases": [
+        "oracle db"
+      ],
+      "broader": [
+        "type.database",
+        "area.backend",
+        "area.data"
+      ]
+    },
+    {
+      "key": "skill.mongodb",
+      "kind": "skill",
+      "label": "MongoDB",
+      "aliases": [
+        "mongo"
+      ],
+      "broader": [
+        "type.database",
+        "area.backend",
+        "area.data"
+      ]
+    },
+    {
+      "key": "skill.redis",
+      "kind": "skill",
+      "label": "Redis",
+      "broader": [
+        "type.database",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.elasticsearch",
+      "kind": "skill",
+      "label": "Elasticsearch",
+      "aliases": [
+        "elastic search",
+        "opensearch"
+      ],
+      "broader": [
+        "type.database",
+        "area.backend",
+        "area.data"
+      ]
+    },
+    {
+      "key": "skill.cassandra",
+      "kind": "skill",
+      "label": "Cassandra",
+      "broader": [
+        "type.database",
+        "area.data"
+      ]
+    },
+    {
+      "key": "skill.dynamodb",
+      "kind": "skill",
+      "label": "DynamoDB",
+      "broader": [
+        "type.database",
+        "area.backend",
+        "area.cloud"
+      ],
+      "implies": [
+        "skill.aws"
+      ]
+    },
+    {
+      "key": "skill.cosmos-db",
+      "kind": "skill",
+      "label": "Cosmos DB",
+      "aliases": [
+        "cosmosdb"
+      ],
+      "broader": [
+        "type.database",
+        "area.backend",
+        "area.cloud"
+      ],
+      "implies": [
+        "skill.azure"
+      ]
+    },
+    {
+      "key": "skill.neo4j",
+      "kind": "skill",
+      "label": "Neo4j",
+      "broader": [
+        "type.database",
+        "area.backend",
+        "area.data"
+      ]
+    },
+    {
+      "key": "skill.sqlite",
+      "kind": "skill",
+      "label": "SQLite",
+      "broader": [
+        "type.database",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.mariadb",
+      "kind": "skill",
+      "label": "MariaDB",
+      "broader": [
+        "type.database",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.clickhouse",
+      "kind": "skill",
+      "label": "ClickHouse",
+      "broader": [
+        "type.database",
+        "area.data",
+        "area.analytics"
+      ]
+    },
+    {
+      "key": "skill.bigquery",
+      "kind": "skill",
+      "label": "BigQuery",
+      "aliases": [
+        "big query"
+      ],
+      "broader": [
+        "type.database",
+        "area.data",
+        "area.analytics",
+        "area.cloud"
+      ],
+      "implies": [
+        "skill.google-cloud"
+      ]
+    },
+    {
+      "key": "skill.redshift",
+      "kind": "skill",
+      "label": "Redshift",
+      "broader": [
+        "type.database",
+        "area.data",
+        "area.analytics",
+        "area.cloud"
+      ],
+      "implies": [
+        "skill.aws"
+      ]
+    },
+    {
+      "key": "skill.aws",
+      "kind": "skill",
+      "label": "AWS",
+      "aliases": [
+        "amazon web services"
+      ],
+      "broader": [
+        "type.platform",
+        "area.cloud"
+      ],
+      "related": [
+        "skill.azure",
+        "skill.google-cloud"
+      ]
+    },
+    {
+      "key": "skill.azure",
+      "kind": "skill",
+      "label": "Azure",
+      "aliases": [
+        "microsoft azure"
+      ],
+      "broader": [
+        "type.platform",
+        "area.cloud"
+      ],
+      "related": [
+        "skill.aws",
+        "skill.google-cloud"
+      ]
+    },
+    {
+      "key": "skill.google-cloud",
+      "kind": "skill",
+      "label": "Google Cloud",
+      "aliases": [
+        "gcp",
+        "google cloud platform"
+      ],
+      "broader": [
+        "type.platform",
+        "area.cloud"
+      ],
+      "related": [
+        "skill.aws",
+        "skill.azure"
+      ]
+    },
+    {
+      "key": "skill.kubernetes",
+      "kind": "skill",
+      "label": "Kubernetes",
+      "aliases": [
+        "k8s"
+      ],
+      "broader": [
+        "type.platform",
+        "area.cloud",
+        "area.devops"
+      ],
+      "implies": [
+        "skill.containers"
+      ]
+    },
+    {
+      "key": "skill.docker",
+      "kind": "skill",
+      "label": "Docker",
+      "broader": [
+        "type.tool",
+        "area.devops"
+      ],
+      "implies": [
+        "skill.containers"
+      ]
+    },
+    {
+      "key": "skill.terraform",
+      "kind": "skill",
+      "label": "Terraform",
+      "broader": [
+        "type.tool",
+        "area.devops",
+        "area.cloud"
+      ],
+      "implies": [
+        "skill.iac"
+      ],
+      "related": [
+        "skill.pulumi",
+        "skill.cloudformation"
+      ]
+    },
+    {
+      "key": "skill.ansible",
+      "kind": "skill",
+      "label": "Ansible",
+      "broader": [
+        "type.tool",
+        "area.devops"
+      ]
+    },
+    {
+      "key": "skill.helm",
+      "kind": "skill",
+      "label": "Helm",
+      "requiresCapital": true,
+      "broader": [
+        "type.tool",
+        "area.devops",
+        "area.cloud"
+      ],
+      "implies": [
+        "skill.kubernetes"
+      ]
+    },
+    {
+      "key": "skill.openshift",
+      "kind": "skill",
+      "label": "OpenShift",
+      "broader": [
+        "type.platform",
+        "area.cloud",
+        "area.devops"
+      ],
+      "implies": [
+        "skill.kubernetes",
+        "skill.containers"
+      ]
+    },
+    {
+      "key": "skill.pulumi",
+      "kind": "skill",
+      "label": "Pulumi",
+      "broader": [
+        "type.tool",
+        "area.devops",
+        "area.cloud"
+      ],
+      "implies": [
+        "skill.iac"
+      ],
+      "related": [
+        "skill.terraform"
+      ]
+    },
+    {
+      "key": "skill.cloudformation",
+      "kind": "skill",
+      "label": "CloudFormation",
+      "aliases": [
+        "cloud formation"
+      ],
+      "broader": [
+        "type.tool",
+        "area.devops",
+        "area.cloud"
+      ],
+      "implies": [
+        "skill.iac",
+        "skill.aws"
+      ],
+      "related": [
+        "skill.terraform"
+      ]
+    },
+    {
+      "key": "skill.serverless",
+      "kind": "skill",
+      "label": "Serverless",
+      "broader": [
+        "type.concept",
+        "area.cloud"
+      ]
+    },
+    {
+      "key": "skill.git",
+      "kind": "skill",
+      "label": "Git",
+      "broader": [
+        "type.tool",
+        "area.software-development"
+      ]
+    },
+    {
+      "key": "skill.github-actions",
+      "kind": "skill",
+      "label": "GitHub Actions",
+      "aliases": [
+        "github action"
+      ],
+      "broader": [
+        "type.tool",
+        "area.devops"
+      ],
+      "implies": [
+        "skill.ci-cd"
+      ]
+    },
+    {
+      "key": "skill.gitlab-ci",
+      "kind": "skill",
+      "label": "GitLab CI",
+      "aliases": [
+        "gitlab ci/cd"
+      ],
+      "broader": [
+        "type.tool",
+        "area.devops"
+      ],
+      "implies": [
+        "skill.ci-cd"
+      ]
+    },
+    {
+      "key": "skill.jenkins",
+      "kind": "skill",
+      "label": "Jenkins",
+      "broader": [
+        "type.tool",
+        "area.devops"
+      ],
+      "implies": [
+        "skill.ci-cd"
+      ]
+    },
+    {
+      "key": "skill.circleci",
+      "kind": "skill",
+      "label": "CircleCI",
+      "aliases": [
+        "circle ci"
+      ],
+      "broader": [
+        "type.tool",
+        "area.devops"
+      ],
+      "implies": [
+        "skill.ci-cd"
+      ]
+    },
+    {
+      "key": "skill.azure-devops",
+      "kind": "skill",
+      "label": "Azure DevOps",
+      "aliases": [
+        "vsts",
+        "tfs"
+      ],
+      "broader": [
+        "type.tool",
+        "area.devops"
+      ],
+      "implies": [
+        "skill.ci-cd"
+      ]
+    },
+    {
+      "key": "skill.prometheus",
+      "kind": "skill",
+      "label": "Prometheus",
+      "broader": [
+        "type.tool",
+        "area.observability"
+      ]
+    },
+    {
+      "key": "skill.grafana",
+      "kind": "skill",
+      "label": "Grafana",
+      "broader": [
+        "type.tool",
+        "area.observability"
+      ]
+    },
+    {
+      "key": "skill.datadog",
+      "kind": "skill",
+      "label": "Datadog",
+      "aliases": [
+        "data dog"
+      ],
+      "broader": [
+        "type.tool",
+        "area.observability"
+      ]
+    },
+    {
+      "key": "skill.splunk",
+      "kind": "skill",
+      "label": "Splunk",
+      "broader": [
+        "type.tool",
+        "area.observability"
+      ]
+    },
+    {
+      "key": "skill.opentelemetry",
+      "kind": "skill",
+      "label": "OpenTelemetry",
+      "aliases": [
+        "otel",
+        "open telemetry"
+      ],
+      "broader": [
+        "type.tool",
+        "area.observability"
+      ]
+    },
+    {
+      "key": "skill.nginx",
+      "kind": "skill",
+      "label": "Nginx",
+      "broader": [
+        "type.tool",
+        "area.infrastructure"
+      ]
+    },
+    {
+      "key": "skill.rabbitmq",
+      "kind": "skill",
+      "label": "RabbitMQ",
+      "aliases": [
+        "rabbit mq"
+      ],
+      "broader": [
+        "type.platform",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.graphql",
+      "kind": "skill",
+      "label": "GraphQL",
+      "broader": [
+        "type.concept",
+        "area.backend",
+        "area.frontend"
+      ]
+    },
+    {
+      "key": "skill.grpc",
+      "kind": "skill",
+      "label": "gRPC",
+      "broader": [
+        "type.concept",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.rest",
+      "kind": "skill",
+      "label": "REST",
+      "requiresCapital": true,
+      "aliases": [
+        "restful",
+        "rest api",
+        "rest apis"
+      ],
+      "broader": [
+        "type.concept",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.jira",
+      "kind": "skill",
+      "label": "Jira",
+      "broader": [
+        "type.tool",
+        "area.delivery"
+      ]
+    },
+    {
+      "key": "skill.linux",
+      "kind": "skill",
+      "label": "Linux",
+      "aliases": [
+        "unix"
+      ],
+      "broader": [
+        "type.platform",
+        "area.infrastructure"
+      ]
+    },
+    {
+      "key": "skill.selenium",
+      "kind": "skill",
+      "label": "Selenium",
+      "broader": [
+        "type.tool",
+        "area.quality"
+      ],
+      "related": [
+        "skill.cypress"
+      ]
+    },
+    {
+      "key": "skill.cypress",
+      "kind": "skill",
+      "label": "Cypress",
+      "broader": [
+        "type.tool",
+        "area.quality"
+      ],
+      "related": [
+        "skill.selenium",
+        "skill.playwright"
+      ]
+    },
+    {
+      "key": "skill.playwright",
+      "kind": "skill",
+      "label": "Playwright",
+      "requiresCapital": true,
+      "broader": [
+        "type.tool",
+        "area.quality"
+      ],
+      "related": [
+        "skill.cypress"
+      ]
+    },
+    {
+      "key": "skill.figma",
+      "kind": "skill",
+      "label": "Figma",
+      "broader": [
+        "type.tool",
+        "area.design"
+      ]
+    },
+    {
+      "key": "skill.agile",
+      "kind": "skill",
+      "label": "Agile",
+      "broader": [
+        "type.practice",
+        "area.delivery"
+      ]
+    },
+    {
+      "key": "skill.scrum",
+      "kind": "skill",
+      "label": "Scrum",
+      "broader": [
+        "type.practice",
+        "area.delivery"
+      ]
+    },
+    {
+      "key": "skill.kanban",
+      "kind": "skill",
+      "label": "Kanban",
+      "broader": [
+        "type.practice",
+        "area.delivery"
+      ]
+    },
+    {
+      "key": "skill.tdd",
+      "kind": "skill",
+      "label": "TDD",
+      "aliases": [
+        "test driven development",
+        "test-driven development"
+      ],
+      "broader": [
+        "type.practice",
+        "area.quality",
+        "area.software-development"
+      ]
+    },
+    {
+      "key": "skill.bdd",
+      "kind": "skill",
+      "label": "BDD",
+      "aliases": [
+        "behaviour driven development",
+        "behavior driven development"
+      ],
+      "broader": [
+        "type.practice",
+        "area.quality",
+        "area.software-development"
+      ]
+    },
+    {
+      "key": "skill.ci-cd",
+      "kind": "skill",
+      "label": "CI/CD",
+      "aliases": [
+        "continuous integration",
+        "continuous delivery",
+        "continuous deployment"
+      ],
+      "broader": [
+        "type.practice",
+        "area.devops"
+      ]
+    },
+    {
+      "key": "skill.microservices",
+      "kind": "skill",
+      "label": "Microservices",
+      "aliases": [
+        "microservice"
+      ],
+      "broader": [
+        "type.concept",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.ddd",
+      "kind": "skill",
+      "label": "DDD",
+      "aliases": [
+        "domain driven design",
+        "domain-driven design"
+      ],
+      "broader": [
+        "type.practice",
+        "area.software-development"
+      ]
+    },
+    {
+      "key": "skill.event-sourcing",
+      "kind": "skill",
+      "label": "Event Sourcing",
+      "broader": [
+        "type.concept",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.cqrs",
+      "kind": "skill",
+      "label": "CQRS",
+      "broader": [
+        "type.concept",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.pair-programming",
+      "kind": "skill",
+      "label": "Pair Programming",
+      "aliases": [
+        "pairing"
+      ],
+      "broader": [
+        "type.practice",
+        "area.delivery",
+        "area.software-development"
+      ]
+    },
+    {
+      "key": "skill.devops",
+      "kind": "skill",
+      "label": "DevOps",
+      "broader": [
+        "type.practice",
+        "area.devops"
+      ]
+    },
+    {
+      "key": "skill.mlops",
+      "kind": "skill",
+      "label": "MLOps",
+      "broader": [
+        "type.practice",
+        "area.ml",
+        "area.devops"
+      ],
+      "implies": [
+        "skill.ci-cd"
+      ]
+    },
+    {
+      "key": "skill.iac",
+      "kind": "skill",
+      "label": "Infrastructure as Code",
+      "aliases": [
+        "iac"
+      ],
+      "broader": [
+        "type.practice",
+        "area.devops",
+        "area.cloud"
+      ]
+    },
+    {
+      "key": "skill.accessibility",
+      "kind": "skill",
+      "label": "Accessibility",
+      "aliases": [
+        "wcag",
+        "a11y"
+      ],
+      "broader": [
+        "type.practice",
+        "area.frontend",
+        "area.design"
+      ]
+    },
+    {
+      "key": "skill.solid",
+      "kind": "skill",
+      "label": "SOLID",
+      "requiresCapital": true,
+      "broader": [
+        "type.practice",
+        "area.software-development"
+      ]
+    },
+    {
+      "key": "skill.sre",
+      "kind": "skill",
+      "label": "Site Reliability Engineering",
+      "aliases": [
+        "sre"
+      ],
+      "broader": [
+        "type.practice",
+        "area.infrastructure",
+        "area.devops"
+      ],
+      "implies": [
+        "skill.devops"
+      ]
+    },
+    {
+      "key": "skill.containers",
+      "kind": "skill",
+      "label": "Containerisation",
+      "aliases": [
+        "containerisation",
+        "containerization",
+        "containers"
+      ],
+      "broader": [
+        "type.concept",
+        "area.devops"
+      ]
+    },
+    {
+      "key": "skill.eks",
+      "kind": "skill",
+      "label": "Amazon EKS",
+      "aliases": [
+        "eks",
+        "elastic kubernetes service"
+      ],
+      "broader": [
+        "type.platform",
+        "area.cloud",
+        "skill.kubernetes"
+      ],
+      "implies": [
+        "skill.aws"
+      ]
+    },
+    {
+      "key": "skill.aks",
+      "kind": "skill",
+      "label": "Azure Kubernetes Service",
+      "aliases": [
+        "aks"
+      ],
+      "broader": [
+        "type.platform",
+        "area.cloud",
+        "skill.kubernetes"
+      ],
+      "implies": [
+        "skill.azure"
+      ]
+    },
+    {
+      "key": "skill.gke",
+      "kind": "skill",
+      "label": "Google Kubernetes Engine",
+      "aliases": [
+        "gke"
+      ],
+      "broader": [
+        "type.platform",
+        "area.cloud",
+        "skill.kubernetes"
+      ],
+      "implies": [
+        "skill.google-cloud"
+      ]
+    },
+    {
+      "key": "skill.aws-lambda",
+      "kind": "skill",
+      "label": "AWS Lambda",
+      "aliases": [
+        "aws lambda",
+        "lambda functions"
+      ],
+      "broader": [
+        "type.platform",
+        "area.cloud",
+        "skill.serverless"
+      ],
+      "implies": [
+        "skill.aws"
+      ]
+    },
+    {
+      "key": "skill.azure-functions",
+      "kind": "skill",
+      "label": "Azure Functions",
+      "aliases": [
+        "azure functions"
+      ],
+      "broader": [
+        "type.platform",
+        "area.cloud",
+        "skill.serverless"
+      ],
+      "implies": [
+        "skill.azure"
+      ]
+    },
+    {
+      "key": "skill.angularjs",
+      "kind": "skill",
+      "label": "AngularJS",
+      "aliases": [
+        "angular.js",
+        "angular 1"
+      ],
+      "broader": [
+        "type.framework",
+        "area.frontend"
+      ],
+      "succeededBy": "skill.angular"
+    },
+    {
+      "key": "qual.aws-certified",
+      "kind": "qualification",
+      "label": "AWS Certification",
+      "aliases": [
+        "aws certified",
+        "aws certification",
+        "aws certified solutions architect",
+        "aws solutions architect"
+      ],
+      "broader": [
+        "type.certification",
+        "area.cloud"
+      ]
+    },
+    {
+      "key": "qual.azure-certified",
+      "kind": "qualification",
+      "label": "Azure Certification",
+      "aliases": [
+        "azure certified",
+        "azure certification",
+        "az-104",
+        "az-204",
+        "az-400"
+      ],
+      "broader": [
+        "type.certification",
+        "area.cloud"
+      ]
+    },
+    {
+      "key": "qual.gcp-certified",
+      "kind": "qualification",
+      "label": "Google Cloud Certification",
+      "aliases": [
+        "google cloud certified",
+        "gcp certified"
+      ],
+      "broader": [
+        "type.certification",
+        "area.cloud"
+      ]
+    },
+    {
+      "key": "qual.cka",
+      "kind": "qualification",
+      "label": "Certified Kubernetes Administrator",
+      "aliases": [
+        "cka",
+        "certified kubernetes administrator",
+        "ckad"
+      ],
+      "broader": [
+        "type.certification",
+        "area.cloud",
+        "area.devops"
+      ]
+    },
+    {
+      "key": "qual.cissp",
+      "kind": "qualification",
+      "label": "CISSP",
+      "aliases": [
+        "cissp"
+      ],
+      "broader": [
+        "type.certification",
+        "area.security"
+      ]
+    },
+    {
+      "key": "qual.security-plus",
+      "kind": "qualification",
+      "label": "CompTIA Security+",
+      "aliases": [
+        "security+",
+        "comptia security+"
+      ],
+      "broader": [
+        "type.certification",
+        "area.security"
+      ]
+    },
+    {
+      "key": "qual.ceh",
+      "kind": "qualification",
+      "label": "Certified Ethical Hacker",
+      "aliases": [
+        "ceh",
+        "certified ethical hacker"
+      ],
+      "broader": [
+        "type.certification",
+        "area.security"
+      ]
+    },
+    {
+      "key": "qual.pmp",
+      "kind": "qualification",
+      "label": "Project Management Professional",
+      "aliases": [
+        "pmp"
+      ],
+      "broader": [
+        "type.certification",
+        "area.delivery"
+      ]
+    },
+    {
+      "key": "qual.prince2",
+      "kind": "qualification",
+      "label": "PRINCE2",
+      "aliases": [
+        "prince2",
+        "prince 2"
+      ],
+      "broader": [
+        "type.certification",
+        "area.delivery"
+      ]
+    },
+    {
+      "key": "qual.itil",
+      "kind": "qualification",
+      "label": "ITIL",
+      "aliases": [
+        "itil"
+      ],
+      "broader": [
+        "type.certification",
+        "area.infrastructure"
+      ]
+    },
+    {
+      "key": "qual.togaf",
+      "kind": "qualification",
+      "label": "TOGAF",
+      "aliases": [
+        "togaf"
+      ],
+      "broader": [
+        "type.certification",
+        "area.software-development"
+      ]
+    },
+    {
+      "key": "qual.scrum-certified",
+      "kind": "qualification",
+      "label": "Scrum Certification",
+      "aliases": [
+        "certified scrum master",
+        "professional scrum master",
+        "psm i",
+        "psm ii",
+        "cspo"
+      ],
+      "broader": [
+        "type.certification",
+        "area.delivery"
+      ]
+    },
+    {
+      "key": "qual.ccna",
+      "kind": "qualification",
+      "label": "Cisco CCNA",
+      "aliases": [
+        "ccna"
+      ],
+      "broader": [
+        "type.certification",
+        "area.infrastructure"
+      ]
+    },
+    {
+      "key": "qual.oracle-certified",
+      "kind": "qualification",
+      "label": "Oracle Certification",
+      "aliases": [
+        "oracle certified professional",
+        "oracle certified"
+      ],
+      "broader": [
+        "type.certification",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "qual.sc-clearance",
+      "kind": "qualification",
+      "label": "SC Clearance",
+      "aliases": [
+        "sc clearance",
+        "sc cleared",
+        "security check clearance",
+        "security cleared to sc"
+      ],
+      "broader": [
+        "type.clearance"
+      ]
+    },
+    {
+      "key": "qual.dv-clearance",
+      "kind": "qualification",
+      "label": "DV Clearance",
+      "aliases": [
+        "dv clearance",
+        "dv cleared",
+        "developed vetting"
+      ],
+      "broader": [
+        "type.clearance"
+      ]
+    },
+    {
+      "key": "qual.ctc-clearance",
+      "kind": "qualification",
+      "label": "CTC Clearance",
+      "aliases": [
+        "ctc clearance",
+        "counter terrorist check"
+      ],
+      "broader": [
+        "type.clearance"
+      ]
+    },
+    {
+      "key": "qual.bpss",
+      "kind": "qualification",
+      "label": "BPSS",
+      "aliases": [
+        "bpss",
+        "baseline personnel security standard"
+      ],
+      "broader": [
+        "type.clearance"
+      ]
+    },
+    {
+      "key": "qual.nppv3",
+      "kind": "qualification",
+      "label": "NPPV3",
+      "aliases": [
+        "nppv3",
+        "nppv level 3"
+      ],
+      "broader": [
+        "type.clearance"
+      ]
+    },
+    {
+      "key": "qual.bachelors",
+      "kind": "qualification",
+      "label": "Bachelor's Degree",
+      "aliases": [
+        "bachelor's degree",
+        "bachelors degree",
+        "bsc",
+        "undergraduate degree",
+        "2:1 degree",
+        "2.1 degree"
+      ],
+      "broader": [
+        "type.degree"
+      ]
+    },
+    {
+      "key": "qual.masters",
+      "kind": "qualification",
+      "label": "Master's Degree",
+      "aliases": [
+        "master's degree",
+        "masters degree",
+        "msc",
+        "mres"
+      ],
+      "broader": [
+        "type.degree"
+      ]
+    },
+    {
+      "key": "qual.phd",
+      "kind": "qualification",
+      "label": "PhD",
+      "aliases": [
+        "phd",
+        "doctorate",
+        "dphil"
+      ],
+      "broader": [
+        "type.degree"
+      ]
+    },
+    {
+      "key": "qual.stem-degree",
+      "kind": "qualification",
+      "label": "STEM Degree",
+      "aliases": [
+        "stem degree",
+        "degree in a stem subject"
+      ],
+      "broader": [
+        "type.degree"
+      ]
+    },
+    {
+      "key": "qual.cs-degree",
+      "kind": "qualification",
+      "label": "Computer Science Degree",
+      "aliases": [
+        "computer science degree",
+        "degree in computer science",
+        "computer science or related"
+      ],
+      "broader": [
+        "type.degree"
+      ]
+    },
+    {
+      "key": "qual.ceng",
+      "kind": "qualification",
+      "label": "Chartered Engineer",
+      "aliases": [
+        "ceng",
+        "chartered engineer"
+      ],
+      "broader": [
+        "type.certification"
+      ]
+    }
+  ]
+}

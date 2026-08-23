@@ -5,8 +5,15 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The extraction contract and the concept vocabulary live in Core. This is the only
+         project reference the AI layer has: it must reach the domain, and nothing else. -->
+    <ProjectReference Include="../JobPlatform.Core/JobPlatform.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.SemanticKernel" />
     <PackageReference Include="Anthropic" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />

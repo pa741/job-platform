@@ -1,4 +1,5 @@
 using JobPlatform.Core.Dedup;
+using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Metrics;
 using JobPlatform.Core.Model;
 using JobPlatform.Data.Sql.Entities;
@@ -18,7 +19,7 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
     /// database is serverless and billed by the second — a per-row round trip would keep
     /// it awake far longer than the work justifies.
     /// </remarks>
-    public async Task<(ScrapeRun Run, UpsertOutcome Outcome)> IngestAsync(
+    public async Task<IngestResult> IngestAsync(
         ScrapeRunContext context,
         IReadOnlyList<JobPosting> postings,
         int rowsInFile,
@@ -79,20 +80,58 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
             .Where(l => l.SearchTerm == context.SearchTerm && existingIds.Contains(l.PostingId))
             .ToDictionaryAsync(l => l.PostingId, ct);
 
+        // Enrichment is in-memory CPU work, so it runs here rather than in its own pass:
+        // it adds no round trip and does not lengthen the connection.
+        var graph = ConceptGraph.Default;
+        var enrichedByKey = postings.ToDictionary(
+            p => p.SourceKey,
+            p => PostingEnricher.Enrich(p, graph),
+            StringComparer.OrdinalIgnoreCase);
+
+        // Both dimensions resolved set-based, once for the whole batch. A per-row lookup
+        // here would be exactly the shape the cost model forbids.
+        var conceptIds = await db.Concepts
+            .Select(c => new { c.ConceptKey, c.Id })
+            .ToDictionaryAsync(c => c.ConceptKey, c => c.Id, StringComparer.Ordinal, ct);
+
+        var companies = await ResolveCompaniesAsync(enrichedByKey.Values, now, ct);
+
+        // Child rows are rewritten only for postings that actually changed, or whose
+        // enrichment is stale. Most postings in a daily re-scrape are neither, and rewriting
+        // theirs would be churn against a 2 GB database for no change in the data.
+        var rebuild = new List<long>();
+        var missingConcepts = new HashSet<string>(StringComparer.Ordinal);
+
+        // Postings whose text is new or has changed. Only these are worth a model call: an
+        // unchanged re-listing already has an extraction keyed on the same input hash, and
+        // enqueueing it would mean a few hundred messages a day whose only outcome is a
+        // database round trip that decides to do nothing.
+        var needExtraction = new List<string>();
+
         int added = 0, updated = 0, unchanged = 0;
 
         foreach (var posting in postings)
         {
             var contentHash = JobFingerprint.ContentHash(posting);
             var location = JobLocation.Parse(posting.Location);
+            var enriched = enrichedByKey[posting.SourceKey];
 
             if (existing.TryGetValue(posting.SourceKey, out var entity))
             {
                 var changed = HasMaterialChange(entity, posting, contentHash);
+                var stale = entity.EnrichmentVersion != EnrichedPosting.CurrentVersion;
 
                 Apply(entity, posting, contentHash, location);
+                ApplyEnrichment(entity, enriched, companies);
                 entity.LastSeenUtc = now;
                 entity.SeenCount++;
+
+                if (changed || stale)
+                {
+                    rebuild.Add(entity.Id);
+                    AttachDerivedRows(entity, enriched, conceptIds, missingConcepts);
+                    needExtraction.Add(entity.SourceKey);
+                }
 
                 if (links.TryGetValue(entity.Id, out var link))
                 {
@@ -134,14 +173,35 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
                 };
 
                 Apply(entity, posting, contentHash, location);
+                ApplyEnrichment(entity, enriched, companies);
+                AttachDerivedRows(entity, enriched, conceptIds, missingConcepts);
 
                 // Through the navigation, not the DbSet: the posting has no Id until
                 // SaveChanges, and EF fills the foreign key from the relationship.
                 entity.SearchTerms.Add(NewLink(0, context.SearchTerm, run.Id, now));
 
                 db.JobPostings.Add(entity);
+                needExtraction.Add(entity.SourceKey);
                 added++;
             }
+        }
+
+        // Deleted before SaveChanges so the inserts queued above land on a clean slate.
+        // Set-based and only for the ids that changed, so an unchanged re-scrape issues
+        // nothing at all here.
+        await ClearDerivedRowsAsync(rebuild, ct);
+
+        if (missingConcepts.Count > 0)
+        {
+            // Loud on purpose. This happens when the code ships a vocabulary the database has
+            // not been reseeded with, and the symptom is otherwise silent: assertions simply
+            // stop appearing for the new concepts and every count involving them is quietly
+            // low. Reseed with `JobPlatform.DbAdmin -- seed-concepts`.
+            logger.LogWarning(
+                "{Count} concept keys are in the vocabulary but not in the database and were "
+                + "skipped: {Keys}. The Concepts table needs reseeding.",
+                missingConcepts.Count,
+                string.Join(", ", missingConcepts.Take(10)));
         }
 
         var outcome = new UpsertOutcome(added, updated, unchanged);
@@ -156,7 +216,7 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
             "Run {RunId}: {New} new, {Updated} updated, {Unchanged} unchanged posting(s).",
             run.Id, outcome.New, outcome.Updated, outcome.Unchanged);
 
-        return (run, outcome);
+        return new IngestResult(run, outcome, needExtraction);
     }
 
     /// <summary>
@@ -206,7 +266,8 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
             .Select(g => new { Site = g.Key, Count = g.Count() })
             .ToListAsync(ct);
 
-        var remoteCount = await lastSeenOnDate.CountAsync(p => p.IsRemote, ct);
+        var remoteCount = await lastSeenOnDate.CountAsync(p => p.IsRemote == true, ct);
+        var statedRemote = await lastSeenOnDate.CountAsync(p => p.IsRemote != null, ct);
         var withSalary = await lastSeenOnDate
             .CountAsync(p => p.MinAmount != null || p.MaxAmount != null, ct);
 
@@ -230,7 +291,10 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
             NewPostings = newPostings,
             CumulativePostings = cumulative,
             BySite = bySite.ToDictionary(x => x.Site, x => x.Count, StringComparer.OrdinalIgnoreCase),
-            RemoteShare = Share(remoteCount, distinctSeen),
+            // Denominator is the postings that stated a work mode, matching
+            // MetricsCalculator.CalculateRemote. Two definitions of one metric name is how a
+            // dashboard ends up disagreeing with itself depending on which store answered.
+            RemoteShare = Share(remoteCount, statedRemote),
             SalaryCoverage = Share(withSalary, distinctSeen),
             TopCompanies = [.. topCompanies.Select(x => new NamedCount(x.Company, x.Count))],
         };
@@ -306,4 +370,197 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
         entity.RepostCount = posting.RepostCount;
         entity.FakeFreshness = posting.FakeFreshness;
     }
+
+    /// <summary>
+    /// Finds or creates a company row per distinct folded key, in one query.
+    /// </summary>
+    /// <remarks>
+    /// New rows are returned untracked-by-id and attached through the posting navigation, so
+    /// EF fills the foreign key at <c>SaveChanges</c> and no second round trip is needed to
+    /// learn the generated ids.
+    /// </remarks>
+    private async Task<Dictionary<string, CompanyEntity>> ResolveCompaniesAsync(
+        IEnumerable<EnrichedPosting> enriched,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        var byKey = new Dictionary<string, EnrichedPosting>(StringComparer.Ordinal);
+
+        foreach (var item in enriched)
+        {
+            if (item.CompanyKey is { } key)
+            {
+                // Last write wins, so the freshest spelling and blurb are the ones stored.
+                byKey[key] = item;
+            }
+        }
+
+        if (byKey.Count == 0)
+        {
+            return [];
+        }
+
+        var keys = byKey.Keys.ToList();
+
+        var companies = await db.Companies
+            .Where(c => keys.Contains(c.CompanyKey))
+            .ToDictionaryAsync(c => c.CompanyKey, StringComparer.Ordinal, ct);
+
+        foreach (var (key, item) in byKey)
+        {
+            if (!companies.TryGetValue(key, out var company))
+            {
+                company = new CompanyEntity
+                {
+                    CompanyKey = key,
+                    DisplayName = item.Posting.Company ?? key,
+                    FirstSeenUtc = now,
+                };
+
+                db.Companies.Add(company);
+                companies[key] = company;
+            }
+
+            company.DisplayName = item.Posting.Company ?? company.DisplayName;
+            company.Industry = item.Posting.CompanyIndustry ?? company.Industry;
+            company.EmployeesBand = item.Posting.CompanyNumEmployees ?? company.EmployeesBand;
+            company.EmployeesMin = item.EmployeesMin ?? company.EmployeesMin;
+            company.EmployeesMax = item.EmployeesMax ?? company.EmployeesMax;
+            company.Revenue = item.Posting.CompanyRevenue ?? company.Revenue;
+            company.Url = item.Posting.CompanyUrl ?? company.Url;
+            company.Description = item.Posting.CompanyDescription ?? company.Description;
+            company.Rating = item.Posting.CompanyRating ?? company.Rating;
+            company.ReviewsCount = item.Posting.CompanyReviewsCount ?? company.ReviewsCount;
+            company.LastSeenUtc = now;
+        }
+
+        return companies;
+    }
+
+    /// <summary>The derived scalar columns. Child rows are handled separately.</summary>
+    private static void ApplyEnrichment(
+        JobPostingEntity entity,
+        EnrichedPosting enriched,
+        Dictionary<string, CompanyEntity> companies)
+    {
+        entity.SourceBoard = enriched.Posting.SourceBoard;
+        entity.Applicants = enriched.Posting.Applicants;
+        entity.ApplicantCount = enriched.Posting.ApplicantCount;
+        entity.ListingType = enriched.Posting.ListingType;
+        entity.WorkFromHomeType = enriched.Posting.WorkFromHomeType;
+        entity.VacancyCount = enriched.Posting.VacancyCount;
+        entity.HasContactEmail = enriched.Posting.HasContactEmail;
+
+        entity.Seniority = enriched.Seniority;
+        entity.RoleFamily = enriched.RoleFamily;
+        entity.WorkArrangement = enriched.WorkArrangement;
+        entity.HybridDaysInOffice = enriched.HybridDaysInOffice;
+        entity.YearsExperienceMin = enriched.YearsExperienceMin;
+        entity.YearsExperienceMax = enriched.YearsExperienceMax;
+
+        entity.AnnualSalaryMin = enriched.AnnualSalaryMin;
+        entity.AnnualSalaryMax = enriched.AnnualSalaryMax;
+        entity.AnnualSalaryCurrency = enriched.SalaryCurrency;
+        entity.SalaryFromText = enriched.SalaryFromText;
+        entity.SalaryStatedInterval = enriched.SalaryStatedInterval;
+
+        entity.VisaSponsorship = enriched.VisaSponsorship;
+        entity.RequiresSecurityClearance = enriched.RequiresSecurityClearance;
+        entity.RequiresDegree = enriched.RequiresDegree;
+        entity.Ir35 = enriched.Ir35;
+
+        entity.EnrichmentVersion = enriched.Version;
+
+        if (enriched.CompanyKey is { } key && companies.TryGetValue(key, out var company))
+        {
+            // The navigation rather than the id: a company created in this batch has no id
+            // until SaveChanges, and EF resolves the relationship either way.
+            entity.CompanyRef = company;
+        }
+    }
+
+    /// <summary>
+    /// Queues the assertion, mention, job-type and tag rows for one posting.
+    /// </summary>
+    /// <remarks>
+    /// Through the navigation collections rather than the DbSets, for the same reason the
+    /// search-term link is: a new posting has no Id yet. On an existing posting the collection
+    /// was never loaded, so everything added here is treated as new - which is correct only
+    /// because <see cref="ClearDerivedRowsAsync"/> removes the previous generation first.
+    /// </remarks>
+    private static void AttachDerivedRows(
+        JobPostingEntity entity,
+        EnrichedPosting enriched,
+        Dictionary<string, int> conceptIds,
+        HashSet<string> missingConcepts)
+    {
+        foreach (var assertion in enriched.Concepts)
+        {
+            if (!conceptIds.TryGetValue(assertion.ConceptKey, out var conceptId))
+            {
+                missingConcepts.Add(assertion.ConceptKey);
+                continue;
+            }
+
+            entity.Concepts.Add(new PostingConceptEntity
+            {
+                ConceptId = conceptId,
+                Source = assertion.Source,
+                Polarity = assertion.Polarity,
+                YearsMin = assertion.YearsMin,
+                YearsMax = assertion.YearsMax,
+                EvidenceText = Truncate(assertion.EvidenceText, 120),
+                Confidence = assertion.Confidence,
+                ResolverVersion = enriched.Version,
+            });
+        }
+
+        foreach (var mention in enriched.Mentions)
+        {
+            entity.Mentions.Add(new PostingMentionEntity
+            {
+                SurfaceForm = Truncate(mention.SurfaceForm, 120)!,
+                Reason = mention.Reason,
+                Occurrences = mention.Occurrences,
+                ResolverVersion = enriched.Version,
+            });
+        }
+
+        foreach (var jobType in enriched.JobTypes)
+        {
+            entity.JobTypes.Add(new JobPostingJobTypeEntity { JobType = jobType });
+        }
+
+        foreach (var tag in enriched.Tags)
+        {
+            entity.Tags.Add(new PostingTagEntity { Tag = tag.Name, Value = tag.Value });
+        }
+    }
+
+    /// <summary>
+    /// Removes the previous generation of derived rows for postings being rewritten.
+    /// </summary>
+    /// <remarks>
+    /// Four set-based statements, issued only when something changed, rather than loading
+    /// every child row to delete it through the change tracker. Nothing is issued at all for
+    /// an unchanged re-scrape, which is the common case.
+    ///
+    /// Extractions are deliberately not touched: a model response is expensive and is keyed on
+    /// the input hash, so it survives a re-enrichment of the same text.
+    /// </remarks>
+    private async Task ClearDerivedRowsAsync(List<long> postingIds, CancellationToken ct)
+    {
+        if (postingIds.Count == 0)
+        {
+            return;
+        }
+
+        await db.PostingConcepts.Where(x => postingIds.Contains(x.PostingId)).ExecuteDeleteAsync(ct);
+        await db.PostingMentions.Where(x => postingIds.Contains(x.PostingId)).ExecuteDeleteAsync(ct);
+        await db.JobPostingJobTypes.Where(x => postingIds.Contains(x.PostingId)).ExecuteDeleteAsync(ct);
+        await db.PostingTags.Where(x => postingIds.Contains(x.PostingId)).ExecuteDeleteAsync(ct);
+    }
+
+    private static string? Truncate(string? value, int max)
+        => value is null || value.Length <= max ? value : value[..max];
 }

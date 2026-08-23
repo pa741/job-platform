@@ -26,6 +26,9 @@ param landingStorageAccountName string
 @description('Container the scraper writes to, and the ingest function watches.')
 param landingContainerName string = 'jobs-landing'
 
+@description('Container holding the curated analysis surface. Never watched by Event Grid.')
+param curatedContainerName string = 'jobs-curated'
+
 @description('Object id of the Microsoft Entra principal to make SQL admin and Cosmos data reader (i.e. you).')
 param administratorObjectId string
 
@@ -110,6 +113,23 @@ resource landingBlobContainer 'Microsoft.Storage/storageAccounts/blobServices/co
   }
 }
 
+// The analysis surface: partitioned Parquet written from SQL, read by DuckDB, pandas,
+// Fabric or Synapse serverless without anything running.
+//
+// A separate container rather than a prefix under jobs-landing, for two reasons that both
+// matter. The Event Grid subscription is scoped to the landing container, so a curated write
+// can never trigger an ingest and loop. And the ingest identity holds Blob Data *Reader* on
+// the landing account deliberately - writing curated output there would mean widening that to
+// Contributor and giving the function the ability to modify or delete what the scraper
+// uploaded, which is exactly the permission the read-only grant exists to withhold.
+resource curatedBlobContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: landingBlobService
+  name: curatedContainerName
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
 // Events Event Grid could not deliver land here rather than being dropped silently.
 resource deadLetterContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
   parent: landingBlobService
@@ -180,6 +200,7 @@ module functionApp 'modules/functionapp.bicep' = {
     applicationInsightsConnectionString: monitoring.outputs.connectionString
     landingStorageAccountName: landingStorageAccountName
     landingContainerName: landingContainerName
+    curatedContainerName: curatedBlobContainer.name
     cosmosAccountEndpoint: cosmos.outputs.accountEndpoint
     cosmosDatabaseName: cosmos.outputs.databaseName
     sqlConnectionString: sql.outputs.connectionString
@@ -244,6 +265,7 @@ module rbac 'modules/rbac.bicep' = {
     functionStorageAccountName: functionApp.outputs.storageAccountName
     applicationInsightsName: monitoring.outputs.applicationInsightsName
     ingestPrincipalId: identity.outputs.principalId
+    curatedContainerName: curatedBlobContainer.name
   }
 }
 
