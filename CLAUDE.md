@@ -68,6 +68,18 @@ with a different structure, and the provider layer was kept rather than torn out
   applicant counts), so the parser reads by name and ignores what it does not model.
 - `src/JobPlatform.Core/Metrics/MetricsCalculator.cs` — every metric. Pure and Azure-free,
   which is why the metric surface is fully unit-testable.
+- `src/JobPlatform.Core/Enrichment/concepts.json` — the vocabulary. 213 concepts on a DAG,
+  and the source of truth: the SQL tables are a projection of it, and it is also what the
+  model is handed as its allowed output set. Changing it is a reviewable diff.
+- `src/JobPlatform.Core/Enrichment/ConceptGraph.cs` — the loader, the matcher and the
+  in-memory closure. Read the remarks on `NameChar` before touching the boundaries.
+- `src/JobPlatform.Core/Enrichment/PostingEnricher.cs` — the composition root for every
+  deterministic classifier. Decides precedence between them; the classifiers themselves stay
+  separate so each keeps its own tests.
+- `src/JobPlatform.Data/Sql/ConceptSeeder.cs` — projects the vocabulary into SQL. The only
+  writer of those tables, and idempotent.
+- `src/JobPlatform.Ingestion/Curated/CuratedExporter.cs` — the Parquet analysis surface,
+  recomputed per partition rather than appended.
 - `src/JobPlatform.Data/Sql/JobPostingRepository.cs` — the upsert, and the daily rollup
   aggregates.
 - `src/JobPlatform.Ingestion/IngestionPipeline.cs` — the digest, shared by the blob trigger
@@ -110,7 +122,36 @@ with a different structure, and the provider layer was kept rather than torn out
 - **The blob trigger's poison queue lives on the trigger's connection** (the landing
   account), not on host storage, so the identity needs Queue Data Contributor on both.
 - **Ingestion must stay idempotent.** `ScrapeRuns.BlobPath` is unique and metric document
-  ids derive from the blob path. Event Grid redelivers; a replayed blob must converge.
+  ids derive from the blob path. Event Grid redelivers; a replayed blob must converge. The
+  same contract extends to the derived rows: assertions are rewritten only for postings whose
+  content changed, and `PostingExtractions` is keyed on `(PostingId, ExtractorVersion,
+  InputHash)`.
+- **The concept key is the identity; the label is an attribute.** `skill.kubernetes` is what
+  is stored and what a backfill is written against. Renaming a label is an edit; renaming a
+  key is a data migration. An earlier design used the canonical name as the key and had no
+  way to separate the string in the advert from the concept it denotes.
+- **`broader` is a DAG, not a tree**, and the data needs it: Python is a language *and* is
+  used in backend, data and ML. The flat `category` field this replaced could record only one
+  of those and was wrong three ways.
+- **Run `dbadmin seed-concepts` after any migration.** The concept tables are a projection of
+  the vocabulary shipped in the build; a schema that has moved without them silently stops
+  recording assertions for anything new. `deploy.yml` runs it in the same job as `migrate`,
+  and the ingest logs a warning naming the command when it notices.
+- **A surface form that cannot be resolved is recorded, never dropped.** `PostingMentions`
+  exists because the previous vocabulary handled ambiguous names — Go, R, C, Julia — by
+  refusing to match them, which meant the data was wrong with no way to find out by how much.
+  It is also where new vocabulary comes from: the most frequent unresolved forms each month.
+- **Never let the model invent a concept key.** `KernelDocumentExtractor` re-checks every key
+  against the graph and demotes anything unknown to a mention. A hallucinated key is
+  indistinguishable from a real one in SQL and would quietly split a concept in two.
+- **Do not add a column to `TrackedColumns` before the scraper emits it.**
+  `JobDigestFunction` warns on every column at 0% fill, and "not shipped yet" is not the
+  regression that warning exists to catch. The parser reads by name, so mapping a column
+  early is free; tracking it early is noise on every run.
+- **The curated zone is a separate container, not a prefix.** The Event Grid subscription is
+  scoped to `jobs-landing`, so a curated write can never trigger an ingest; and the identity
+  holds Blob Data *Reader* on the landing account deliberately, because that container is the
+  only copy of the source data. `jobs-curated` gets its own scoped Contributor grant.
 - **The SQL server lives in a different region from the rest of the stack** (`sqlLocation`
   in `infra/main.bicep`). This is not an oversight: the free offer is not provisionable in
   Spain Central or West Europe on this subscription, and several other regions refuse new
@@ -131,6 +172,28 @@ with a different structure, and the provider layer was kept rather than torn out
   billing.
 - Metrics changes belong in `MetricsCalculator` with a matching assertion in
   `MetricsCalculatorTests`, against the synthetic fixture's known-by-construction counts.
+
+### The concept vocabulary
+
+Curated in-house, deliberately. The alternatives were checked rather than assumed:
+
+- **ESCO** is CC BY 4.0 and freely redistributable, but querying its API directly returns
+  **zero results for Kubernetes, Docker and Terraform**, and "React" matches the English verb
+  ("react calmly in stressful situations"). It is strong on generic competency phrasing and
+  unusable for a software-engineering corpus.
+- **Lightcast Open Skills** has the best technology coverage of anything tested, but its
+  licence forbids redistribution and embedding the dataset in a product — fatal for a public
+  repository, and no bulk download exists anyway.
+- **SFIA** is deliberately technology-agnostic (no Kubernetes, no React) and its free licence
+  covers one individual's private career development, not use inside software.
+- **O\*NET** is CC BY 4.0 *and* carries Kubernetes as a "Hot Technology". It is used as an
+  **offline gap-check only**: periodically diff the vocabulary against its Technology Skills
+  list to find terms we have missed. No runtime dependency, no committed data, no attribution
+  obligation.
+
+At 213 concepts in a slow-moving domain, the "taxonomies go stale" argument that justifies
+Lightcast's model at 34,000 skills does not apply. The unresolved-mention log is the growth
+mechanism, and it is derived from the corpus rather than guessed at.
 
 ### Dashboard (`web/`)
 
@@ -249,6 +312,10 @@ dotnet run --project src/JobPlatform.Api
 # Schema change
 dotnet ef migrations add <Name> --project src/JobPlatform.Data --output-dir Sql/Migrations
 dotnet run --project tools/JobPlatform.DbAdmin -- migrate "<connection-string>"
+
+# Project the concept vocabulary into SQL. Idempotent; required after any migration and
+# after any change to concepts.json.
+dotnet run --project tools/JobPlatform.DbAdmin -- seed-concepts "<connection-string>"
 
 # Full provision (idempotent)
 ./scripts/provision.ps1 -ResourceGroup <rg> -LandingStorageAccount <account>

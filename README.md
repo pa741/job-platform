@@ -15,16 +15,22 @@ NAS scraper ──CSV──> Blob Storage: jobs-landing/jobs/*.csv
                     Event Grid  (BlobCreated, filtered to jobs/*.csv)
                           │
                     Azure Function  (Flex Consumption, .NET 9 isolated)
+                     parse → enrich → upsert
                           │
-              ┌───────────┴────────────┐
-              ▼                        ▼
-      Azure SQL (serverless)      Cosmos DB (free tier)
-      postings + run history      run digests + daily rollups
-              │                        │   └─ change feed → realtime dashboard (next)
-              └───────────┬────────────┘
-                          ▼
-                 API  (Container Apps, scale-to-zero)
-                 postings, metrics
+              ┌───────────┼────────────┬───────────────────────┐
+              ▼           │            ▼                       ▼
+      Azure SQL           │      Cosmos DB (free tier)   queue: posting-extraction
+      postings, concepts  │      run digests + rollups    │  (only when a provider
+      assertions, mentions│            │                  │   is configured)
+              │           │            └─ change feed →   ▼
+              │           │               realtime (next) model pass ──> SQL
+              │           ▼
+              │    Blob: jobs-curated/curated/**  (daily timer, rebuilt from SQL)
+              │    postings/…/postings.parquet    gold rows
+              │    pairs/…/pairs.parquet          title ↔ concept, for training
+              ▼
+     API  (Container Apps, scale-to-zero)
+     postings, metrics
 ```
 
 ## What it does
@@ -34,13 +40,70 @@ On every uploaded CSV the function:
 1. **Parses** the JobSpy export, tolerating what that data actually contains —
    descriptions with embedded newlines and quotes, Python `True`/`False`, columns that are
    empty in every row, multi-valued `job_type`. A row it cannot parse is counted, not fatal.
-2. **Reconciles** postings against Azure SQL, keyed by `site:external_id`, tracking
+2. **Enriches** each posting in memory — seniority, role family, work arrangement, salary
+   recovered from prose, years of experience, company key, job types, tags, and the concepts
+   it asks for. All of it pure CPU work, so it adds no round trip.
+3. **Reconciles** postings against Azure SQL, keyed by `site:external_id`, tracking
    first-seen and last-seen so *new* postings can be distinguished from re-listings.
-3. **Computes metrics** and writes them to Cosmos DB.
+4. **Computes metrics** and writes them to Cosmos DB.
 
 Ingestion is idempotent: run identity is the blob path (unique in SQL) and metric document
 ids are derived from it, so a redelivered event or a manual replay converges instead of
-duplicating.
+duplicating. The derived rows follow the same rule — assertions are rewritten only for
+postings whose content actually changed.
+
+## Structured extraction
+
+Most of what a job advert says is in its description, and a description is not something you
+can `GROUP BY`. Three passes turn it into something you can.
+
+**The vocabulary** is 213 concepts — skills, the domains above them, and qualifications
+including UK security clearances — arranged as a **DAG rather than a tree**. Two parent axes:
+`type.*` says what kind of thing a concept is, `area.*` says where it is used. That is not
+tidiness; the data needs it. Python is a language *and* is used in backend, data and ML, and
+the flat category field this replaced could record only one of those.
+
+The concept **key** is the identity (`skill.kubernetes`), never the label. `k8s`, `K8S` and
+`Kubernetes` land on one row, and renaming a label stays an edit rather than a migration.
+
+**What cannot be resolved is recorded, not dropped.** "Go", "R", "C" and "Julia" are ordinary
+words; matching them on sight would manufacture demand that does not exist, and silently
+skipping them — which is what the previous vocabulary did — made the data wrong with no way
+to measure by how much. They land in `PostingMentions` instead, which doubles as the list of
+concepts worth adding next.
+
+**A model pass is optional and skipped entirely when no provider is configured.** It runs on
+a queue rather than inside the ingest, because the ingest throws to force Event Grid
+redelivery and anything expensive in it would replay on every retry. It is asked only for
+what a regex genuinely cannot do — required versus nice-to-have, years tied to one skill,
+seniority when the title is uninformative — is handed the vocabulary as its allowed output
+set, and has every key it returns re-checked against the graph. An invented key would be
+indistinguishable from a real one in SQL.
+
+## The curated zone
+
+A daily timer rebuilds `jobs-curated` from SQL as partitioned Parquet — readable by DuckDB,
+pandas, Fabric or Synapse serverless with nothing running:
+
+```
+curated/postings/searchTerm=<slug>/date=<yyyy-MM-dd>/postings.parquet
+curated/pairs/searchTerm=<slug>/date=<yyyy-MM-dd>/pairs.parquet
+```
+
+The first is the denormalised gold row, with each posting's concepts already rolled up to
+their domains so a query never needs the closure table. The second is the interesting one:
+`(title, seniority, concept_key, polarity, years, source, evidence)` — around 1.6M rows a
+year, in the shape published job-domain encoders are fine-tuned on, and a plain edge list for
+`node2vec` or PyTorch Geometric. It is why building the concept graph properly was worth
+doing, and it needs no graph database to be useful.
+
+Partitions are **recomputed whole, never appended**, so a re-run converges and a failed one
+needs no cleanup.
+
+```sql
+-- DuckDB, straight off the container
+SELECT seniority_name, count(*) FROM 'curated/postings/**/*.parquet' GROUP BY 1;
+```
 
 ## The metrics
 
@@ -158,7 +221,8 @@ component changing. The UI shows which feed is live so freshness is never a gues
 ## Repository layout
 
 ```
-src/JobPlatform.Core         Domain, CSV parsing, metrics. No Azure dependencies.
+src/JobPlatform.Core         Domain, CSV parsing, metrics, the concept vocabulary and every
+                             deterministic classifier. No Azure dependencies.
 src/JobPlatform.Data         EF Core (SQL) + Cosmos repositories, read and write sides.
 src/JobPlatform.Ingestion    The Azure Function.
 src/JobPlatform.Ai           Semantic Kernel + Claude provider. Standalone, so the SDK reaches nothing else.
@@ -233,6 +297,21 @@ curl -X POST "https://<function-app>.azurewebsites.net/api/reprocess?code=<funct
 ```
 
 Same pipeline, same idempotency guarantees.
+
+Two more admin endpoints, for the pieces that do not run on the daily path:
+
+```bash
+# Rebuild curated Parquet for a range of days. Recomputed, so re-running is free.
+curl -X POST ".../api/export-curated?code=<key>"      -H 'Content-Type: application/json' -d '{"date":"2026-08-22","days":7}'
+
+# Queue everything without a current model extraction. Returns queued: 0 with a reason
+# when no AI provider is configured, which is how this ships.
+curl -X POST ".../api/backfill-extraction?code=<key>"      -H 'Content-Type: application/json' -d '{"limit":500}'
+```
+
+The extraction backfill is limited per call on purpose: the first run after configuring a
+provider would otherwise queue the whole corpus, and that bill should be a decision rather
+than a side effect.
 
 ## Cost
 
