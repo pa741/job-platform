@@ -2,6 +2,7 @@ using Azure.Storage.Blobs;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Azure.Functions.Worker;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace JobPlatform.Ingestion.Functions;
@@ -25,7 +26,7 @@ namespace JobPlatform.Ingestion.Functions;
 /// only as a 404.
 /// </remarks>
 public sealed class ReprocessBlobFunction(
-    IngestionPipeline pipeline,
+    IServiceScopeFactory scopeFactory,
     BlobContainerClient landingContainer,
     ILogger<ReprocessBlobFunction> logger)
 {
@@ -57,7 +58,15 @@ public sealed class ReprocessBlobFunction(
                 var client = landingContainer.GetBlobClient(blob.Name);
                 using var content = await client.OpenReadAsync(cancellationToken: ct);
 
-                await pipeline.ProcessAsync(
+                // A scope per blob, because that is what the blob trigger gets: one
+                // invocation, one DbContext, one unit of work. Sharing a scope across the
+                // loop shares a change tracker too, and a posting present in two blobs is
+                // then attached twice - which is fine while ingest only mutates scalars and
+                // fails the moment it starts adding child rows. This is what "the trigger and
+                // the reprocess endpoint run the same path" has to mean.
+                await using var scope = scopeFactory.CreateAsyncScope();
+
+                await scope.ServiceProvider.GetRequiredService<IngestionPipeline>().ProcessAsync(
                     content,
                     blob.Name,
                     blob.Properties.ETag?.ToString(),

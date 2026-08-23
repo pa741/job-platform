@@ -200,6 +200,51 @@ public sealed class ConceptPersistenceTests : IDisposable
     }
 
     [Fact]
+    public async Task Two_blobs_sharing_a_posting_can_be_ingested_through_one_context()
+    {
+        // Regression, found in production. Every other test here uses a fresh context per
+        // blob, which is what the blob trigger gets - one invocation, one scope. The
+        // reprocess endpoint looped over blobs inside a single scope, so the change tracker
+        // carried entities from one blob into the next and the second attach collided on
+        // (PostingId, ConceptId, Source). It was invisible while ingest only mutated scalars.
+        await using var db = CreateContext();
+        var repository = Repository(db);
+
+        await repository.IngestAsync(Context("run1.csv"), [Posting(id: "a1")], 1, 0);
+        await repository.IngestAsync(Context("run2.csv"), [Posting(id: "a1")], 1, 0);
+
+        Assert.Equal(1, await db.JobPostings.CountAsync());
+    }
+
+    [Fact]
+    public async Task One_surface_form_yields_one_mention_however_many_sources_saw_it()
+    {
+        // "Go" appears in the description as an ambiguous word and in the board's skills
+        // list as an unresolvable entry. Two reasons, one (PostingId, SurfaceForm) key.
+        await using var db = CreateContext();
+
+        await Repository(db).IngestAsync(
+            Context("run1.csv"),
+            [Posting(description: "You will go above and beyond.", skills: ["Go"])],
+            1, 0);
+
+        var mentions = await db.PostingMentions.ToListAsync();
+
+        // The two sources wrote different cases - "go" in the prose, "Go" in the skills list.
+        // SQL Server's collation is case-insensitive, so those are one primary key there even
+        // though SQLite and EF's change tracker compare them ordinally. Deduplicating on the
+        // way in is what makes the two engines agree.
+        var forGo = mentions.Where(
+            m => m.SurfaceForm.Equals("go", StringComparison.OrdinalIgnoreCase)).ToList();
+
+        var mention = Assert.Single(forGo);
+
+        // The ambiguous reading wins: the vocabulary knows that form and distrusts it, which
+        // is a more specific statement than "never heard of it".
+        Assert.Equal(MentionReason.Ambiguous, mention.Reason);
+    }
+
+    [Fact]
     public async Task Companies_are_deduplicated_across_spellings()
     {
         await using var db = CreateContext();

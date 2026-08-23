@@ -515,7 +515,15 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
             });
         }
 
-        foreach (var mention in enriched.Mentions)
+        // Keyed on (PostingId, SurfaceForm), and the same form can arrive twice: the
+        // description says "Go" and the board also lists a skill "Go" that resolves to
+        // nothing. Two mentions, two reasons, one key. The ambiguous reading wins because it
+        // is the more specific claim - the vocabulary knows that form and distrusts it.
+        var mentions = enriched.Mentions
+            .GroupBy(m => m.SurfaceForm, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderBy(m => m.Reason).First());
+
+        foreach (var mention in mentions)
         {
             entity.Mentions.Add(new PostingMentionEntity
             {
