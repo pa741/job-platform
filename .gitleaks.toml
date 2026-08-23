@@ -18,6 +18,14 @@ id = "generic-api-key"
 
   Allowlisted by explicit value rather than by path or rule suppression, so a genuine secret
   in the same file is still caught, and adding a new role id is a deliberate edit here.
+
+  The last entry is a different false positive with the same character. concepts.json is the
+  skill vocabulary, and every one of its 213 entries reads `"key": "qual.prince2"` or
+  similar; the rule looks for the word `key` followed by something entropic, which a concept
+  key is by coincidence. It is matched by the shape of a concept key rather than by path, so
+  the file is still scanned for everything else - a real credential cannot satisfy a pattern
+  requiring one of five fixed namespace prefixes followed by lowercase, digits, dots and
+  hyphens only.
   """
   regexes = [
     # Storage Blob Data Reader
@@ -32,4 +40,7 @@ id = "generic-api-key"
     '''4633458b-17de-408a-b874-0445c86b69e6''',
     # Storage Blob Data Contributor - scoped to the jobs-curated container only
     '''ba92f5b4-2d11-453d-a403-e96b0029c9fe''',
+    # Concept keys in the skill vocabulary, e.g. the value in "key": "qual.prince2".
+    # Allowlist regexes are matched against the extracted secret, not the whole line.
+    '''(?:skill|domain|type|area|qual)\.[a-z0-9.\-]+''',
   ]
