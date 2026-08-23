@@ -51,8 +51,7 @@ public sealed class CuratedExporter(
         var day = date.ToString("yyyy-MM-dd");
 
         var terms = await db.JobPostingSearchTerms
-            .Where(l => l.LastSeenUtc >= date.ToDateTime(TimeOnly.MinValue)
-                && l.LastSeenUtc < date.AddDays(1).ToDateTime(TimeOnly.MinValue))
+            .Where(l => l.LastSeenRun!.ScrapeDate == date)
             .Select(l => l.SearchTerm)
             .Distinct()
             .ToListAsync(ct);
@@ -90,19 +89,32 @@ public sealed class CuratedExporter(
         return new CuratedExportResult(terms.Count, totalPostings, totalPairs);
     }
 
+    /// <summary>
+    /// One partition: the postings a search last surfaced on that scrape date.
+    /// </summary>
+    /// <remarks>
+    /// Keyed on the <b>run's scrape date</b>, which comes from the blob name, rather than on
+    /// <c>LastSeenUtc</c>, which is stamped when the row was written. The difference only
+    /// shows up during a backfill, and then it shows up badly: re-ingesting a year of blobs
+    /// today would stamp every posting with today's timestamp and collapse the whole corpus
+    /// into a single partition dated the day the backfill ran. The scrape date is a property
+    /// of the data, so a partition means the same thing however many times it is rebuilt.
+    ///
+    /// Each posting lands in exactly one partition per search - the day that search last saw
+    /// it. That makes the zone a snapshot by recency rather than a full daily census, which
+    /// is what the link table can actually support: it records first and last, not every day
+    /// in between.
+    /// </remarks>
     private async Task<(List<CuratedPosting> Postings, List<CuratedPair> Pairs)> BuildAsync(
         string term,
         DateOnly date,
         ConceptGraph graph,
         CancellationToken ct)
     {
-        var from = date.ToDateTime(TimeOnly.MinValue);
-        var to = date.AddDays(1).ToDateTime(TimeOnly.MinValue);
-
         // Projected rather than materialising entities: Description is nvarchar(max) and is
         // not in the curated row, so pulling it across would multiply the transfer for nothing.
         var rows = await db.JobPostingSearchTerms
-            .Where(l => l.SearchTerm == term && l.LastSeenUtc >= from && l.LastSeenUtc < to)
+            .Where(l => l.SearchTerm == term && l.LastSeenRun!.ScrapeDate == date)
             .Select(l => new
             {
                 l.Posting!.Id,

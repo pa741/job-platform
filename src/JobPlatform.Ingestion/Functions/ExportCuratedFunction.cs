@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using JobPlatform.Ingestion.Curated;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -55,9 +56,14 @@ public sealed class ExportCuratedFunction(
     public async Task<IActionResult> ExportCuratedBackfill(
         [HttpTrigger(AuthorizationLevel.Function, "post", Route = "export-curated")]
         HttpRequest request,
-        [FromBody] ExportRequest? body,
         CancellationToken ct)
     {
+        // Read and parse the body here rather than through [FromBody]. The worker's binder
+        // silently handed this method a null for a well-formed body, and a silently-ignored
+        // parameter on a backfill endpoint is worse than a 400: the call returns 200 having
+        // quietly done something other than what was asked.
+        var body = await ReadBodyAsync(request, ct);
+
         var end = ParseDate(body?.Date) ?? DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-1);
         var days = Math.Clamp(body?.Days ?? 1, 1, MaxDays);
 
@@ -83,6 +89,28 @@ public sealed class ExportCuratedFunction(
             pairs,
         });
     }
+
+    private static async Task<ExportRequest?> ReadBodyAsync(HttpRequest request, CancellationToken ct)
+    {
+        if (request.ContentLength is null or 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            return await JsonSerializer.DeserializeAsync<ExportRequest>(request.Body, JsonOptions, ct);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
 
     private static DateOnly? ParseDate(string? raw)
         => DateOnly.TryParseExact(raw, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)
