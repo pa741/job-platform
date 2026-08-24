@@ -1,3 +1,4 @@
+using JobPlatform.Core.Enrichment;
 using JobPlatform.Data.Sql.Entities;
 using Microsoft.EntityFrameworkCore;
 
@@ -210,7 +211,7 @@ public sealed class JobPostingQueryRepository(JobsDbContext db)
         return rows.Select(r => new NamedCountRow(r.Name, r.Count)).ToList();
     }
 
-    private static IQueryable<JobPostingEntity> Filter(
+    private IQueryable<JobPostingEntity> Filter(
         IQueryable<JobPostingEntity> query, PostingSearchCriteria criteria)
     {
         if (!string.IsNullOrWhiteSpace(criteria.SearchTerm))
@@ -292,6 +293,79 @@ public sealed class JobPostingQueryRepository(JobsDbContext db)
         if (criteria.FirstSeenTo is { } firstSeenTo)
         {
             query = query.Where(p => p.FirstSeenUtc <= firstSeenTo);
+        }
+
+        return ApplyStructuredFilters(query, criteria);
+    }
+
+    /// <summary>
+    /// The axes that only exist because of enrichment.
+    /// </summary>
+    /// <remarks>
+    /// Separate from the rest for readability rather than for any behavioural reason - the
+    /// filter chain was already long, and these all share one property worth stating in one
+    /// place: every one of them is indexed. Seniority, RoleFamily, WorkArrangement and
+    /// SourceBoard each have an index, and the concept filter goes through the closure's
+    /// (DescendantId, AncestorId) index. A filter here should never be a scan.
+    /// </remarks>
+    private IQueryable<JobPostingEntity> ApplyStructuredFilters(
+        IQueryable<JobPostingEntity> query,
+        PostingSearchCriteria criteria)
+    {
+        if (!string.IsNullOrWhiteSpace(criteria.Concept))
+        {
+            var concept = criteria.Concept;
+
+            // Through the closure, so asking for area.backend returns everything underneath
+            // it without the caller enumerating what that is. Asking for skill.kubernetes
+            // matches only itself, because a concept is its own ancestor at depth 0 - which
+            // is why those self rows exist and why one query shape serves both questions.
+            query = query.Where(p => p.Concepts.Any(pc =>
+                db.ConceptClosure.Any(cc =>
+                    cc.DescendantId == pc.ConceptId && cc.Ancestor!.ConceptKey == concept)));
+        }
+
+        if (criteria.MinSeniority is { } minSeniority)
+        {
+            // Unknown is 0 and would pass every "at least junior" filter if it were included,
+            // which would make the filter meaningless on a corpus where 18% is unknown.
+            query = query.Where(p => p.Seniority != Seniority.Unknown && p.Seniority >= minSeniority);
+        }
+
+        if (criteria.MaxSeniority is { } maxSeniority)
+        {
+            query = query.Where(p => p.Seniority != Seniority.Unknown && p.Seniority <= maxSeniority);
+        }
+
+        if (criteria.RoleFamily is { } roleFamily)
+        {
+            query = query.Where(p => p.RoleFamily == roleFamily);
+        }
+
+        if (criteria.WorkArrangement is { } arrangement)
+        {
+            query = query.Where(p => p.WorkArrangement == arrangement);
+        }
+
+        if (!criteria.IncludeTextSalary)
+        {
+            query = query.Where(p => !p.SalaryFromText);
+        }
+
+        if (criteria.MinAnnualSalary is { } minAnnual)
+        {
+            query = query.Where(p => p.AnnualSalaryMax >= minAnnual || p.AnnualSalaryMin >= minAnnual);
+        }
+
+        if (criteria.RequiresSecurityClearance is { } clearance)
+        {
+            query = query.Where(p => p.RequiresSecurityClearance == clearance);
+        }
+
+        if (!string.IsNullOrWhiteSpace(criteria.Ir35))
+        {
+            var ir35 = criteria.Ir35;
+            query = query.Where(p => p.Ir35 == ir35);
         }
 
         return query;

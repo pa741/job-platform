@@ -1,3 +1,5 @@
+using JobPlatform.Core.Enrichment;
+
 namespace JobPlatform.Data.Sql;
 
 public enum PostingSort
@@ -27,6 +29,52 @@ public sealed record PostingSearchCriteria
     public bool? IsRemote { get; init; }
     public bool? HasSalary { get; init; }
     public decimal? MinSalary { get; init; }
+
+    // --- the structured axes ------------------------------------------------
+
+    /// <summary>
+    /// A concept key, matched through the closure.
+    /// </summary>
+    /// <remarks>
+    /// <c>skill.kubernetes</c> returns postings that named Kubernetes; <c>area.backend</c>
+    /// returns everything that named anything under it, without the caller having to know
+    /// what is under it. That is the whole point of materialising the closure - the query is
+    /// the same shape either way.
+    /// </remarks>
+    public string? Concept { get; init; }
+
+    /// <summary>Minimum inclusive, on the ordinal scale. 4 is Senior.</summary>
+    public Seniority? MinSeniority { get; init; }
+
+    public Seniority? MaxSeniority { get; init; }
+
+    public RoleFamily? RoleFamily { get; init; }
+
+    public WorkArrangement? WorkArrangement { get; init; }
+
+    /// <summary>
+    /// Salary on the annualised column rather than the board's raw one.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="MinSalary"/>, which filters what the scraper delivered. Most
+    /// of the corpus has a salary only because it was recovered from prose, so a filter on
+    /// the raw column silently excludes three quarters of what is actually known.
+    /// </remarks>
+    public decimal? MinAnnualSalary { get; init; }
+
+    /// <summary>
+    /// Whether to include salaries recovered from description text. Default true.
+    /// </summary>
+    /// <remarks>
+    /// A figure from prose is weaker evidence than a figure the employer typed into a salary
+    /// field, and an analysis that wants only the latter has to be able to say so.
+    /// </remarks>
+    public bool IncludeTextSalary { get; init; } = true;
+
+    public bool? RequiresSecurityClearance { get; init; }
+
+    /// <summary><c>inside</c> or <c>outside</c>. UK contract market only.</summary>
+    public string? Ir35 { get; init; }
 
     public DateOnly? PostedFrom { get; init; }
     public DateOnly? PostedTo { get; init; }

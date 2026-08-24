@@ -1,5 +1,6 @@
 using JobPlatform.Api.Endpoints;
 using JobPlatform.Api.Infrastructure;
+using JobPlatform.Core.Enrichment;
 using JobPlatform.Data.Sql;
 using Microsoft.AspNetCore.Mvc;
 
@@ -56,6 +57,15 @@ public sealed class PostingEndpoints : IEndpointGroup
         DateOnly? postedTo = null,
         DateTimeOffset? firstSeenFrom = null,
         DateTimeOffset? firstSeenTo = null,
+        string? concept = null,
+        string? minSeniority = null,
+        string? maxSeniority = null,
+        string? roleFamily = null,
+        string? workArrangement = null,
+        decimal? minAnnualSalary = null,
+        bool includeTextSalary = true,
+        bool? securityClearance = null,
+        string? ir35 = null,
         string sort = "lastSeen",
         string order = "desc",
         int limit = 25,
@@ -76,6 +86,32 @@ public sealed class PostingEndpoints : IEndpointGroup
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
+        // Rejected rather than ignored. A mistyped enum that silently drops its filter
+        // returns a plausible page of the wrong postings, and nothing about the response
+        // says so - which is worse than an error, because it gets believed.
+        if (!TryParseEnum<Seniority>(minSeniority, out var parsedMinSeniority, out var seniorityError)
+            || !TryParseEnum<Seniority>(maxSeniority, out var parsedMaxSeniority, out seniorityError))
+        {
+            return TypedResults.Problem(seniorityError, statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        if (!TryParseEnum<RoleFamily>(roleFamily, out var parsedRoleFamily, out var familyError))
+        {
+            return TypedResults.Problem(familyError, statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        if (!TryParseEnum<WorkArrangement>(workArrangement, out var parsedArrangement, out var arrangementError))
+        {
+            return TypedResults.Problem(arrangementError, statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        if (ir35 is not null and not "inside" and not "outside")
+        {
+            return TypedResults.Problem(
+                detail: $"Unknown ir35 '{ir35}'. Valid values: inside, outside.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
         var criteria = new PostingSearchCriteria
         {
             SearchTerm = searchTerm,
@@ -92,6 +128,15 @@ public sealed class PostingEndpoints : IEndpointGroup
             PostedTo = postedTo,
             FirstSeenFrom = firstSeenFrom,
             FirstSeenTo = firstSeenTo,
+            Concept = concept,
+            MinSeniority = parsedMinSeniority,
+            MaxSeniority = parsedMaxSeniority,
+            RoleFamily = parsedRoleFamily,
+            WorkArrangement = parsedArrangement,
+            MinAnnualSalary = minAnnualSalary,
+            IncludeTextSalary = includeTextSalary,
+            RequiresSecurityClearance = securityClearance,
+            Ir35 = ir35,
             Sort = parsedSort,
             Descending = !string.Equals(order, "asc", StringComparison.OrdinalIgnoreCase),
             Limit = limit,
@@ -132,6 +177,37 @@ public sealed class PostingEndpoints : IEndpointGroup
     {
         var facets = await repository.GetFacetsAsync(searchTerm, ct);
         return TypedResults.Ok(facets.ToResponse());
+    }
+
+    /// <summary>
+    /// Parses an optional enum query parameter, naming the valid values when it fails.
+    /// </summary>
+    /// <remarks>
+    /// Absent is fine and means "no filter". Present-but-unrecognised is an error, because
+    /// the alternative - dropping the filter - answers a different question than the one
+    /// asked and looks exactly like a correct answer.
+    /// </remarks>
+    private static bool TryParseEnum<T>(string? raw, out T? parsed, out string? error)
+        where T : struct, Enum
+    {
+        parsed = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return true;
+        }
+
+        if (Enum.TryParse<T>(raw, ignoreCase: true, out var value))
+        {
+            parsed = value;
+            return true;
+        }
+
+        error = $"Unknown {typeof(T).Name} '{raw}'. Valid values: "
+            + string.Join(", ", Enum.GetNames<T>());
+
+        return false;
     }
 
     private static bool TryParseSort(string value, out PostingSort sort)

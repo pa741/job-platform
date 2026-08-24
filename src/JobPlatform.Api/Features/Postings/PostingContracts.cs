@@ -1,3 +1,5 @@
+using JobPlatform.Core;
+
 namespace JobPlatform.Api.Features.Postings;
 
 /// <summary>
@@ -30,6 +32,55 @@ public sealed record PostingSummary
     public decimal? MaxAmount { get; init; }
     public string? Currency { get; init; }
     public string? SalaryInterval { get; init; }
+
+    // --- derived ------------------------------------------------------------
+
+    /// <summary>
+    /// Salary on one scale, from the board's columns where it filled them and from the
+    /// description where it did not.
+    /// </summary>
+    /// <remarks>
+    /// Kept beside <see cref="MinAmount"/> rather than replacing it. That one is what the
+    /// scraper delivered and is what the fill-rate metrics measure; overwriting it would make
+    /// coverage look like it improved when only the inference did. Most of the corpus has a
+    /// figure here and not there.
+    /// </remarks>
+    public decimal? AnnualSalaryMin { get; init; }
+    public decimal? AnnualSalaryMax { get; init; }
+    public string? AnnualSalaryCurrency { get; init; }
+
+    /// <summary>
+    /// True where the figure came from prose. Weaker evidence, and a client averaging across
+    /// both without splitting on this is measuring two different things at once.
+    /// </summary>
+    public bool SalaryFromText { get; init; }
+
+    /// <summary>
+    /// What the source said before annualisation. A GBP 600/day contract annualised to
+    /// 156,000 is not the same offer as a 156,000 salary, and this is the only field that
+    /// distinguishes them afterwards.
+    /// </summary>
+    public string? SalaryStatedInterval { get; init; }
+
+    /// <summary>Ordinal, so it sorts. Unknown for the 18% of titles that say nothing.</summary>
+    public string Seniority { get; init; } = nameof(Core.Enrichment.Seniority.Unknown);
+
+    public string RoleFamily { get; init; } = nameof(Core.Enrichment.RoleFamily.Unknown);
+
+    /// <summary>
+    /// The three-way answer <see cref="IsRemote"/> cannot express.
+    /// </summary>
+    public string WorkArrangement { get; init; } = nameof(Core.Enrichment.WorkArrangement.Unknown);
+
+    public int? HybridDaysInOffice { get; init; }
+
+    public int? YearsExperienceMin { get; init; }
+    public int? YearsExperienceMax { get; init; }
+
+    public bool RequiresSecurityClearance { get; init; }
+
+    /// <summary><c>inside</c>, <c>outside</c>, or null.</summary>
+    public string? Ir35 { get; init; }
 
     public string? JobUrl { get; init; }
 

@@ -136,7 +136,7 @@ ingest function uses.
 
 | Route | |
 | --- | --- |
-| `GET /api/v1/postings` | Search: free text, site, company, job type, location, remote, salary, date ranges; five sort orders |
+| `GET /api/v1/postings` | Search: free text, site, company, job type, location, remote, salary, date ranges; five sort orders. Plus the structured axes below |
 | `GET /api/v1/postings/{id}` | One posting in full |
 | `GET /api/v1/postings/facets` | Filter vocabulary and totals, for building a filter UI in one round trip |
 | `GET /api/v1/search-terms` | The axis everything partitions on |
@@ -149,6 +149,33 @@ ingest function uses.
 | `GET /health`, `/health/ready` | Liveness (touches nothing), readiness (Cosmos only) |
 
 OpenAPI at `/openapi/v1.json`, with a Scalar UI at `/scalar/v1`.
+
+### Searching the structured axes
+
+```bash
+# Everything under a domain, without knowing what is under it. The match runs through the
+# closure, so this returns postings that never use the words "backend development".
+GET /api/v1/postings?concept=area.backend
+
+# Or one concept exactly. Same query shape, because a concept is its own ancestor at depth 0.
+GET /api/v1/postings?concept=skill.kubernetes
+
+GET /api/v1/postings?minSeniority=Senior&workArrangement=Hybrid
+GET /api/v1/postings?roleFamily=Data&ir35=outside
+GET /api/v1/postings?securityClearance=true
+```
+
+`minAnnualSalary` filters the **annualised** figure, not the board's raw column. That matters
+more than it sounds: only 2.5% of the corpus has a salary in the column the scraper delivered,
+against 25.6% once the description has been read, so a filter on the raw column silently
+excludes nine tenths of what is actually known. A day rate is annualised onto the same scale,
+which is what lets a contract at £550/day be compared against a £110,000 salary at all —
+`salaryStatedInterval` is what stops the two being confused afterwards. Pass
+`includeTextSalary=false` to see only what an employer typed into a salary field.
+
+An unrecognised value for any of these is a `400`, not a silently dropped filter: dropping it
+returns a plausible page of the wrong postings with nothing in the response to say so, and
+that gets believed.
 
 ### What shapes it
 
