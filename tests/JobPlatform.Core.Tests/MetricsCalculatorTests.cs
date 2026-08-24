@@ -89,7 +89,51 @@ public sealed class MetricsCalculatorTests
     {
         // The size of the vocabulary's blind spot, knowable only because unresolved forms
         // are recorded instead of dropped.
-        Assert.True(EnrichedDigest().Enrichment.UnresolvedMentions > 0);
+        var enrichment = EnrichedDigest().Enrichment;
+
+        Assert.True(enrichment.UnresolvedMentions > 0);
+
+        // And what is in it. Asserting only the count is how a dashboard ends up announcing
+        // a number it cannot show - the count says how big the gap is, the list says what is
+        // in it, and only the second one can be acted on.
+        Assert.NotEmpty(enrichment.TopUnresolved);
+        Assert.All(enrichment.TopUnresolved, u =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(u.Form));
+            Assert.True(u.Count > 0);
+        });
+
+        // Ranked, because the list exists to be read in priority order.
+        Assert.Equal(
+            enrichment.TopUnresolved.OrderByDescending(u => u.Count).Select(u => u.Count),
+            enrichment.TopUnresolved.Select(u => u.Count));
+    }
+
+    [Fact]
+    public void One_word_written_two_ways_is_one_entry()
+    {
+        // "Go" and "go" are the same problem written twice. Splitting them would put the
+        // same word in two rows at half the weight each, which is how a to-do list stops
+        // looking urgent.
+        var forms = EnrichedDigest().Enrichment.TopUnresolved.Select(u => u.Form).ToList();
+
+        Assert.Equal(forms.Count, forms.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+    }
+
+    [Fact]
+    public void An_unresolved_form_says_whether_it_needs_context_or_vocabulary()
+    {
+        // The two halves need opposite responses: an ambiguous form is a word the vocabulary
+        // already knows and distrusts, and adding an entry for it would be exactly wrong.
+        var reasons = EnrichedDigest().Enrichment.TopUnresolved
+            .Select(u => u.Reason)
+            .Distinct()
+            .ToList();
+
+        Assert.All(reasons, r => Assert.Contains(
+            r, new[] { "Ambiguous", "UnknownBoardSkill", "UnknownModelSkill" }));
+
+        Assert.Contains("Ambiguous", reasons);
     }
 
     [Fact]

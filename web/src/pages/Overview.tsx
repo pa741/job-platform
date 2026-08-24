@@ -139,17 +139,44 @@ export function Overview({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
           title="What the vocabulary could not place"
           subtitle={`${enrichment.unresolvedMentions.toLocaleString()} mentions in the last run`}
         >
-          {/* Surfaced rather than hidden. These are words the resolver saw and refused to
-              guess at - a bare "Go" that might be the language or the verb, or a skill an
-              employer typed that the vocabulary has never heard of. The number is only
-              knowable because they are recorded instead of dropped, and it is the honest
-              size of the blind spot rather than a defect count. */}
-          <p className="muted" style={{ margin: 0, fontSize: 13 }}>
-            Surface forms the resolver saw and declined to guess at — an ambiguous word like
-            a bare <code>Go</code>, or a skill the vocabulary has not learned yet. They are
-            recorded rather than discarded, which is the only reason this number exists;
-            the most frequent of them are what the vocabulary should learn next.
+          {/* Surfaced rather than hidden, and listed rather than counted. The number alone
+              says how big the blind spot is; the forms say what is in it, which is the only
+              part anyone can act on. The reason column matters because the two halves need
+              opposite responses - an ambiguous form needs context, not an entry. */}
+          <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+            Surface forms the resolver saw and declined to guess at. They are recorded rather
+            than discarded, which is the only reason this list can exist — and the frequent
+            ones are what the vocabulary should learn next.
           </p>
+
+          <div className="scroll-x">
+            <table>
+              <thead>
+                <tr>
+                  <th>Form</th><th>Needs</th><th className="num">Mentions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {enrichment.topUnresolved.map((entry) => (
+                  <tr key={`${entry.form}:${entry.reason}`}>
+                    <td><code>{entry.form}</code></td>
+                    <td>
+                      {entry.reason === 'Ambiguous' ? (
+                        <span title="The vocabulary knows this word and distrusts it — it needs surrounding context to resolve, not a new entry">
+                          context
+                        </span>
+                      ) : (
+                        <span title="The vocabulary has no concept for this — it is a genuine gap">
+                          vocabulary
+                        </span>
+                      )}
+                    </td>
+                    <td className="num">{entry.count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </Card>
       )}
 

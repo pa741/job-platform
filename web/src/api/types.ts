@@ -169,6 +169,15 @@ export interface EnrichmentBreakdown {
   medianAnnualSalary: number | null;
   /** Surface forms seen and not resolved - the size of the vocabulary's blind spot. */
   unresolvedMentions: number;
+  /** And what is actually in it, most frequent first - the only actionable part. */
+  topUnresolved: UnresolvedCount[];
+}
+
+export interface UnresolvedCount {
+  form: string;
+  /** 'Ambiguous' needs context; 'UnknownBoardSkill' / 'UnknownModelSkill' need vocabulary. */
+  reason: string;
+  count: number;
 }
 
 export interface DailyRollup {

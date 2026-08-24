@@ -130,8 +130,35 @@ public sealed class MetricsCalculator(TimeProvider? timeProvider = null)
             SalaryFromTextShare = Share(fromText, withSalary),
             MedianAnnualSalary = salaries.Count == 0 ? null : salaries[salaries.Count / 2],
             UnresolvedMentions = enriched.Sum(e => e.Mentions.Count),
+            TopUnresolved = TopUnresolved(enriched),
         };
     }
+
+    /// <summary>
+    /// The unresolved forms, folded case-insensitively and ranked.
+    /// </summary>
+    /// <remarks>
+    /// Case-insensitive because "Go" and "go" are the same problem written twice, and
+    /// splitting them would put the same word in two rows at half the weight each - which
+    /// is exactly how a to-do list stops looking urgent.
+    ///
+    /// Occurrences are summed rather than postings counted: a description that says "go"
+    /// four times is stronger evidence about that word than one that says it once, and this
+    /// list exists to be read in priority order.
+    /// </remarks>
+    private static IReadOnlyList<UnresolvedCount> TopUnresolved(
+        IReadOnlyList<EnrichedPosting> enriched,
+        int take = 12)
+        => [.. enriched
+            .SelectMany(e => e.Mentions)
+            .GroupBy(m => m.SurfaceForm, StringComparer.OrdinalIgnoreCase)
+            .Select(g => new UnresolvedCount(
+                g.First().SurfaceForm,
+                g.First().Reason.ToString(),
+                g.Sum(m => m.Occurrences)))
+            .OrderByDescending(u => u.Count)
+            .ThenBy(u => u.Form, StringComparer.OrdinalIgnoreCase)
+            .Take(take)];
 
     private static IReadOnlyDictionary<string, int> CountEnum(
         IReadOnlyList<EnrichedPosting> enriched,

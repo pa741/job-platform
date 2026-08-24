@@ -146,4 +146,21 @@ public sealed record EnrichmentBreakdown
     /// dropped. A rising number here is the signal to extend the vocabulary.
     /// </remarks>
     public int UnresolvedMentions { get; init; }
+
+    /// <summary>
+    /// The forms themselves, most frequent first.
+    /// </summary>
+    /// <remarks>
+    /// The count alone says how big the blind spot is; this says what is in it, which is the
+    /// only part anyone can act on. Two different problems share this list and the reason
+    /// separates them: an ambiguous form is a word the vocabulary knows and distrusts, and
+    /// needs context to resolve rather than a new entry; an unknown one is a genuine gap and
+    /// is simply missing.
+    /// </remarks>
+    public IReadOnlyList<UnresolvedCount> TopUnresolved { get; init; } = [];
 }
+
+/// <param name="Form">The surface form, as the source wrote it.</param>
+/// <param name="Reason">Why it was not resolved. See <c>MentionReason</c>.</param>
+/// <param name="Count">Occurrences across the run.</param>
+public sealed record UnresolvedCount(string Form, string Reason, int Count);
