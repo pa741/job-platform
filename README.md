@@ -216,6 +216,28 @@ A React SPA on Static Web Apps (Free tier), signing in with MSAL and calling the
 an Entra bearer token. Two pages: an overview of the market metrics, and a filterable
 postings browser.
 
+**The overview shows two salary numbers, and the gap between them is the point.** "Salary in
+the columns" is what the boards filled in; "salary known" is what is there once descriptions
+have been read. They differ by roughly a factor of ten, and showing only the first would
+understate the market while looking authoritative.
+
+Alongside them: seniority mix, the three-way work-arrangement split a remote flag cannot
+express, and demand shown twice — as individual concepts and **rolled up through the closure**
+into areas. Those two answer different questions rather than one summarising the other:
+individual tools scatter across a dozen ways of saying the same thing, and the rollup is what
+shows whether the market wants backend or data people. It is the one number on the page that
+could not exist without the concept graph.
+
+The last card is **what the vocabulary could not place** — surface forms the resolver saw and
+declined to guess at. That number is only knowable because unresolved forms are recorded
+rather than dropped, and the most frequent of them are the list of what to learn next.
+
+The postings browser filters on skill or area, seniority floor, working pattern and minimum
+salary. The salary column shows the **annualised** figure, because the raw one is empty for
+about 97% of rows — a column reading "—" almost everywhere suggests the market does not
+disclose, when mostly we just were not reading. A day rate is marked, since annualised it is
+comparable but not a salary.
+
 **Charts follow one rule set rather than taste.** The categorical palette is validated for
 colour-vision deficiency rather than eyeballed — every adjacent pair clears a ΔE separation
 floor under deuteranopia, protanopia and tritanopia, in both light and dark. Dark mode is a

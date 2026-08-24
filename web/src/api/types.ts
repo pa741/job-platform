@@ -23,13 +23,43 @@ export interface PostingSummary {
   location: string | null;
   city: string | null;
   country: string | null;
-  isRemote: boolean;
+  /** Null where the board said nothing, which is most of the corpus - not false. */
+  isRemote: boolean | null;
   jobType: string | null;
   datePosted: string | null;
+  /** What the scraper delivered. Empty for ~97% of rows. */
   minAmount: number | null;
   maxAmount: number | null;
   currency: string | null;
   salaryInterval: string | null;
+
+  /**
+   * Salary on one scale, from the board's columns where it filled them and from the
+   * description where it did not. This is the one to display: the raw columns above are
+   * populated an order of magnitude less often.
+   */
+  annualSalaryMin: number | null;
+  annualSalaryMax: number | null;
+  annualSalaryCurrency: string | null;
+  /** True where the figure came from prose. Weaker evidence, and worth marking as such. */
+  salaryFromText: boolean;
+  /**
+   * What the source said before annualisation. A GBP 600/day contract annualised to 156,000
+   * is not a 156,000 salary, and this is the only field that distinguishes them.
+   */
+  salaryStatedInterval: string | null;
+
+  seniority: string;
+  roleFamily: string;
+  /** The three-way answer isRemote cannot express: OnSite, Hybrid, Remote, Unknown. */
+  workArrangement: string;
+  hybridDaysInOffice: number | null;
+  yearsExperienceMin: number | null;
+  yearsExperienceMax: number | null;
+  requiresSecurityClearance: boolean;
+  /** 'inside', 'outside', or null. UK contract market only. */
+  ir35: string | null;
+
   jobUrl: string | null;
   /** Length only - the description itself is on the detail endpoint. */
   descriptionLength: number;
@@ -85,6 +115,14 @@ export interface FacetsResponse {
   countries: NamedCount[];
   cities: NamedCount[];
   companies: NamedCount[];
+  /** Concepts and domains present. The key prefix says which: area.* or skill.*. */
+  concepts: ConceptCount[];
+}
+
+export interface ConceptCount {
+  key: string;
+  label: string;
+  count: number;
 }
 
 /** Served from Cosmos, not SQL - see the API endpoint for why that matters. */
@@ -112,7 +150,25 @@ export interface MetricsSummary {
   bySite: Record<string, number>;
   topCompanies: NamedCount[];
   titleKeywords: NamedCount[];
+  /** What the postings actually ask for, as opposed to what the scraper delivered. */
+  enrichment: EnrichmentBreakdown;
   daysOfHistory: number;
+}
+
+export interface EnrichmentBreakdown {
+  bySeniority: Record<string, number>;
+  byWorkArrangement: Record<string, number>;
+  byRoleFamily: Record<string, number>;
+  topConcepts: NamedCount[];
+  /** The same demand rolled up through the closure - the shape under the scatter. */
+  topDomains: NamedCount[];
+  /** Share with a salary once descriptions have been read. */
+  salaryCoverage: number;
+  /** Of those, the share that came from prose rather than a salary field. */
+  salaryFromTextShare: number;
+  medianAnnualSalary: number | null;
+  /** Surface forms seen and not resolved - the size of the vocabulary's blind spot. */
+  unresolvedMentions: number;
 }
 
 export interface DailyRollup {

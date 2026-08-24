@@ -177,6 +177,7 @@ public sealed class MetricEndpoints : IEndpointGroup
             InvalidInLastRun = digest?.Counts.Invalid ?? 0,
             CumulativePostings = latestRollup?.CumulativePostings ?? 0,
             NewPostingsDelta = delta,
+            Enrichment = digest?.Enrichment ?? new EnrichmentBreakdown(),
             RemoteShare = digest?.Remote.RemoteShare ?? latestRollup?.RemoteShare ?? 0,
             SalaryCoverage = digest?.Salary.Coverage ?? latestRollup?.SalaryCoverage ?? 0,
             MedianAgeDays = digest?.Freshness.MedianAgeDays,

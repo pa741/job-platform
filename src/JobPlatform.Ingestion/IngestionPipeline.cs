@@ -41,7 +41,7 @@ public sealed class IngestionPipeline(
 
         var parsed = parser.Parse(content);
 
-        var (run, outcome, needingExtraction) = await postings.IngestAsync(
+        var (run, outcome, needingExtraction, enriched) = await postings.IngestAsync(
             context, parsed.Postings, parsed.RowsInFile, parsed.InvalidRows, ct);
 
         // Null whenever no AI provider is configured, which is how this ships. Nothing is
@@ -51,7 +51,8 @@ public sealed class IngestionPipeline(
             await extractionQueue.EnqueueAsync(needingExtraction, ct);
         }
 
-        var digest = calculator.Calculate(context, parsed, outcome, stopwatch.ElapsedMilliseconds);
+        var digest = calculator.Calculate(
+            context, parsed, outcome, stopwatch.ElapsedMilliseconds, enriched);
         await metrics.UpsertRunDigestAsync(digest, ct);
 
         // Recomputed from SQL, so replaying a blob converges instead of double-counting.

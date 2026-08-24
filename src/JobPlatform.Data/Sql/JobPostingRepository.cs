@@ -216,7 +216,7 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
             "Run {RunId}: {New} new, {Updated} updated, {Unchanged} unchanged posting(s).",
             run.Id, outcome.New, outcome.Updated, outcome.Unchanged);
 
-        return new IngestResult(run, outcome, needExtraction);
+        return new IngestResult(run, outcome, needExtraction, [.. enrichedByKey.Values]);
     }
 
     /// <summary>

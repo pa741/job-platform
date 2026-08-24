@@ -146,11 +146,24 @@ export function RankedBar({ items, max = 12, valueLabel }: {
  * segments so adjacent fills never blur into one another under CVD.
  */
 export function SiteSplit({ bySite }: { bySite: Record<string, number> }) {
+  return <PartToWhole data={bySite} emptyMessage="No postings in the last run." />;
+}
+
+/**
+ * The same part-to-whole bar, for any categorical split.
+ *
+ * Extracted from SiteSplit rather than copied: the four-slot limit, the fold into "Other"
+ * and the 2px separation are all colour-vision decisions that were validated once, and a
+ * second implementation would drift away from them the first time someone added a series.
+ */
+export function PartToWhole({ data, emptyMessage }: {
+  data: Record<string, number>; emptyMessage: string;
+}) {
   const t = useChartTokens();
-  const entries = Object.entries(bySite).sort((a, b) => b[1] - a[1]);
+  const entries = Object.entries(data).sort((a, b) => b[1] - a[1]);
   const total = entries.reduce((sum, [, count]) => sum + count, 0);
 
-  if (total === 0) return <div className="empty">No postings in the last run.</div>;
+  if (total === 0) return <div className="empty">{emptyMessage}</div>;
 
   // Past four boards the tail folds into "Other" rather than reaching for a fifth hue:
   // generated colours are indistinguishable under colour-vision deficiency.

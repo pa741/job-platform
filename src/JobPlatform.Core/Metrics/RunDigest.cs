@@ -28,6 +28,19 @@ public sealed record RunDigest
     public required IReadOnlyList<NamedCount> TopCompanies { get; init; }
     public required IReadOnlyList<NamedCount> TopLocations { get; init; }
     public required IReadOnlyList<NamedCount> TitleKeywords { get; init; }
+
+    /// <summary>
+    /// What the enricher concluded, as opposed to what the scraper delivered.
+    /// </summary>
+    /// <remarks>
+    /// Kept as its own section rather than folded in beside the raw counts, because the two
+    /// answer different questions and mixing them is how a dashboard starts reporting on the
+    /// enricher while appearing to report on the market. <c>SalaryCoverage</c> above is the
+    /// board's own columns; <see cref="EnrichmentBreakdown.SalaryCoverage"/> is what is
+    /// actually known once descriptions have been read, and on this corpus they differ by an
+    /// order of magnitude.
+    /// </remarks>
+    public EnrichmentBreakdown Enrichment { get; init; } = new();
     public required LengthStats DescriptionLength { get; init; }
 
     /// <summary>Per-column non-empty ratio. A column falling to zero means the scraper
@@ -87,3 +100,50 @@ public sealed record SalaryBreakdown
 public sealed record LengthStats(int P50, int P90, int Max);
 
 public sealed record NamedCount(string Name, int Count);
+
+/// <summary>The structured view of a run: what the postings actually ask for.</summary>
+public sealed record EnrichmentBreakdown
+{
+    /// <summary>Keyed by the enum name. <c>Unknown</c> is included and is usually large.</summary>
+    /// <remarks>
+    /// Including Unknown is deliberate. Dropping it would make every share on this axis
+    /// read against a denominator the reader cannot see, and "82% senior" is a very
+    /// different claim from "82% of the 18% we could classify".
+    /// </remarks>
+    public IReadOnlyDictionary<string, int> BySeniority { get; init; } = new Dictionary<string, int>();
+
+    public IReadOnlyDictionary<string, int> ByWorkArrangement { get; init; } = new Dictionary<string, int>();
+
+    public IReadOnlyDictionary<string, int> ByRoleFamily { get; init; } = new Dictionary<string, int>();
+
+    /// <summary>The concrete concepts most often asked for.</summary>
+    public IReadOnlyList<NamedCount> TopConcepts { get; init; } = [];
+
+    /// <summary>
+    /// The same demand rolled up through the closure.
+    /// </summary>
+    /// <remarks>
+    /// A different question from <see cref="TopConcepts"/>, not a summary of it. Individual
+    /// tools scatter - twelve ways to say "we do cloud" - and the rollup is what shows the
+    /// shape underneath. This is the one number that could not exist without the graph.
+    /// </remarks>
+    public IReadOnlyList<NamedCount> TopDomains { get; init; } = [];
+
+    /// <summary>Share with a salary once descriptions have been read.</summary>
+    public double SalaryCoverage { get; init; }
+
+    /// <summary>Share whose salary came from prose rather than a salary field.</summary>
+    public double SalaryFromTextShare { get; init; }
+
+    public decimal? MedianAnnualSalary { get; init; }
+
+    /// <summary>
+    /// Surface forms seen and not resolved.
+    /// </summary>
+    /// <remarks>
+    /// Surfaced rather than hidden: it is the size of the vocabulary's blind spot, and the
+    /// only reason it is knowable at all is that unresolved forms are recorded instead of
+    /// dropped. A rising number here is the signal to extend the vocabulary.
+    /// </remarks>
+    public int UnresolvedMentions { get; init; }
+}

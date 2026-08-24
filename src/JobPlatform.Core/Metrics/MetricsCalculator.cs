@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using JobPlatform.Core.Dedup;
+using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Model;
 using JobPlatform.Core.Parsing;
 using JobPlatform.Core.Text;
@@ -18,11 +19,16 @@ public sealed class MetricsCalculator(TimeProvider? timeProvider = null)
     private const int TopN = 20;
     private const int TopKeywordCount = 25;
 
+    /// <param name="enriched">
+    /// What the enricher concluded, when the caller has it. Absent in tests that only care
+    /// about the raw counts, and absent for anything replaying a digest without re-ingesting.
+    /// </param>
     public RunDigest Calculate(
         ScrapeRunContext context,
         CsvParseResult parseResult,
         UpsertOutcome upsert,
-        long durationMs)
+        long durationMs,
+        IReadOnlyList<EnrichedPosting>? enriched = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(parseResult);
@@ -59,6 +65,7 @@ public sealed class MetricsCalculator(TimeProvider? timeProvider = null)
             TopCompanies = TopBy(postings, p => p.Company, TopN),
             TopLocations = TopBy(postings, p => NullIfEmpty(JobLocation.Parse(p.Location).Display), TopN),
             TitleKeywords = TopKeywords(postings),
+            Enrichment = CalculateEnrichment(enriched),
             DescriptionLength = CalculateLengths(postings),
             FieldFillRates = parseResult.FieldFillRates,
         };
@@ -73,6 +80,75 @@ public sealed class MetricsCalculator(TimeProvider? timeProvider = null)
 
     public static string DailyRollupId(string searchTerm, DateOnly date)
         => $"daily|{searchTerm}|{date:yyyy-MM-dd}";
+
+    /// <summary>
+    /// The structured view of a run.
+    /// </summary>
+    /// <remarks>
+    /// Empty rather than absent when the caller supplied nothing, so a consumer never has to
+    /// distinguish "not computed" from "computed as zero" - the dashboard reads these
+    /// directly and a null section would be a second code path on every chart.
+    /// </remarks>
+    private static EnrichmentBreakdown CalculateEnrichment(IReadOnlyList<EnrichedPosting>? enriched)
+    {
+        if (enriched is null || enriched.Count == 0)
+        {
+            return new EnrichmentBreakdown();
+        }
+
+        var withSalary = enriched.Count(e => e.AnnualSalaryMin is not null || e.AnnualSalaryMax is not null);
+        var fromText = enriched.Count(e => e.SalaryFromText);
+
+        // The midpoint where a range is given, the single figure where only one is. Averaging
+        // the two ends of a range and the one end of a floor would be mixing two different
+        // measurements, which is the same mistake SalaryFromText exists to prevent.
+        var salaries = enriched
+            .Select(e => e.AnnualSalaryMin is { } min && e.AnnualSalaryMax is { } max
+                ? (min + max) / 2
+                : e.AnnualSalaryMin ?? e.AnnualSalaryMax)
+            .OfType<decimal>()
+            .Order()
+            .ToList();
+
+        return new EnrichmentBreakdown
+        {
+            BySeniority = CountEnum(enriched, e => e.Seniority.ToString()),
+            ByWorkArrangement = CountEnum(enriched, e => e.WorkArrangement.ToString()),
+            ByRoleFamily = CountEnum(enriched, e => e.RoleFamily.ToString()),
+
+            // Distinct per posting: a concept the board tagged and the description also
+            // mentioned is two assertions and one piece of demand.
+            TopConcepts = Rank(enriched.SelectMany(e =>
+                e.Concepts.Select(c => c.ConceptKey).Distinct(StringComparer.Ordinal))),
+
+            TopDomains = Rank(enriched.SelectMany(e => e.Concepts
+                .SelectMany(c => ConceptGraph.Default.Ancestors(c.ConceptKey).Keys)
+                .Where(k => k.StartsWith("area.", StringComparison.Ordinal))
+                .Distinct(StringComparer.Ordinal))),
+
+            SalaryCoverage = Share(withSalary, enriched.Count),
+            SalaryFromTextShare = Share(fromText, withSalary),
+            MedianAnnualSalary = salaries.Count == 0 ? null : salaries[salaries.Count / 2],
+            UnresolvedMentions = enriched.Sum(e => e.Mentions.Count),
+        };
+    }
+
+    private static IReadOnlyDictionary<string, int> CountEnum(
+        IReadOnlyList<EnrichedPosting> enriched,
+        Func<EnrichedPosting, string> select)
+        => enriched
+            .GroupBy(select, StringComparer.Ordinal)
+            .OrderByDescending(g => g.Count())
+            .ThenBy(g => g.Key, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+
+    private static IReadOnlyList<NamedCount> Rank(IEnumerable<string> keys, int take = 15)
+        => [.. keys
+            .GroupBy(k => k, StringComparer.Ordinal)
+            .OrderByDescending(g => g.Count())
+            .ThenBy(g => g.Key, StringComparer.Ordinal)
+            .Take(take)
+            .Select(g => new NamedCount(g.Key, g.Count()))];
 
     private static int CountCrossSiteDuplicates(IReadOnlyList<JobPosting> postings)
         => postings.Count - postings.Select(JobFingerprint.ContentHash).Distinct(StringComparer.Ordinal).Count();

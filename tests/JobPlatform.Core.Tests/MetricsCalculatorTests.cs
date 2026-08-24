@@ -1,3 +1,4 @@
+using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Metrics;
 using JobPlatform.Core.Parsing;
 using JobPlatform.Core.Tests.Fixtures;
@@ -17,6 +18,78 @@ public sealed class MetricsCalculatorTests
 
         return new MetricsCalculator().Calculate(
             context, parsed, upsert ?? new UpsertOutcome(30, 0, 0), durationMs: 1234);
+    }
+
+    /// <summary>The same digest, with the enrichment the pipeline would have supplied.</summary>
+    private static RunDigest EnrichedDigest()
+    {
+        using var stream = SampleCsv.Open();
+        var parsed = new JobCsvParser().Parse(stream);
+        var context = BlobNameParser.Parse(BlobPath, DateTimeOffset.UnixEpoch, "etag", sizeBytes: 4242);
+
+        return new MetricsCalculator().Calculate(
+            context, parsed, new UpsertOutcome(36, 0, 0), durationMs: 1234,
+            [.. parsed.Postings.Select(p => PostingEnricher.Enrich(p))]);
+    }
+
+    [Fact]
+    public void Enrichment_is_empty_rather_than_absent_when_none_is_supplied()
+    {
+        // The dashboard reads these directly, so "not computed" and "computed as zero" have
+        // to look the same - a null section would be a second code path on every chart.
+        var enrichment = Digest().Enrichment;
+
+        Assert.Empty(enrichment.BySeniority);
+        Assert.Empty(enrichment.TopConcepts);
+        Assert.Equal(0, enrichment.SalaryCoverage);
+    }
+
+    [Fact]
+    public void Enrichment_counts_every_posting_on_every_axis()
+    {
+        var enrichment = EnrichedDigest().Enrichment;
+
+        // Unknown included, so a share on this axis reads against a visible denominator.
+        Assert.Equal(SampleCsv.ParsedPostings, enrichment.BySeniority.Values.Sum());
+        Assert.Equal(SampleCsv.ParsedPostings, enrichment.ByWorkArrangement.Values.Sum());
+        Assert.Equal(SampleCsv.ParsedPostings, enrichment.ByRoleFamily.Values.Sum());
+    }
+
+    [Fact]
+    public void Enrichment_reports_the_salary_the_boards_did_not()
+    {
+        var digest = EnrichedDigest();
+
+        // The fixture's salary columns are empty throughout, exactly as the real corpus is.
+        Assert.Equal(0, digest.Salary.Coverage);
+
+        // Everything here came out of a description, which is the whole point.
+        Assert.True(digest.Enrichment.SalaryCoverage > 0.5);
+        Assert.Equal(1, digest.Enrichment.SalaryFromTextShare);
+        Assert.NotNull(digest.Enrichment.MedianAnnualSalary);
+    }
+
+    [Fact]
+    public void Domains_are_ranked_separately_from_the_concepts_beneath_them()
+    {
+        var enrichment = EnrichedDigest().Enrichment;
+
+        Assert.All(enrichment.TopConcepts, c => Assert.DoesNotContain("area.", c.Name));
+        Assert.All(enrichment.TopDomains, d => Assert.StartsWith("area.", d.Name));
+
+        // The rollup is never smaller than its largest member: every posting naming a
+        // backend skill counts toward the area, and most name several.
+        var backend = enrichment.TopDomains.FirstOrDefault(d => d.Name == "area.backend");
+        Assert.NotNull(backend);
+        Assert.True(backend.Count > 0);
+    }
+
+    [Fact]
+    public void Unresolved_mentions_are_reported_rather_than_hidden()
+    {
+        // The size of the vocabulary's blind spot, knowable only because unresolved forms
+        // are recorded instead of dropped.
+        Assert.True(EnrichedDigest().Enrichment.UnresolvedMentions > 0);
     }
 
     [Fact]

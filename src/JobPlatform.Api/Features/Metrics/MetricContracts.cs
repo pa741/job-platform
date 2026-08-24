@@ -40,6 +40,17 @@ public sealed record MetricsSummary
     public IReadOnlyList<NamedCount> TopCompanies { get; init; } = [];
     public IReadOnlyList<NamedCount> TitleKeywords { get; init; } = [];
 
+    /// <summary>
+    /// The structured view of the last run: what the postings actually ask for.
+    /// </summary>
+    /// <remarks>
+    /// Served from Cosmos with everything else on this contract. The same questions could be
+    /// answered from SQL against live rows, and doing so would put a polling dashboard on a
+    /// database billed by the second it spends awake - which is the one thing this API is
+    /// most careful not to do.
+    /// </remarks>
+    public EnrichmentBreakdown Enrichment { get; init; } = new();
+
     /// <summary>How many days of rollup history back the series.</summary>
     public int DaysOfHistory { get; init; }
 }

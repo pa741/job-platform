@@ -1,5 +1,5 @@
 import type { JobPlatformApi } from '../api/client';
-import { NewPostingsTrend, RankedBar, SiteSplit } from '../charts/Charts';
+import { NewPostingsTrend, PartToWhole, RankedBar, SiteSplit } from '../charts/Charts';
 import { Card, ErrorNote, Meter, StatTile } from '../components/Primitives';
 import { useMetricsFeed } from '../feed/useMetricsFeed';
 
@@ -10,6 +10,13 @@ export function Overview({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
   if (!snapshot) return <div className="empty">{loading ? 'Loading metrics…' : 'No metrics yet.'}</div>;
 
   const { summary, rollups, health } = snapshot;
+  const enrichment = summary.enrichment;
+
+  // Everything on this axis is present for every posting, including Unknown - dropping it
+  // would leave every share reading against a denominator the reader cannot see.
+  const classified = Object.entries(enrichment.bySeniority)
+    .filter(([level]) => level !== 'Unknown')
+    .map(([name, count]) => ({ name, count }));
 
   return (
     <div className="grid">
@@ -28,8 +35,30 @@ export function Overview({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
           hint={summary.newPostingsDelta == null ? 'no previous day to compare' : undefined}
         />
         <StatTile label="Seen in last run" value={summary.postingsInLastRun.toLocaleString()} />
-        <Meter label="Remote" ratio={summary.remoteShare} caption="of postings in the last run" />
-        <Meter label="Salary disclosed" ratio={summary.salaryCoverage} caption="of postings in the last run" />
+        <Meter label="Remote" ratio={summary.remoteShare} caption="of postings that said" />
+        {/* Two different numbers, both true, and the gap between them is the point. The
+            first is what the boards filled in; the second is what is known once the
+            description has been read. Showing only the first understates the market by
+            about a factor of ten. */}
+        <Meter
+          label="Salary in the columns"
+          ratio={summary.salaryCoverage}
+          caption="as the boards delivered it"
+        />
+        <Meter
+          label="Salary known"
+          ratio={enrichment.salaryCoverage}
+          caption="after reading descriptions"
+        />
+        <StatTile
+          label="Median salary"
+          value={enrichment.medianAnnualSalary != null
+            ? `£${Math.round(enrichment.medianAnnualSalary / 1000)}k`
+            : '—'}
+          hint={enrichment.salaryFromTextShare > 0
+            ? `${Math.round(enrichment.salaryFromTextShare * 100)}% read from prose`
+            : undefined}
+        />
       </div>
 
       <div className="grid halves">
@@ -51,16 +80,77 @@ export function Overview({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
       </div>
 
       <div className="grid halves">
+        <Card
+          title="Skills in demand"
+          subtitle="Concepts named by the most postings in the last run"
+        >
+          <RankedBar items={enrichment.topConcepts} valueLabel="Postings" />
+        </Card>
+
+        <Card
+          title="Areas in demand"
+          subtitle="The same demand rolled up — the shape under the scatter"
+        >
+          {/* A different question from the list beside it, not a summary of it. Individual
+              tools scatter across a dozen ways of saying the same thing; the rollup is what
+              shows whether the market wants backend or data people. This is the one number
+              on the page that could not exist without the concept graph. */}
+          <RankedBar items={enrichment.topDomains} valueLabel="Postings" />
+        </Card>
+      </div>
+
+      <div className="grid halves">
+        <Card
+          title="Seniority mix"
+          subtitle={`${classified.reduce((n, d) => n + d.count, 0)} of ${summary.postingsInLastRun} postings state a level`}
+        >
+          <RankedBar items={classified} valueLabel="Postings" />
+        </Card>
+
+        <Card
+          title="How the work happens"
+          subtitle="The three-way split a remote flag cannot express"
+        >
+          <PartToWhole
+            data={enrichment.byWorkArrangement}
+            emptyMessage="No postings in the last run."
+          />
+        </Card>
+      </div>
+
+      <div className="grid halves">
         <Card title="Who is hiring" subtitle="Companies with the most postings in the last run">
           <RankedBar items={summary.topCompanies} valueLabel="Postings" />
         </Card>
 
-        <Card title="What the market is asking for" subtitle="Normalised title keywords — the demand signal">
+        <Card
+          title="Job titles"
+          subtitle="Normalised title keywords — what roles are called, not what they need"
+        >
           <RankedBar items={summary.titleKeywords} valueLabel="Titles" />
         </Card>
       </div>
 
       <ScraperHealthCard health={health} />
+
+      {enrichment.unresolvedMentions > 0 && (
+        <Card
+          title="What the vocabulary could not place"
+          subtitle={`${enrichment.unresolvedMentions.toLocaleString()} mentions in the last run`}
+        >
+          {/* Surfaced rather than hidden. These are words the resolver saw and refused to
+              guess at - a bare "Go" that might be the language or the verb, or a skill an
+              employer typed that the vocabulary has never heard of. The number is only
+              knowable because they are recorded instead of dropped, and it is the honest
+              size of the blind spot rather than a defect count. */}
+          <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+            Surface forms the resolver saw and declined to guess at — an ambiguous word like
+            a bare <code>Go</code>, or a skill the vocabulary has not learned yet. They are
+            recorded rather than discarded, which is the only reason this number exists;
+            the most frequent of them are what the vocabulary should learn next.
+          </p>
+        </Card>
+      )}
 
       <div className="muted" style={{ fontSize: 12 }}>
         Updated {snapshot.receivedAt.toLocaleTimeString()} · feed: {kind}

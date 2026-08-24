@@ -79,6 +79,7 @@ internal static class PostingMapping
         Countries = facets.Countries.ToNamedCounts(),
         Cities = facets.Cities.ToNamedCounts(),
         Companies = facets.Companies.ToNamedCounts(),
+        Concepts = [.. facets.Concepts.Select(c => new ConceptCount(c.Key, c.Label, c.Count))],
     };
 
     private static IReadOnlyList<NamedCount> ToNamedCounts(this IReadOnlyList<NamedCountRow> rows)

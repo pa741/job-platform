@@ -53,6 +53,78 @@ function FreshnessPills({ posting }: { posting: PostingSummary }) {
   );
 }
 
+const ARRANGEMENT: Record<string, string> = {
+  Remote: 'Remote',
+  Hybrid: 'Hybrid',
+  OnSite: 'On-site',
+};
+
+/**
+ * The salary, on one scale, with the caveat attached.
+ *
+ * Shows the annualised figure rather than the board's raw columns, because those are empty
+ * for about 97% of postings - a "Salary" column reading "—" almost everywhere is worse than
+ * useless, it suggests the market does not disclose when mostly we just were not reading.
+ *
+ * The interval matters more than it looks. A contract at GBP 600 a day annualises to 156,000,
+ * which is a real number for comparison and a misleading one to read as a salary. Marking it
+ * is the difference between a comparable figure and a wrong one.
+ */
+function Salary({ posting }: { posting: PostingSummary }) {
+  const { annualSalaryMin: min, annualSalaryMax: max } = posting;
+  if (min == null && max == null) return <>—</>;
+
+  const currency = posting.annualSalaryCurrency ?? '';
+  const fmt = (v: number) => Math.round(v / 1000) + 'k';
+  const range = min != null && max != null && min !== max
+    ? `${fmt(min)}–${fmt(max)}`
+    : fmt((min ?? max)!);
+
+  const derived = posting.salaryFromText;
+  const interval = posting.salaryStatedInterval;
+  const rate = interval && interval !== 'yearly' ? interval : null;
+
+  return (
+    <>
+      {`${currency} ${range}`.trim()}
+      {rate && (
+        <span className="pill warning" style={{ marginLeft: 6 }}
+          title={`Stated as a ${rate} rate and annualised for comparison`}>
+          {rate}
+        </span>
+      )}
+      {derived && !rate && (
+        <span className="muted" style={{ marginLeft: 6 }}
+          title="Read from the description rather than a salary field">~</span>
+      )}
+    </>
+  );
+}
+
+/**
+ * The things that decide whether someone can take the job at all.
+ *
+ * Only the ones that exclude people get a pill. A "hybrid" badge on half the table would be
+ * noise - that is what the Working column is for - but a clearance requirement or an inside
+ * IR35 contract is a hard filter, and worth seeing without opening the posting.
+ */
+function RequirementPills({ posting }: { posting: PostingSummary }) {
+  return (
+    <>
+      {posting.requiresSecurityClearance && (
+        <span className="pill warning" style={{ marginLeft: 8 }}
+          title="The posting names a security clearance">clearance</span>
+      )}
+      {posting.ir35 && (
+        <span className={`pill ${posting.ir35 === 'inside' ? 'warning' : ''}`}
+          style={{ marginLeft: 8 }} title={`${posting.ir35} IR35`}>
+          {posting.ir35} IR35
+        </span>
+      )}
+    </>
+  );
+}
+
 export function Postings({ api, searchTerm }: { api: JobPlatformApi; searchTerm: string | undefined }) {
   const [facets, setFacets] = useState<FacetsResponse>();
   const [page, setPage] = useState<PageResponse<PostingSummary>>();
@@ -62,7 +134,10 @@ export function Postings({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
 
   const [q, setQ] = useState('');
   const [site, setSite] = useState('');
-  const [remote, setRemote] = useState('');
+  const [concept, setConcept] = useState('');
+  const [minSeniority, setMinSeniority] = useState('');
+  const [workArrangement, setWorkArrangement] = useState('');
+  const [minAnnualSalary, setMinAnnualSalary] = useState('');
   const [hasSalary, setHasSalary] = useState('');
   const [sort, setSort] = useState('lastSeen');
 
@@ -79,7 +154,13 @@ export function Postings({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
       searchTerm,
       q: q || undefined,
       site: site || undefined,
-      remote: remote === '' ? undefined : remote === 'true',
+      concept: concept || undefined,
+      minSeniority: minSeniority || undefined,
+      workArrangement: workArrangement || undefined,
+      // Deliberately the annualised column rather than the board's raw one. Only about
+      // 2.5% of postings carry a salary the scraper delivered, against a quarter once the
+      // description has been read, so filtering the raw column hides most of what is known.
+      minAnnualSalary: minAnnualSalary ? Number(minAnnualSalary) : undefined,
       hasSalary: hasSalary === '' ? undefined : hasSalary === 'true',
       sort,
       limit: PAGE_SIZE,
@@ -97,7 +178,8 @@ export function Postings({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
     } finally {
       setLoading(false);
     }
-  }, [api, searchTerm, q, site, remote, hasSalary, sort, offset]);
+  }, [api, searchTerm, q, site, concept, minSeniority, workArrangement,
+      minAnnualSalary, hasSalary, sort, offset]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -129,12 +211,52 @@ export function Postings({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
           </select>
         </div>
         <div>
-          <label htmlFor="remote">Remote</label>
-          <select id="remote" value={remote} onChange={(e) => onFilterChange(setRemote)(e.target.value)}>
+          <label htmlFor="concept">Skill or area</label>
+          <select id="concept" value={concept}
+            onChange={(e) => onFilterChange(setConcept)(e.target.value)}>
             <option value="">Any</option>
-            <option value="true">Remote</option>
-            <option value="false">On-site</option>
+            {/* Areas first and grouped: picking one matches every skill underneath it,
+                which is the question most people actually have. The keys are opaque, so
+                the label is what is shown. */}
+            <optgroup label="Areas">
+              {facets?.concepts.filter((c) => c.key.startsWith('area.')).map((c) => (
+                <option key={c.key} value={c.key}>{c.label} ({c.count})</option>
+              ))}
+            </optgroup>
+            <optgroup label="Skills">
+              {facets?.concepts.filter((c) => !c.key.startsWith('area.')).map((c) => (
+                <option key={c.key} value={c.key}>{c.label} ({c.count})</option>
+              ))}
+            </optgroup>
           </select>
+        </div>
+        <div>
+          <label htmlFor="seniority">Seniority</label>
+          <select id="seniority" value={minSeniority}
+            onChange={(e) => onFilterChange(setMinSeniority)(e.target.value)}>
+            <option value="">Any</option>
+            {/* A floor rather than an exact level, because the scale is ordinal and
+                "senior or above" is the question. Unknown is never included. */}
+            {['Junior', 'Mid', 'Senior', 'Lead', 'Principal'].map((level) => (
+              <option key={level} value={level}>{level} or above</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="arrangement">Working</label>
+          <select id="arrangement" value={workArrangement}
+            onChange={(e) => onFilterChange(setWorkArrangement)(e.target.value)}>
+            <option value="">Any</option>
+            <option value="Remote">Remote</option>
+            <option value="Hybrid">Hybrid</option>
+            <option value="OnSite">On-site</option>
+          </select>
+        </div>
+        <div>
+          <label htmlFor="minSalary">Min salary</label>
+          <input id="minSalary" type="number" inputMode="numeric" step={5000}
+            value={minAnnualSalary} placeholder="e.g. 80000"
+            onChange={(e) => onFilterChange(setMinAnnualSalary)(e.target.value)} />
         </div>
         <div>
           <label htmlFor="salary">Salary</label>
@@ -162,8 +284,8 @@ export function Postings({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
         <table>
           <thead>
             <tr>
-              <th>Title</th><th>Company</th><th>Location</th>
-              <th>Board</th><th className="num">Salary</th><th className="num">Seen</th>
+              <th>Title</th><th>Company</th><th>Level</th><th>Working</th>
+              <th>Location</th><th className="num">Salary</th><th className="num">Seen</th>
             </tr>
           </thead>
           <tbody>
@@ -173,17 +295,19 @@ export function Postings({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
                   {posting.jobUrl
                     ? <a href={posting.jobUrl} target="_blank" rel="noreferrer noopener">{posting.title}</a>
                     : posting.title}
-                  {posting.isRemote && <span className="pill" style={{ marginLeft: 8 }}>remote</span>}
+                  <RequirementPills posting={posting} />
                   <FreshnessPills posting={posting} />
                 </td>
                 <td>{posting.company ?? '—'}</td>
-                <td>{posting.city ?? posting.location ?? '—'}</td>
-                <td>{posting.site}</td>
-                <td className="num">
-                  {posting.minAmount || posting.maxAmount
-                    ? `${posting.currency ?? ''} ${posting.minAmount ?? ''}${posting.maxAmount ? `–${posting.maxAmount}` : ''}`.trim()
-                    : '—'}
+                <td>{posting.seniority === 'Unknown' ? '—' : posting.seniority}</td>
+                <td>
+                  {posting.workArrangement === 'Unknown' ? '—' : ARRANGEMENT[posting.workArrangement]}
+                  {posting.hybridDaysInOffice != null && (
+                    <span className="muted"> · {posting.hybridDaysInOffice}d</span>
+                  )}
                 </td>
+                <td>{posting.city ?? posting.location ?? '—'}</td>
+                <td className="num"><Salary posting={posting} /></td>
                 <td className="num">{posting.seenCount}</td>
               </tr>
             ))}

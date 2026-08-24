@@ -168,7 +168,14 @@ public sealed record FacetsResponse
     public IReadOnlyList<NamedCount> Countries { get; init; } = [];
     public IReadOnlyList<NamedCount> Cities { get; init; } = [];
     public IReadOnlyList<NamedCount> Companies { get; init; } = [];
+
+    /// <summary>Concepts and domains present, so a filter UI can offer them by name.</summary>
+    public IReadOnlyList<ConceptCount> Concepts { get; init; } = [];
 }
+
+/// <param name="Key">What the filter passes back.</param>
+/// <param name="Label">What a person reads.</param>
+public sealed record ConceptCount(string Key, string Label, int Count);
 
 /// <summary>
 /// One search term the platform holds data for.

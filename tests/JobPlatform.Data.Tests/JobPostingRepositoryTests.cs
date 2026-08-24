@@ -79,7 +79,7 @@ public sealed class JobPostingRepositoryTests : IDisposable
 
         var postings = new[] { Posting("indeed", "a1"), Posting("linkedin", "b1", title: "SRE") };
 
-        var (run, outcome, _) = await repository.IngestAsync(Context("run1.csv"), postings, 2, 0);
+        var (run, outcome, _, _) = await repository.IngestAsync(Context("run1.csv"), postings, 2, 0);
 
         Assert.Equal(2, outcome.New);
         Assert.Equal(0, outcome.Updated);
@@ -100,7 +100,7 @@ public sealed class JobPostingRepositoryTests : IDisposable
 
         await using (var db = CreateContext())
         {
-            var (_, outcome, _) = await CreateRepository(db).IngestAsync(Context("run2.csv"), postings, 2, 0);
+            var (_, outcome, _, _) = await CreateRepository(db).IngestAsync(Context("run2.csv"), postings, 2, 0);
 
             Assert.Equal(0, outcome.New);
             Assert.Equal(0, outcome.Updated);
@@ -122,7 +122,7 @@ public sealed class JobPostingRepositoryTests : IDisposable
         {
             // Same posting, retitled by the board.
             var changed = Posting("indeed", "a1", title: "Senior Backend Engineer");
-            var (_, outcome, _) = await CreateRepository(db).IngestAsync(Context("run2.csv"), [changed], 1, 0);
+            var (_, outcome, _, _) = await CreateRepository(db).IngestAsync(Context("run2.csv"), [changed], 1, 0);
 
             Assert.Equal(0, outcome.New);
             Assert.Equal(1, outcome.Updated);

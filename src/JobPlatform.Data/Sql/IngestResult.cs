@@ -1,3 +1,4 @@
+using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Metrics;
 using JobPlatform.Data.Sql.Entities;
 
@@ -15,7 +16,16 @@ namespace JobPlatform.Data.Sql;
 /// it would produce a few hundred messages a day whose only effect is a database round trip
 /// that decides to do nothing.
 /// </remarks>
+/// <param name="Enriched">
+/// What the enricher concluded for each posting in this run.
+/// </param>
+/// <remarks>
+/// Returned rather than discarded so the metrics can be computed from it. Enrichment is pure
+/// and cheap, so recomputing it would be affordable - but it would also be a second place
+/// that decides what a posting means, and those two places would eventually disagree.
+/// </remarks>
 public readonly record struct IngestResult(
     ScrapeRun Run,
     UpsertOutcome Outcome,
-    IReadOnlyList<string> SourceKeysNeedingExtraction);
+    IReadOnlyList<string> SourceKeysNeedingExtraction,
+    IReadOnlyList<EnrichedPosting> Enriched);

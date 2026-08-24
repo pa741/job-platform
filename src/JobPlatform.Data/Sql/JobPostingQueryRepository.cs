@@ -86,6 +86,18 @@ public sealed class JobPostingQueryRepository(JobsDbContext db)
         var companies = await CountByAsync(
             query.Where(p => p.Company != null), p => p.Company!, take: 50, ct);
 
+        // Concepts and domains together, because a filter UI wants both in one list: the
+        // domains are the coarse choices and the skills the specific ones, and which is
+        // which is legible from the key prefix. Counted distinctly per posting - a concept
+        // the board tagged and the description also mentioned is one piece of demand.
+        var concepts = await query
+            .SelectMany(p => p.Concepts.Select(pc => pc.Concept!))
+            .GroupBy(concept => new { concept.ConceptKey, concept.PrefLabel })
+            .Select(g => new { g.Key.ConceptKey, g.Key.PrefLabel, Count = g.Count() })
+            .OrderByDescending(x => x.Count)
+            .Take(60)
+            .ToListAsync(ct);
+
         var totals = await query
             .GroupBy(_ => 1)
             .Select(g => new
@@ -113,6 +125,7 @@ public sealed class JobPostingQueryRepository(JobsDbContext db)
             Countries = countries,
             Cities = cities,
             Companies = companies,
+            Concepts = [.. concepts.Select(c => new ConceptCountRow(c.ConceptKey, c.PrefLabel, c.Count))],
         };
     }
 
@@ -423,4 +436,18 @@ public sealed record PostingFacets
     public IReadOnlyList<NamedCountRow> Countries { get; init; } = [];
     public IReadOnlyList<NamedCountRow> Cities { get; init; } = [];
     public IReadOnlyList<NamedCountRow> Companies { get; init; } = [];
+
+    /// <summary>
+    /// The concepts and domains present, most-asked-for first.
+    /// </summary>
+    /// <remarks>
+    /// Both kinds in one list on purpose: a filter UI wants the coarse choices and the
+    /// specific ones together, and the <c>area.</c> or <c>skill.</c> prefix on the key says
+    /// which is which without a second field.
+    /// </remarks>
+    public IReadOnlyList<ConceptCountRow> Concepts { get; init; } = [];
 }
+
+/// <param name="Key">The stable key, which is what a filter passes back.</param>
+/// <param name="Label">The display name, which is what a person reads.</param>
+public sealed record ConceptCountRow(string Key, string Label, int Count);

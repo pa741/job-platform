@@ -141,6 +141,20 @@ export interface PostingQuery {
   remote?: boolean;
   hasSalary?: boolean;
   minSalary?: number;
+
+  /** A concept key. Matched through the closure, so area.* includes everything beneath it. */
+  concept?: string;
+  minSeniority?: string;
+  maxSeniority?: string;
+  roleFamily?: string;
+  workArrangement?: string;
+  /** Filters the annualised figure, not the board's raw column. */
+  minAnnualSalary?: number;
+  /** Set false to see only salaries an employer typed into a salary field. */
+  includeTextSalary?: boolean;
+  securityClearance?: boolean;
+  ir35?: string;
+
   sort?: string;
   order?: string;
   limit?: number;
