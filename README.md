@@ -165,13 +165,12 @@ GET /api/v1/postings?roleFamily=Data&ir35=outside
 GET /api/v1/postings?securityClearance=true
 ```
 
-`minAnnualSalary` filters the **annualised** figure, not the board's raw column. That matters
-more than it sounds: only 2.5% of the corpus has a salary in the column the scraper delivered,
-against 25.6% once the description has been read, so a filter on the raw column silently
-excludes nine tenths of what is actually known. A day rate is annualised onto the same scale,
-which is what lets a contract at £550/day be compared against a £110,000 salary at all —
-`salaryStatedInterval` is what stops the two being confused afterwards. Pass
-`includeTextSalary=false` to see only what an employer typed into a salary field.
+`minAnnualSalary` filters the **annualised** figure, not the board's raw column. Two reasons.
+It covers more postings — the enricher reads salaries out of descriptions that no board ever
+put in a salary field. And it puts day rates on the same scale, which is what lets a contract
+at £550/day be compared against a £110,000 salary at all; `salaryStatedInterval` is what stops
+the two being confused afterwards. Pass `includeTextSalary=false` to see only what an employer
+typed into a salary field.
 
 An unrecognised value for any of these is a `400`, not a silently dropped filter: dropping it
 returns a plausible page of the wrong postings with nothing in the response to say so, and
@@ -217,9 +216,15 @@ an Entra bearer token. Two pages: an overview of the market metrics, and a filte
 postings browser.
 
 **The overview shows two salary numbers, and the gap between them is the point.** "Salary in
-the columns" is what the boards filled in; "salary known" is what is there once descriptions
-have been read. They differ by roughly a factor of ten, and showing only the first would
-understate the market while looking authoritative.
+the columns" is what the scraper delivered; "salary known" is what is there once descriptions
+have been read.
+
+That gap has moved, and the movement is the interesting part. Before the fork ungated its own
+salary extractor outside the US, the columns carried 2.5% and reading descriptions found
+25.6% — a tenfold difference. With the fix shipped the scraper now extracts at source, so a
+recent run reads 14.8% against 18.3%. The right response to a narrowing gap is not to remove
+the second number: it is still finding salaries the boards do not publish, and the pair is
+what shows whether the scraper is doing its job.
 
 Alongside them: seniority mix, the three-way work-arrangement split a remote flag cannot
 express, and demand shown twice — as individual concepts and **rolled up through the closure**
@@ -233,10 +238,10 @@ declined to guess at. That number is only knowable because unresolved forms are 
 rather than dropped, and the most frequent of them are the list of what to learn next.
 
 The postings browser filters on skill or area, seniority floor, working pattern and minimum
-salary. The salary column shows the **annualised** figure, because the raw one is empty for
-about 97% of rows — a column reading "—" almost everywhere suggests the market does not
-disclose, when mostly we just were not reading. A day rate is marked, since annualised it is
-comparable but not a salary.
+salary. The salary column shows the **annualised** figure, which is populated for materially
+more postings than the scraper's raw column and puts day rates and salaries on one scale so
+they can be compared at all. A day rate is marked as one, because annualised it is comparable
+and is still not a salary.
 
 **Charts follow one rule set rather than taste.** The categorical palette is validated for
 colour-vision deficiency rather than eyeballed — every adjacent pair clears a ΔE separation

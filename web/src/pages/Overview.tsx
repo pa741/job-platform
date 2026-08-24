@@ -37,9 +37,10 @@ export function Overview({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
         <StatTile label="Seen in last run" value={summary.postingsInLastRun.toLocaleString()} />
         <Meter label="Remote" ratio={summary.remoteShare} caption="of postings that said" />
         {/* Two different numbers, both true, and the gap between them is the point. The
-            first is what the boards filled in; the second is what is known once the
-            description has been read. Showing only the first understates the market by
-            about a factor of ten. */}
+            first is what the scraper delivered; the second is what is known once the
+            description has been read. The gap was tenfold before the scraper learned to
+            extract salaries outside the US, and is a few points now that it does - which
+            makes the pair a reading on the scraper as much as on the market. */}
         <Meter
           label="Salary in the columns"
           ratio={summary.salaryCoverage}

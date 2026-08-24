@@ -62,9 +62,9 @@ const ARRANGEMENT: Record<string, string> = {
 /**
  * The salary, on one scale, with the caveat attached.
  *
- * Shows the annualised figure rather than the board's raw columns, because those are empty
- * for about 97% of postings - a "Salary" column reading "—" almost everywhere is worse than
- * useless, it suggests the market does not disclose when mostly we just were not reading.
+ * Shows the annualised figure rather than the board's raw columns, which are populated for
+ * materially fewer postings. A "Salary" column reading "—" almost everywhere is worse than
+ * useless: it suggests the market does not disclose, when partly we were not reading.
  *
  * The interval matters more than it looks. A contract at GBP 600 a day annualises to 156,000,
  * which is a real number for comparison and a misleading one to read as a salary. Marking it
@@ -157,9 +157,9 @@ export function Postings({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
       concept: concept || undefined,
       minSeniority: minSeniority || undefined,
       workArrangement: workArrangement || undefined,
-      // Deliberately the annualised column rather than the board's raw one. Only about
-      // 2.5% of postings carry a salary the scraper delivered, against a quarter once the
-      // description has been read, so filtering the raw column hides most of what is known.
+      // Deliberately the annualised column rather than the board's raw one: it covers
+      // more postings, and it puts day rates and salaries on one scale so a threshold
+      // means the same thing for both.
       minAnnualSalary: minAnnualSalary ? Number(minAnnualSalary) : undefined,
       hasSalary: hasSalary === '' ? undefined : hasSalary === 'true',
       sort,

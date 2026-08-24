@@ -43,9 +43,10 @@ public sealed class BackfillExtractionFunction(
     public async Task<IActionResult> RunAsync(
         [HttpTrigger(AuthorizationLevel.Function, "post", Route = "backfill-extraction")]
         HttpRequest request,
-        [FromBody] BackfillRequest? body,
         CancellationToken ct)
     {
+        var body = await RequestBody.ReadAsync<BackfillRequest>(request, ct);
+
         if (queue is null)
         {
             // Not an error. It is the configuration this system ships in, and saying so

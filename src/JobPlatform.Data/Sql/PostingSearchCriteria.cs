@@ -56,9 +56,10 @@ public sealed record PostingSearchCriteria
     /// Salary on the annualised column rather than the board's raw one.
     /// </summary>
     /// <remarks>
-    /// Separate from <see cref="MinSalary"/>, which filters what the scraper delivered. Most
-    /// of the corpus has a salary only because it was recovered from prose, so a filter on
-    /// the raw column silently excludes three quarters of what is actually known.
+    /// Separate from <see cref="MinSalary"/>, which filters what the scraper delivered. This
+    /// one covers the postings whose salary was recovered from prose as well, and puts day
+    /// rates on the same scale, so a threshold means the same thing for a contract and a
+    /// permanent role.
     /// </remarks>
     public decimal? MinAnnualSalary { get; init; }
 

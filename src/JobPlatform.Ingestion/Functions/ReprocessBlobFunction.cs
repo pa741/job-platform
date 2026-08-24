@@ -36,9 +36,13 @@ public sealed class ReprocessBlobFunction(
     public async Task<IActionResult> RunAsync(
         [HttpTrigger(AuthorizationLevel.Function, "post", Route = "reprocess")]
         HttpRequest request,
-        [FromBody] ReprocessRequest? body,
         CancellationToken ct)
     {
+        // Read directly rather than through [FromBody], which silently bound null and made
+        // every call reprocess the whole container regardless of what was asked for. See
+        // RequestBody for why that is worse than an error here.
+        var body = await RequestBody.ReadAsync<ReprocessRequest>(request, ct);
+
         var prefix = body?.BlobPath ?? body?.Prefix ?? "jobs/";
 
         logger.LogInformation("Reprocessing blobs under {Prefix}.", prefix);

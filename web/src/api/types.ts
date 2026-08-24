@@ -27,7 +27,7 @@ export interface PostingSummary {
   isRemote: boolean | null;
   jobType: string | null;
   datePosted: string | null;
-  /** What the scraper delivered. Empty for ~97% of rows. */
+  /** What the scraper delivered. Populated for fewer postings than the annualised pair. */
   minAmount: number | null;
   maxAmount: number | null;
   currency: string | null;
@@ -35,8 +35,8 @@ export interface PostingSummary {
 
   /**
    * Salary on one scale, from the board's columns where it filled them and from the
-   * description where it did not. This is the one to display: the raw columns above are
-   * populated an order of magnitude less often.
+   * description where it did not. This is the one to display: it covers more postings, and
+   * a day rate lands on the same scale as a salary so the two can be compared.
    */
   annualSalaryMin: number | null;
   annualSalaryMax: number | null;
