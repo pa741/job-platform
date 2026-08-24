@@ -168,6 +168,89 @@ public sealed class ConceptGraphTests
         Assert.Equal(AssertionPolarity.Unspecified, Assert.Single(result.Assertions).Polarity);
     }
 
+    [Theory]
+    [InlineData("Our stack is Python, Go and Rust.", "skill.go")]
+    [InlineData("Looking for a Go developer.", "skill.go")]
+    [InlineData("Services written in Go.", "skill.go")]
+    [InlineData("Experience with C, C++ and Rust.", "skill.c")]
+    [InlineData("Statistical work in R, Python and SQL.", "skill.r")]
+    public void An_ambiguous_name_resolves_where_the_context_settles_it(string text, string key)
+    {
+        // 833 mentions in the live corpus were Go, C and R. Refusing them outright is safe
+        // and loses the ones that really are the language; these are the shapes where the
+        // surrounding text answers the question without a model.
+        var result = Graph.Resolve(AssertionSource.Taxonomy, text);
+
+        Assert.Contains(result.Assertions, a => a.ConceptKey == key);
+    }
+
+    [Theory]
+    [InlineData("You will go above and beyond for our customers.")]
+    [InlineData("Ready to go? Apply today.")]
+    [InlineData("We are always on the go.")]
+    [InlineData("Fast, go, and win - that is our motto.")]
+    [InlineData("Salary is negotiable, c. 80,000 depending on experience.")]
+    public void An_ambiguous_name_stays_a_mention_where_it_does_not(string text)
+    {
+        // The precision half, and the half that matters more: a false spike in demand for Go
+        // is worse than undercounting it. "Fast, go, and win" is a list too - what separates
+        // it from "Python, Go, Rust" is entirely what the neighbours are.
+        var result = Graph.Resolve(AssertionSource.Taxonomy, text);
+
+        Assert.DoesNotContain(result.Assertions, a => a.ConceptKey is "skill.go" or "skill.c");
+        Assert.NotEmpty(result.Mentions);
+    }
+
+    [Fact]
+    public void A_board_tag_may_name_a_domain_but_a_description_may_not()
+    {
+        // The commonest unresolved forms were ai, cloud, machine-learning and observability -
+        // domains the vocabulary already had and was refusing, because the rule written for
+        // prose was being applied to a tag the employer picked from a list.
+        Assert.True(Graph.TryResolve("machine-learning", out var domain, fromStructuredField: true));
+        Assert.Equal("area.ml", domain.Key);
+
+        Assert.False(Graph.TryResolve("machine-learning", out _));
+
+        var fromText = Graph.Resolve(AssertionSource.Taxonomy, "A machine-learning role.");
+        Assert.DoesNotContain(fromText.Assertions, a => a.ConceptKey == "area.ml");
+    }
+
+    [Theory]
+    [InlineData("api", "skill.api")]
+    [InlineData("automation", "skill.automation")]
+    [InlineData("cloud", "area.cloud")]
+    [InlineData("observability", "area.observability")]
+    public void Tag_only_concepts_resolve_from_a_skills_field(string tag, string key)
+    {
+        Assert.True(Graph.TryResolve(tag, out var concept, fromStructuredField: true));
+        Assert.Equal(key, concept.Key);
+    }
+
+    [Fact]
+    public void Tag_only_words_are_never_matched_in_prose()
+    {
+        // "api", "cloud" and "automation" appear in almost every advert and carry no
+        // information there. Matching them would put a concept on nearly every posting.
+        var result = Graph.Resolve(
+            AssertionSource.Taxonomy,
+            "You will build an API in the cloud with a focus on automation.");
+
+        Assert.DoesNotContain(result.Assertions, a => a.ConceptKey == "skill.api");
+        Assert.DoesNotContain(result.Assertions, a => a.ConceptKey == "skill.automation");
+        Assert.DoesNotContain(result.Assertions, a => a.ConceptKey == "area.cloud");
+    }
+
+    [Fact]
+    public void A_specific_skill_still_beats_the_domain_that_shares_its_name()
+    {
+        // "devops" is both a skill and a domain. The skill is the more specific answer, and
+        // it reaches the domain through the closure anyway.
+        Assert.True(Graph.TryResolve("devops", out var concept, fromStructuredField: true));
+        Assert.Equal("skill.devops", concept.Key);
+        Assert.Contains("area.devops", Graph.Ancestors(concept.Key).Keys);
+    }
+
     [Fact]
     public void Closure_rolls_a_skill_up_to_every_ancestor()
     {

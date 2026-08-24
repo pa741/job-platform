@@ -165,14 +165,23 @@ public sealed class FixtureEnrichmentTests
     }
 
     [Fact]
-    public void Ambiguous_mentions_are_recorded_somewhere_in_the_corpus()
+    public void An_ambiguous_word_used_as_a_word_stays_a_mention()
     {
-        // The security description says "review code in Python and Go". Go resolves to
-        // nothing, and the mention is what keeps that visible rather than silent.
-        var mentions = ById("li-0008").Mentions;
+        // in-0006's description says "we go the extra mile". Nothing around it suggests the
+        // language, so it is recorded rather than asserted - and recorded rather than
+        // silently dropped, which is the whole reason mentions exist.
+        var mentions = ById("in-0006").Mentions;
 
         Assert.Contains(mentions, m => m.Reason == MentionReason.Ambiguous
             && m.SurfaceForm.Equals("go", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void An_ambiguous_word_used_as_a_language_resolves()
+    {
+        // li-0008 says "review code in Python and Go, and help teams..." - a list whose
+        // neighbour is a language the vocabulary knows. That settles it without a model.
+        Assert.True(Has(ById("li-0008"), "skill.go"));
     }
 
     [Fact]

@@ -104,7 +104,9 @@ public static class PostingEnricher
                 continue;
             }
 
-            if (graph.TryResolve(skill, out var concept))
+            // fromStructuredField: this came out of the board's own skills field, not out of
+            // prose, so domains and tagOnly concepts are in scope.
+            if (graph.TryResolve(skill, out var concept, fromStructuredField: true))
             {
                 if (seen.Add(concept.Key))
                 {

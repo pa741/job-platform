@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "notes": [
     "The concept key is the identity; the label is an attribute. Renaming a label is an",
     "edit, renaming a key is a data migration.",
@@ -21,7 +21,13 @@
     "",
     "requiresCapital marks concepts whose label is also an ordinary English word but which",
     "are normally capitalised. They match only where the text kept a capital, so REST API",
-    "counts and the rest of the team does not."
+    "counts and the rest of the team does not.",
+    "",
+    "tagOnly marks concepts that a board's own skills field may name but that are never",
+    "matched in a description. Every domain is tagOnly, and so are words like api, cloud",
+    "and automation: in prose they mean nothing, while in a structured skills field the",
+    "employer picked them deliberately. That difference is the whole reason Source is part",
+    "of an assertion's identity."
   ],
   "concepts": [
     {
@@ -77,7 +83,13 @@
     {
       "key": "area.software-development",
       "kind": "domain",
-      "label": "Software Development"
+      "label": "Software Development",
+      "aliases": [
+        "software-development",
+        "software development",
+        "software-engineering"
+      ],
+      "tagOnly": true
     },
     {
       "key": "area.backend",
@@ -85,7 +97,14 @@
       "label": "Backend Development",
       "broader": [
         "area.software-development"
-      ]
+      ],
+      "aliases": [
+        "backend",
+        "back-end",
+        "back end",
+        "server-side"
+      ],
+      "tagOnly": true
     },
     {
       "key": "area.frontend",
@@ -93,7 +112,15 @@
       "label": "Frontend Development",
       "broader": [
         "area.software-development"
-      ]
+      ],
+      "aliases": [
+        "frontend",
+        "front-end",
+        "front end",
+        "ui",
+        "user-interface"
+      ],
+      "tagOnly": true
     },
     {
       "key": "area.mobile",
@@ -101,7 +128,12 @@
       "label": "Mobile Development",
       "broader": [
         "area.software-development"
-      ]
+      ],
+      "aliases": [
+        "mobile",
+        "mobile-development"
+      ],
+      "tagOnly": true
     },
     {
       "key": "area.gamedev",
@@ -109,7 +141,13 @@
       "label": "Game Development",
       "broader": [
         "area.software-development"
-      ]
+      ],
+      "aliases": [
+        "gaming",
+        "games",
+        "game-development"
+      ],
+      "tagOnly": true
     },
     {
       "key": "area.data-and-ai",
@@ -122,7 +160,18 @@
       "label": "Data Engineering",
       "broader": [
         "area.data-and-ai"
-      ]
+      ],
+      "aliases": [
+        "data",
+        "data-engineering",
+        "data engineering",
+        "etl",
+        "data-pipelines",
+        "data pipelines",
+        "big-data",
+        "big data"
+      ],
+      "tagOnly": true
     },
     {
       "key": "area.analytics",
@@ -130,7 +179,13 @@
       "label": "Analytics and BI",
       "broader": [
         "area.data-and-ai"
-      ]
+      ],
+      "aliases": [
+        "analytics",
+        "business-intelligence",
+        "business intelligence"
+      ],
+      "tagOnly": true
     },
     {
       "key": "area.ml",
@@ -138,12 +193,28 @@
       "label": "Machine Learning",
       "broader": [
         "area.data-and-ai"
-      ]
+      ],
+      "aliases": [
+        "ai",
+        "machine-learning",
+        "machine learning",
+        "ml",
+        "artificial-intelligence",
+        "artificial intelligence",
+        "deep-learning"
+      ],
+      "tagOnly": true
     },
     {
       "key": "area.infrastructure",
       "kind": "domain",
-      "label": "Infrastructure and Operations"
+      "label": "Infrastructure and Operations",
+      "aliases": [
+        "infrastructure",
+        "sysadmin",
+        "systems-administration"
+      ],
+      "tagOnly": true
     },
     {
       "key": "area.cloud",
@@ -151,7 +222,13 @@
       "label": "Cloud",
       "broader": [
         "area.infrastructure"
-      ]
+      ],
+      "aliases": [
+        "cloud",
+        "cloud-computing",
+        "cloud computing"
+      ],
+      "tagOnly": true
     },
     {
       "key": "area.devops",
@@ -167,27 +244,59 @@
       "label": "Observability",
       "broader": [
         "area.infrastructure"
-      ]
+      ],
+      "aliases": [
+        "observability",
+        "monitoring"
+      ],
+      "tagOnly": true
     },
     {
       "key": "area.quality",
       "kind": "domain",
-      "label": "Quality Engineering"
+      "label": "Quality Engineering",
+      "aliases": [
+        "qa",
+        "testing",
+        "quality-assurance",
+        "quality assurance",
+        "test-automation"
+      ],
+      "tagOnly": true
     },
     {
       "key": "area.security",
       "kind": "domain",
-      "label": "Security"
+      "label": "Security",
+      "aliases": [
+        "security",
+        "cybersecurity",
+        "cyber-security",
+        "infosec"
+      ],
+      "tagOnly": true
     },
     {
       "key": "area.design",
       "kind": "domain",
-      "label": "Design"
+      "label": "Design",
+      "aliases": [
+        "design",
+        "ux",
+        "ui-design"
+      ],
+      "tagOnly": true
     },
     {
       "key": "area.delivery",
       "kind": "domain",
-      "label": "Delivery and Ways of Working"
+      "label": "Delivery and Ways of Working",
+      "aliases": [
+        "project-management",
+        "project management",
+        "delivery"
+      ],
+      "tagOnly": true
     },
     {
       "key": "skill.csharp",
@@ -2588,6 +2697,137 @@
       ],
       "broader": [
         "type.certification"
+      ]
+    },
+    {
+      "key": "skill.api",
+      "kind": "skill",
+      "label": "APIs",
+      "tagOnly": true,
+      "aliases": [
+        "api",
+        "apis",
+        "api-development",
+        "api design"
+      ],
+      "broader": [
+        "type.concept",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.automation",
+      "kind": "skill",
+      "label": "Automation",
+      "tagOnly": true,
+      "aliases": [
+        "automation"
+      ],
+      "broader": [
+        "type.concept",
+        "area.devops"
+      ]
+    },
+    {
+      "key": "skill.networking",
+      "kind": "skill",
+      "label": "Networking",
+      "tagOnly": true,
+      "aliases": [
+        "networking",
+        "tcp/ip",
+        "computer-networking"
+      ],
+      "broader": [
+        "type.concept",
+        "area.infrastructure"
+      ]
+    },
+    {
+      "key": "skill.saas",
+      "kind": "skill",
+      "label": "SaaS",
+      "tagOnly": true,
+      "aliases": [
+        "saas",
+        "software-as-a-service"
+      ],
+      "broader": [
+        "type.concept"
+      ]
+    },
+    {
+      "key": "skill.distributed-systems",
+      "kind": "skill",
+      "label": "Distributed Systems",
+      "aliases": [
+        "distributed-systems",
+        "distributed systems"
+      ],
+      "broader": [
+        "type.concept",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.agentic-ai",
+      "kind": "skill",
+      "label": "Agentic AI",
+      "aliases": [
+        "agentic-ai",
+        "agentic ai",
+        "ai agents",
+        "agentic"
+      ],
+      "broader": [
+        "type.concept",
+        "area.ml"
+      ],
+      "implies": [
+        "skill.llms"
+      ]
+    },
+    {
+      "key": "skill.ecommerce",
+      "kind": "skill",
+      "label": "E-commerce",
+      "tagOnly": true,
+      "aliases": [
+        "ecommerce",
+        "e-commerce"
+      ],
+      "broader": [
+        "type.concept"
+      ]
+    },
+    {
+      "key": "skill.github",
+      "kind": "skill",
+      "label": "GitHub",
+      "aliases": [
+        "github"
+      ],
+      "broader": [
+        "type.platform",
+        "area.software-development"
+      ],
+      "implies": [
+        "skill.git"
+      ]
+    },
+    {
+      "key": "skill.help-desk",
+      "kind": "skill",
+      "label": "Help Desk",
+      "tagOnly": true,
+      "aliases": [
+        "help-desk",
+        "help desk",
+        "helpdesk",
+        "service-desk"
+      ],
+      "broader": [
+        "type.concept"
       ]
     }
   ]

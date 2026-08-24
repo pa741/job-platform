@@ -83,11 +83,52 @@ public sealed class ConceptGraph
 
     private const string TrailingBoundary = $"(?![{NameChar}]|\\.[{NameChar}])";
 
+    /// <summary>
+    /// How far either side of an ambiguous form to look for evidence that it is the language.
+    /// </summary>
+    /// <remarks>
+    /// Narrow on purpose. The signal being looked for is a stack list - "Python, Go, Rust" -
+    /// or an immediate qualifier - "Go developer". Widening the window starts catching the
+    /// other language names in the same paragraph, which are there for their own reasons and
+    /// say nothing about whether this particular "go" was the verb.
+    /// </remarks>
+    private const int AmbiguityWindow = 30;
+
+    /// <summary>
+    /// Words that immediately after an ambiguous name make it the language.
+    /// </summary>
+    /// <remarks>
+    /// "Go developer" and "R programming" are not sentences anyone writes by accident. The
+    /// list is deliberately short: every entry here is a phrase that only makes sense if the
+    /// preceding token was a language.
+    /// </remarks>
+    private static readonly Regex FollowedByLanguageWord = new(
+        @"^\s*(?:developer|engineer|programmer|programming|developers|engineers|"
+        + @"lang|language|codebase|code\s?base|microservices?|services?|backend|dev)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    /// <summary>
+    /// Phrases that immediately before an ambiguous name make it the language.
+    /// </summary>
+    private static readonly Regex PrecededByLanguageWord = new(
+        @"\b(?:written\s+in|coded\s+in|built\s+(?:in|with)|experience\s+(?:in|with)|"
+        + @"proficient\s+in|fluent\s+in|languages?\s*[:\-]?|programming\s+in|"
+        + @"such\s+as|primarily|stack\s*[:\-]?)\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    /// <summary>
+    /// A separator that makes a list: "Python, Go, Rust" or "Java / Go".
+    /// </summary>
+    private static readonly Regex ListNeighbour = new(
+        @"^\s*[,/|]|[,/|]\s*$",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
     private static readonly Lazy<ConceptGraph> Lazy = new(Load, LazyThreadSafetyMode.ExecutionAndPublication);
 
     private readonly FrozenDictionary<string, Concept> _byKey;
     private readonly FrozenDictionary<string, Entry> _entryByKey;
     private readonly FrozenDictionary<string, Entry> _resolvable;
+    private readonly FrozenDictionary<string, Entry> _tagResolvable;
     private readonly FrozenDictionary<string, string> _ambiguous;
     private readonly FrozenDictionary<string, FrozenDictionary<string, int>> _ancestors;
     private readonly Regex _matcher;
@@ -108,22 +149,27 @@ public sealed class ConceptGraph
         _order = Concepts.Count;
 
         var resolvable = new Dictionary<string, Entry>(StringComparer.OrdinalIgnoreCase);
+        var tagResolvable = new Dictionary<string, Entry>(StringComparer.OrdinalIgnoreCase);
         var ambiguous = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var entry in entries)
         {
-            // Domains are structural. Nothing writes "Backend Development" in an advert, and
-            // matching the phrase would count the few that do as though they were the field.
-            if (entry.ParseKind() == ConceptKind.Domain)
-            {
-                continue;
-            }
+            var isDomain = entry.ParseKind() == ConceptKind.Domain;
 
-            foreach (var form in entry.MatchableForms())
+            foreach (var form in entry.MatchableForms(includeLabel: !isDomain))
             {
                 // A collision means the vocabulary is ambiguous, which is a bug in the
                 // resource rather than something to resolve at runtime by picking a winner.
-                resolvable[Normalize(form)] = entry;
+                tagResolvable[Normalize(form)] = entry;
+
+                // Domains are structural - nothing writes "Backend Development" in an advert,
+                // and matching the phrase would count the few that do as though they were the
+                // field. tagOnly concepts are the same problem in miniature: "api" and "cloud"
+                // appear in almost every description and mean nothing there.
+                if (!isDomain && !entry.TagOnly)
+                {
+                    resolvable[Normalize(form)] = entry;
+                }
             }
 
             foreach (var form in entry.Ambiguous)
@@ -133,6 +179,7 @@ public sealed class ConceptGraph
         }
 
         _resolvable = resolvable.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
+        _tagResolvable = tagResolvable.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
         _ambiguous = ambiguous.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
         _ancestors = BuildClosure(_byKey);
 
@@ -264,13 +311,31 @@ public sealed class ConceptGraph
     /// concept for it, and dropping it would both understate what the employer asked for and
     /// destroy the only signal that says the vocabulary has a gap.
     /// </remarks>
-    public bool TryResolve(string? surfaceForm, out Concept concept)
+    /// <param name="fromStructuredField">
+    /// True when the form came from a board's own skills field rather than from prose.
+    /// </param>
+    /// <remarks>
+    /// A structured field is a stronger signal than a description, and the vocabulary is
+    /// deliberately wider for it: domains and <c>tagOnly</c> concepts resolve here and
+    /// nowhere else. The evidence for that is direct - the most frequent forms the resolver
+    /// could not place were <c>ai</c>, <c>cloud</c>, <c>machine-learning</c> and
+    /// <c>observability</c>, all of them domains the vocabulary already had and was refusing
+    /// because the rule written for prose was being applied to a curated tag.
+    /// </remarks>
+    public bool TryResolve(string? surfaceForm, out Concept concept, bool fromStructuredField = false)
     {
-        if (!string.IsNullOrWhiteSpace(surfaceForm)
-            && _resolvable.TryGetValue(Normalize(surfaceForm), out var entry))
+        if (!string.IsNullOrWhiteSpace(surfaceForm))
         {
-            concept = _byKey[entry.Key];
-            return true;
+            var normalized = Normalize(surfaceForm);
+
+            var found = _resolvable.TryGetValue(normalized, out var entry)
+                || (fromStructuredField && _tagResolvable.TryGetValue(normalized, out entry));
+
+            if (found)
+            {
+                concept = _byKey[entry!.Key];
+                return true;
+            }
         }
 
         concept = null!;
@@ -304,13 +369,18 @@ public sealed class ConceptGraph
                 continue;
             }
 
+            var pending = new List<(Match Match, string Key)>();
+
             foreach (Match match in _matcher.Matches(text))
             {
                 var normalized = Normalize(match.Value);
 
-                if (_ambiguous.ContainsKey(normalized))
+                if (_ambiguous.TryGetValue(normalized, out var ambiguousKey))
                 {
-                    mentions[match.Value] = mentions.GetValueOrDefault(match.Value) + 1;
+                    // Held back rather than decided here: whether this one is the language
+                    // depends on what is around it, and the test is worth doing once per
+                    // match rather than inline.
+                    pending.Add((match, ambiguousKey));
                     continue;
                 }
 
@@ -327,6 +397,18 @@ public sealed class ConceptGraph
 
                 // First spelling wins, so the evidence is what the advert led with.
                 resolved.TryAdd(entry.Key, match.Value);
+            }
+
+            foreach (var (match, key) in pending)
+            {
+                if (LooksLikeTheLanguage(text, match))
+                {
+                    resolved.TryAdd(key, match.Value);
+                }
+                else
+                {
+                    mentions[match.Value] = mentions.GetValueOrDefault(match.Value) + 1;
+                }
             }
         }
 
@@ -347,6 +429,65 @@ public sealed class ConceptGraph
             .ToArray();
 
         return new ResolutionResult(assertions, unresolved);
+    }
+
+    /// <summary>
+    /// Whether an ambiguous name is being used as the language rather than as the word.
+    /// </summary>
+    /// <remarks>
+    /// "Go", "R", "C" and "Julia" are ordinary English words and a name, and matching them on
+    /// sight would invent demand that does not exist - against the live corpus they account
+    /// for 833 unresolved mentions, the single largest gap in the data. Refusing them outright
+    /// is the safe answer and the one this class shipped with; it is also wrong for the
+    /// fraction that really are the language.
+    ///
+    /// Three signals, all local and all narrow, because a false positive here is worse than
+    /// a miss: the form is part of a list of other things ("Python, Go, Rust"), it is
+    /// immediately followed by a word that only follows a language ("Go developer"), or it is
+    /// immediately preceded by a phrase that introduces one ("written in Go"). Anything else
+    /// stays a mention, which is a recorded uncertainty rather than a silent loss.
+    ///
+    /// A list only counts when the neighbouring item is itself a resolved concept. "Fast,
+    /// go, and win" is a list too, and the difference between it and "Python, Go, Rust" is
+    /// entirely in what the neighbours are.
+    /// </remarks>
+    private bool LooksLikeTheLanguage(string text, Match match)
+    {
+        var beforeStart = Math.Max(0, match.Index - AmbiguityWindow);
+        var before = text[beforeStart..match.Index];
+
+        var afterEnd = Math.Min(text.Length, match.Index + match.Length + AmbiguityWindow);
+        var after = text[(match.Index + match.Length)..afterEnd];
+
+        if (FollowedByLanguageWord.IsMatch(after) || PrecededByLanguageWord.IsMatch(before))
+        {
+            return true;
+        }
+
+        // Either side: "Python, Go and Rust" has the separator before, "Go, Rust and Python"
+        // has it after. Checking only one direction misses half of every list.
+        var inList = ListNeighbour.IsMatch(after) || ListNeighbour.IsMatch(before);
+
+        return inList && HasResolvableNeighbour(before, after);
+    }
+
+    /// <summary>Whether either side of the form names something the vocabulary knows.</summary>
+    private bool HasResolvableNeighbour(string before, string after)
+    {
+        foreach (var side in (ReadOnlySpan<string>)[before, after])
+        {
+            foreach (Match neighbour in _matcher.Matches(side))
+            {
+                var normalized = Normalize(neighbour.Value);
+
+                if (_resolvable.ContainsKey(normalized))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -485,6 +626,20 @@ public sealed class ConceptGraph
         [JsonPropertyName("matchLabel")]
         public bool MatchLabel { get; init; } = true;
 
+        /// <summary>
+        /// Resolvable from a board's structured skills field, never matched in a description.
+        /// </summary>
+        /// <remarks>
+        /// Every domain is tagOnly, and so are words like <c>api</c>, <c>cloud</c> and
+        /// <c>automation</c>. In prose those carry no information - almost every advert
+        /// contains them - but in a skills field the employer picked them from a list, which
+        /// is a deliberate act. The same string means different things depending on where it
+        /// appears, and that is exactly the distinction <see cref="AssertionSource"/> exists
+        /// to record.
+        /// </remarks>
+        [JsonPropertyName("tagOnly")]
+        public bool TagOnly { get; init; }
+
         public ConceptKind ParseKind() => Kind switch
         {
             "domain" => ConceptKind.Domain,
@@ -493,9 +648,9 @@ public sealed class ConceptGraph
             _ => throw new InvalidOperationException($"Concept '{Key}' has unknown kind '{Kind}'."),
         };
 
-        public IEnumerable<string> MatchableForms()
+        public IEnumerable<string> MatchableForms(bool includeLabel = true)
         {
-            if (MatchLabel)
+            if (MatchLabel && includeLabel)
             {
                 yield return Label;
             }

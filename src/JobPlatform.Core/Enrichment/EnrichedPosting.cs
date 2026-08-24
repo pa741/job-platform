@@ -21,7 +21,11 @@ public sealed record EnrichedPosting
     /// Bumped whenever a classifier changes what it would produce for the same input.
     /// Rows below the current value are stale and eligible for a backfill pass.
     /// </summary>
-    public const int CurrentVersion = 1;
+    /// <remarks>
+    /// 2: board tags may name a domain, ten concepts added from the mention log, and
+    /// ambiguous names resolve where their context settles it.
+    /// </remarks>
+    public const int CurrentVersion = 2;
 
     public required JobPosting Posting { get; init; }
 
