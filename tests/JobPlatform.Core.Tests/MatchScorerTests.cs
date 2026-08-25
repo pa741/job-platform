@@ -288,6 +288,7 @@ public sealed class MatchScorerTests
         var result = MatchScorer.Score(Candidate(Holds("skill.python")), Posting());
 
         Assert.Equal(0, result.Score);
+        Assert.Equal(0, result.Coverage);
         Assert.Empty(result.Matched);
         Assert.Empty(result.Gaps);
     }
@@ -474,6 +475,127 @@ public sealed class MatchScorerTests
                 Wants("skill.cobol", AssertionPolarity.Required)));
 
         Assert.Equal(AssertionPolarity.Required, result.Gaps[0].Demand);
+    }
+
+    // -----------------------------------------------------------------------
+    // Coverage, and the floor under "silence drops an axis"
+    //
+    // These exist because the rule was wrong in production before it was wrong in a test.
+    // Against the real corpus, 44 of the top 60 matches had no skills axis at all and 13
+    // were scored on location alone - a posting nothing could be said about was coming out
+    // at 100 and outranking roles the candidate genuinely fitted.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void A_posting_with_no_readable_requirements_cannot_score_on_location_alone()
+    {
+        // The exact shape that reached production: no concepts, no seniority, no arrangement,
+        // no salary. The only answerable axis was location, and it agreed.
+        var result = Score(
+            new CandidateFacts
+            {
+                Concepts = [Holds("skill.python")],
+                LocationCity = "London",
+                LocationCountry = "United Kingdom",
+            },
+            new PostingFacts
+            {
+                PostingId = 1,
+                Concepts = [],
+                LocationCity = "London",
+                LocationCountry = "United Kingdom",
+            });
+
+        Assert.Equal(0, result.Score);
+
+        // The location axis still scored - it is not suppressed, it just cannot carry the
+        // result on its own. Keeping it visible is what makes the zero explicable.
+        Assert.Equal(1.0, result.Components.Single(c => c.Name == MatchComponent.Location).Score);
+    }
+
+    [Fact]
+    public void Coverage_says_how_much_of_a_full_assessment_the_posting_supported()
+    {
+        var thin = Score(
+            new CandidateFacts
+            {
+                Concepts = [Holds("skill.python")],
+                LocationCity = "London",
+            },
+            new PostingFacts
+            {
+                PostingId = 1,
+                Concepts = [Wants("skill.python")],
+                LocationCity = "London",
+            });
+
+        var full = Score(
+            new CandidateFacts
+            {
+                Concepts = [Holds("skill.python")],
+                Seniority = Seniority.Senior,
+                YearsExperience = 8,
+                PreferredArrangement = WorkArrangement.Hybrid,
+                MinimumSalary = 70_000m,
+                SalaryCurrency = "GBP",
+                LocationCity = "London",
+            },
+            new PostingFacts
+            {
+                PostingId = 2,
+                Concepts = [Wants("skill.python"), Wants("skill.rust", AssertionPolarity.Preferred)],
+                Seniority = Seniority.Senior,
+                YearsExperienceMin = 5,
+                WorkArrangement = WorkArrangement.Hybrid,
+                AnnualSalaryMax = 90_000m,
+                SalaryCurrency = "GBP",
+                LocationCity = "London",
+            });
+
+        Assert.True(thin.Coverage < full.Coverage);
+        Assert.InRange(thin.Coverage, 0.01, 0.99);
+        Assert.InRange(full.Coverage, 0.99, 1.0);
+    }
+
+    [Fact]
+    public void Coverage_is_zero_where_the_posting_answered_nothing_at_all()
+    {
+        var result = MatchScorer.Score(Candidate(Holds("skill.python")), Posting());
+
+        Assert.Equal(0, result.Score);
+        Assert.Equal(0, result.Coverage);
+    }
+
+    [Fact]
+    public void A_terse_posting_whose_skills_are_all_met_still_scores_full_marks()
+    {
+        // Coverage is reported, never multiplied into the score. A posting that states only
+        // skills, and whose skills the candidate has, is a complete match on everything it
+        // asked for - discounting it for the questions it never posed would punish the
+        // candidate for the employer's terseness.
+        var result = MatchScorer.Score(
+            Candidate(Holds("skill.python")),
+            Posting(Wants("skill.python")));
+
+        Assert.Equal(100, result.Score);
+        Assert.True(result.Coverage < 0.5);
+    }
+
+    [Fact]
+    public void Concept_evidence_from_the_preferred_axis_alone_is_enough_to_score()
+    {
+        // Unspecified polarity lands on the preferred axis, and it is by far the most common
+        // case - only the model pass can tell essential from desirable and it has not
+        // necessarily run. Requiring the *required* axis specifically would zero most of the
+        // corpus, which would be the same bug pointing the other way.
+        var result = MatchScorer.Score(
+            Candidate(Holds("skill.python")),
+            Posting(new ConceptAssertion("skill.python", AssertionSource.Taxonomy)));
+
+        Assert.True(result.Score > 0);
+        Assert.Equal(
+            0,
+            result.Components.Single(c => c.Name == MatchComponent.RequiredSkills).Weight);
     }
 
     [Fact]

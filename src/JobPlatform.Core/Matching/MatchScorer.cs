@@ -19,7 +19,9 @@ namespace JobPlatform.Core.Matching;
 /// The scorer never invents evidence. Every point it awards traces to an assertion on one side
 /// and an assertion or a curated edge on the other, which is what makes
 /// <see cref="MatchResult.Matched"/> presentable to the candidate rather than merely
-/// diagnostic.
+/// diagnostic. It also never awards points for a posting it cannot read: the concept axes are
+/// the substance of a match, and a posting answering neither of them scores zero rather than
+/// inheriting a perfect score from whichever peripheral axis happened to agree.
 /// </remarks>
 public static class MatchScorer
 {
@@ -33,6 +35,17 @@ public static class MatchScorer
     private const double ArrangementWeight = 0.10;
     private const double SalaryWeight = 0.05;
     private const double LocationWeight = 0.05;
+
+    /// <summary>
+    /// What every axis would carry if a posting answered all of them.
+    /// </summary>
+    /// <remarks>
+    /// The denominator for <see cref="MatchResult.Coverage"/>. Written as the sum rather than
+    /// as a literal 1.0 so that adding an axis cannot silently make coverage exceed one.
+    /// </remarks>
+    private const double NominalWeight =
+        RequiredSkillsWeight + PreferredSkillsWeight + SeniorityWeight + ExperienceWeight
+        + ArrangementWeight + SalaryWeight + LocationWeight;
 
     /// <summary>Credit a held concept earns, by how it relates to the required one.</summary>
     private const double SpecialisationCredit = 1.00;
@@ -100,19 +113,35 @@ public static class MatchScorer
 
         var totalWeight = components.Sum(c => c.Weight);
 
-        // Every axis silent at once is possible: a posting with no concepts, no seniority, no
-        // arrangement and no salary. Zero is the honest answer, and dividing by the weight
-        // would be a crash.
-        var total = totalWeight <= 0
-            ? 0
-            : components.Sum(c => c.Score * c.Weight) / totalWeight;
-
         matches.Sort((a, b) => b.Credit.CompareTo(a.Credit));
         gaps.Sort((a, b) => b.Demand.CompareTo(a.Demand));
+
+        // What share of a full assessment this posting actually supported. Reported rather
+        // than multiplied into the score - see MatchResult.Coverage for why.
+        var coverage = totalWeight / NominalWeight;
+
+        // The floor under "silence drops an axis". Dropping axes is right until nothing
+        // substantive is left: a posting with no readable requirements, scored on the city it
+        // happens to be in, otherwise comes out at 100 and outranks roles the candidate
+        // genuinely fits. Measured against the real corpus this was not an edge case - 44 of
+        // the top 60 matches had no skills axis at all, and 13 rested on location alone.
+        //
+        // Zero rather than null, and deliberately: a posting nothing can be said about must
+        // sort below every posting something can be said about, which is the same reason
+        // Seniority.Unknown is zero. Coverage is what distinguishes "scored badly" from
+        // "could not be scored", so the distinction survives rather than being collapsed.
+        var hasConceptEvidence = components.Any(c =>
+            c.Weight > 0
+            && (c.Name == MatchComponent.RequiredSkills || c.Name == MatchComponent.PreferredSkills));
+
+        var total = !hasConceptEvidence || totalWeight <= 0
+            ? 0
+            : components.Sum(c => c.Score * c.Weight) / totalWeight;
 
         return new MatchResult
         {
             Score = (int)Math.Round(Math.Clamp(total, 0, 1) * 100, MidpointRounding.AwayFromZero),
+            Coverage = Math.Clamp(coverage, 0, 1),
             Components = components,
             Matched = matches,
             Gaps = gaps,

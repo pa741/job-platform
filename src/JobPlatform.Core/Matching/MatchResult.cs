@@ -110,6 +110,14 @@ public readonly record struct MatchComponent(string Name, double Score, double W
 /// carried for this pair. That is why the weights are per-result rather than constants
 /// somewhere.
 ///
+/// <b>But silence has a floor.</b> Dropping axes is right until there is nothing substantive
+/// left: a posting carrying no readable requirements, scored only on the city it is in, was
+/// coming out at 100 and outranking roles the candidate genuinely fits. Measured against the
+/// real corpus, 44 of the top 60 matches had no skills axis at all and 13 rested on location
+/// alone. So <see cref="Coverage"/> records how much of the nominal weight the posting could
+/// answer, and a posting that answers neither concept axis scores zero rather than inheriting
+/// a perfect score from a peripheral one - see <see cref="MatchScorer"/>.
+///
 /// This whole type is deliberately Azure-free and pure, the same way
 /// <c>MetricsCalculator</c> is: the scoring rules are the part most worth testing exactly, and
 /// they are testable exactly only while nothing in here needs a database to run.
@@ -120,10 +128,30 @@ public sealed record MatchResult
     /// Bumped whenever the scorer would produce a different number for the same input.
     /// Rows below the current value are stale and eligible for a re-score.
     /// </summary>
-    public const int CurrentVersion = 1;
+    /// <remarks>
+    /// 2: a posting answering neither concept axis scores zero instead of inheriting a perfect
+    /// score from location alone, and <see cref="Coverage"/> is reported.
+    /// </remarks>
+    public const int CurrentVersion = 2;
 
     /// <summary>0-100. Rounded once, here, so every consumer shows the same number.</summary>
     public required int Score { get; init; }
+
+    /// <summary>
+    /// How much of the nominal weight this posting could actually answer, 0-1.
+    /// </summary>
+    /// <remarks>
+    /// The honesty measure that <see cref="Score"/> alone cannot carry. A 100 computed over
+    /// every axis and a 100 computed over one are the same number and very different claims,
+    /// and without this there is nothing to tell them apart. Most real postings land between
+    /// 0.2 and 0.5: they state skills and little else.
+    ///
+    /// Deliberately not folded into <see cref="Score"/> as a multiplier. A posting that states
+    /// only skills, and whose skills the candidate has, <i>is</i> a complete match on
+    /// everything it asked for - discounting it for the questions it never posed would punish
+    /// the candidate for the employer's terseness.
+    /// </remarks>
+    public required double Coverage { get; init; }
 
     public IReadOnlyList<MatchComponent> Components { get; init; } = [];
 

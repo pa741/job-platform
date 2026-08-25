@@ -357,6 +357,14 @@ Each of these cost a red CI run; none of them fail locally.
   nothing below one that says something incompatible; scoring it as full marks would make
   vagueness a competitive advantage. **A client rendering a zero-weight axis as a zero score is
   showing a penalty that was never applied.**
+- **Silence has a floor, and it was missing.** The rule above bounded the numerator and the
+  denominator but not how little could remain, so a posting with no readable requirements,
+  scored on the city it was in, came out at 100 - against the real corpus, 44 of the top 60
+  matches had no skills axis at all. A posting answering neither concept axis now scores zero,
+  and `MatchResult.Coverage` reports the share of nominal weight answered. **Coverage is
+  reported, never multiplied into the score**: a terse posting whose stated skills are all met
+  is a genuine 100. Coverage is recomputed from the components on read rather than stored - it
+  is a pure function of them, so a column would be a second copy that could drift.
 - **`AssertionPolarity.Unspecified` is weighted as preferred, not as required.** It is by far the
   most common polarity - only the model pass can tell essential from desirable and it has not
   necessarily run - so treating it as a hard requirement would score most of the corpus at zero.

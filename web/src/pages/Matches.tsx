@@ -134,7 +134,18 @@ export function Matches({ api }: { api: JobPlatformApi }) {
               <tbody>
                 {items.map((match) => (
                   <tr key={match.postingId}>
-                    <td className="num"><ScorePill score={match.score} /></td>
+                    <td className="num">
+                      <ScorePill score={match.score} />
+                      {match.coverage < 0.25 && match.score >= 70 && (
+                        <span
+                          className="pill warning"
+                          style={{ marginLeft: 6 }}
+                          title={`Scored on ${Math.round(match.coverage * 100)}% of a full assessment - this advert states very little`}
+                        >
+                          thin
+                        </span>
+                      )}
+                    </td>
                     <td>
                       {match.title}
                       {match.requiredGapCount > 0 && (
@@ -410,6 +421,11 @@ function DraftView({ api, draft }: { api: JobPlatformApi; draft: ApplicationDeta
 
 /**
  * The score, banded.
+ *
+ * Paired in the table with a "thin" marker where a high score rests on very little: the
+ * scorer drops axes a posting says nothing about, so a terse advert can score well on the
+ * one thing it did state. The number is honest; the caveat is what stops it being read as
+ * more than it is.
  *
  * Bands rather than a gradient: three states a person can hold in their head beat a continuous
  * hue nobody can read a number off. The number is always written out, so the colour reinforces

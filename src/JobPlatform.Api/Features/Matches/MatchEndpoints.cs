@@ -170,6 +170,9 @@ public sealed class MatchEndpoints : IEndpointGroup
     private static MatchSummary Fill(MatchSummary summary, MatchRow row)
         => summary with
         {
+            // Recomputed from the components rather than stored: it is a pure function of
+            // them, so a column would be a second copy that could drift from the first.
+            Coverage = Math.Clamp(row.Read<MatchComponent>(row.ComponentsJson).Sum(c => c.Weight), 0, 1),
             Company = row.Company,
             Location = row.Location,
             AnnualSalaryMin = row.AnnualSalaryMin,

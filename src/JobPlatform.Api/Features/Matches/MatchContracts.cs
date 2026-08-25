@@ -33,6 +33,18 @@ public record MatchSummary
     /// <summary>0-100 from the deterministic scorer. Always present.</summary>
     public required int Score { get; init; }
 
+    /// <summary>
+    /// How much of a full assessment this posting supported, 0-1.
+    /// </summary>
+    /// <remarks>
+    /// <b>Read this next to <see cref="Score"/>, never instead of it.</b> A 100 computed over
+    /// every axis and a 100 computed over one are the same number and very different claims.
+    /// Most real postings land between 0.2 and 0.5 - they state skills and little else - so a
+    /// low value is normal rather than alarming; it is a low value <i>with</i> a high score
+    /// that deserves a caveat in the UI.
+    /// </remarks>
+    public double Coverage { get; init; }
+
     /// <summary>How many requirements the posting marked essential and the profile does not meet.</summary>
     public int RequiredGapCount { get; init; }
 

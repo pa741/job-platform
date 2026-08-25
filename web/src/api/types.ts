@@ -370,6 +370,15 @@ export interface MatchSummary {
 
   /** 0-100 from the deterministic scorer. Always present. */
   score: number;
+
+  /**
+   * How much of a full assessment this posting supported, 0-1.
+   *
+   * Read next to `score`, never instead of it: a 100 over every axis and a 100 over one are
+   * the same number and very different claims. Most real postings land between 0.2 and 0.5,
+   * so a low value is normal — it is a low value *with* a high score that needs a caveat.
+   */
+  coverage: number;
   requiredGapCount: number;
 
   /** Null until the model has judged this pair. Not the same as a Weak verdict. */
