@@ -130,6 +130,13 @@ public sealed class KernelDocumentExtractor(
         // own concurrency is what scales this; firing several calls per invocation as well
         // multiplies the two and is the shape that trips the deployment's tokens-per-minute
         // limit, which fails the whole batch rather than slowing it.
+        //
+        // Getting this half right is not enough, and the first real backfill proved it: the
+        // host's own queue concurrency was left at a batch size of four with a new-batch
+        // threshold of two, so six invocations ran at once and collected HTTP 429s instead of
+        // extractions. The two settings have to be read together - see the queues block in
+        // host.json, which is now sized against the deployment's capacity rather than against
+        // nothing in particular.
         for (var offset = 0; offset < requests.Count; offset += batchSize)
         {
             var length = Math.Min(batchSize, requests.Count - offset);

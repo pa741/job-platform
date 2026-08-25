@@ -19,10 +19,10 @@
       "maxDegreeOfParallelism": 1
     },
     "queues": {
-      "batchSize": 4,
-      "newBatchThreshold": 2,
+      "batchSize": 2,
+      "newBatchThreshold": 1,
       "maxDequeueCount": 3,
-      "visibilityTimeout": "00:05:00"
+      "visibilityTimeout": "00:10:00"
     }
   }
 }
