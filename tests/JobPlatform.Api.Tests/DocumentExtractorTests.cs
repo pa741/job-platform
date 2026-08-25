@@ -35,7 +35,7 @@ public sealed class DocumentExtractorTests
 
         return new KernelDocumentExtractor(
             builder.Build(),
-            Options.Create(new AzureOpenAiOptions { BulkDeployment = "gpt-5-6-luna" }));
+            Options.Create(new AzureOpenAiOptions { BulkDeployment = "bulk" }));
     }
 
     /// <summary>

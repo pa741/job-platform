@@ -45,21 +45,23 @@ public sealed class AzureOpenAiOptions
     /// Deployment name for the high-volume pass: extraction and candidacy assessment.
     /// </summary>
     /// <remarks>
-    /// Defaults to the deployment name Bicep creates for <c>gpt-5.6-luna</c>. Luna is the
-    /// cheapest of the 5.6 family and carries a 1.05M context window, which is what makes
-    /// packing many postings into one call worthwhile rather than merely possible.
+    /// Named for the job rather than the model, matching what Bicep creates. Which model sits
+    /// behind it is a deployment decision: <c>gpt-5.6-luna</c> where the subscription has quota
+    /// for it - cheapest of the 5.6 family, 1.05M context, which is what makes packing many
+    /// postings into one call worthwhile - and whatever else has capacity where it does not.
+    /// Either way this name does not move, so changing model is not a configuration change.
     /// </remarks>
-    public string BulkDeployment { get; set; } = "gpt-5-6-luna";
+    public string BulkDeployment { get; set; } = "bulk";
 
     /// <summary>
     /// Deployment name for the writing pass: tailored CV and cover letter.
     /// </summary>
     /// <remarks>
-    /// Defaults to the deployment name Bicep creates for <c>gpt-5.6-sol</c>. Roughly
-    /// twenty-five times the price of Luna per token, which is affordable precisely because
-    /// this path runs once per application rather than once per posting.
+    /// Named for the job rather than the model, as above. <c>gpt-5.6-sol</c> where quota
+    /// allows - roughly twenty-five times the price of Luna per token, affordable precisely
+    /// because this path runs once per application rather than once per posting.
     /// </remarks>
-    public string WritingDeployment { get; set; } = "gpt-5-6-sol";
+    public string WritingDeployment { get; set; } = "writing";
 
     /// <summary>
     /// How many documents travel in one bulk call.
