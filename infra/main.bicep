@@ -250,6 +250,7 @@ module keyVault 'modules/keyvault.bicep' = if (aiOpenAiBatchEnabled) {
     resourceToken: resourceToken
     tags: tags
     readerPrincipalId: identity.outputs.principalId
+    administratorObjectId: administratorObjectId
   }
 }
 

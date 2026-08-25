@@ -40,6 +40,8 @@ id = "generic-api-key"
     '''5e0bd9bd-7b93-4f28-af87-19fc36ad61bd''',
     # Key Vault Secrets User - read secret values, nothing else
     '''4633458b-17de-408a-b874-0445c86b69e6''',
+    # Key Vault Secrets Officer - set and read secret values, for the human administrator
+    '''b86a8fe4-44ce-4948-aee5-eccb2c155cd7''',
     # Storage Blob Data Contributor - scoped to the jobs-curated container only
     '''ba92f5b4-2d11-453d-a403-e96b0029c9fe''',
     # Concept keys in the skill vocabulary, e.g. the value in "key": "qual.prince2".
