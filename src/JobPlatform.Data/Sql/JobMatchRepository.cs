@@ -289,14 +289,7 @@ public sealed class JobMatchRepository(JobsDbContext db)
                 r.Title,
                 r.Company,
                 r.Description!,
-                new MatchResult
-                {
-                    Score = r.Score,
-                    Components = Read<MatchComponent>(r.ComponentsJson),
-                    Matched = Read<ConceptMatch>(r.MatchedJson),
-                    Gaps = Read<ConceptGap>(r.GapsJson),
-                    Version = r.ScorerVersion,
-                }))
+                Rebuild(r.Score, r.ComponentsJson, r.MatchedJson, r.GapsJson, r.ScorerVersion)))
             .ToList();
     }
 
@@ -499,14 +492,8 @@ public sealed class JobMatchRepository(JobsDbContext db)
             return null;
         }
 
-        var match = new MatchResult
-        {
-            Score = row.Score,
-            Components = Read<MatchComponent>(row.ComponentsJson),
-            Matched = Read<ConceptMatch>(row.MatchedJson),
-            Gaps = Read<ConceptGap>(row.GapsJson),
-            Version = row.ScorerVersion,
-        };
+        var match = Rebuild(
+            row.Score, row.ComponentsJson, row.MatchedJson, row.GapsJson, row.ScorerVersion);
 
         var assessment = row.AssessmentVersion is null
             ? null
@@ -523,6 +510,32 @@ public sealed class JobMatchRepository(JobsDbContext db)
             };
 
         return (match, assessment, new PostingBrief(postingId, row.Title, row.Company, row.Description ?? string.Empty));
+    }
+
+    /// <summary>
+    /// Reassembles a stored match from its JSON columns.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="MatchResult.Coverage"/> is recomputed from the components rather than stored.
+    /// It is a pure function of them - the share of the nominal weight the posting answered -
+    /// so a column would be a second copy of a derived value that could drift from the first,
+    /// and it would need a migration to add. Rows written before coverage existed rebuild with
+    /// the right value for free.
+    /// </remarks>
+    private static MatchResult Rebuild(
+        int score, string? componentsJson, string? matchedJson, string? gapsJson, int version)
+    {
+        var components = Read<MatchComponent>(componentsJson);
+
+        return new MatchResult
+        {
+            Score = score,
+            Coverage = Math.Clamp(components.Sum(c => c.Weight), 0, 1),
+            Components = components,
+            Matched = Read<ConceptMatch>(matchedJson),
+            Gaps = Read<ConceptGap>(gapsJson),
+            Version = version,
+        };
     }
 
     /// <summary>

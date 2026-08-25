@@ -288,6 +288,17 @@ contributes nothing to the numerator *and* nothing to the denominator. Scoring i
 rank a posting that says nothing below one that says something incompatible; scoring it as full
 marks would make vagueness a competitive advantage.
 
+**But silence has a floor, and finding that out cost a deployment.** The rule bounded the
+numerator and denominator and never bounded how *little* could remain. Run against the real
+corpus, 44 of the top 60 matches had no skills axis answered at all and 13 were scored on
+location alone — 5% of the nominal weight, coming out at 100 and outranking roles the candidate
+genuinely fitted. Vagueness was winning after all. The concept axes are the substance of a
+match, so a posting answering neither now scores zero rather than inheriting a perfect score
+from a peripheral axis, and every match carries a `coverage` figure saying how much of a full
+assessment it rested on. Coverage is reported and deliberately *not* multiplied into the score:
+a terse posting whose stated skills you entirely meet is a real 100, and discounting it would
+punish the candidate for the employer's brevity.
+
 What clears a threshold is then read by the model, in batches, and the profile travels once for
 the whole batch rather than once per posting. It is not asked to score from scratch: it is
 handed the number, the matched concepts and the gaps, and asked the one question the arithmetic
