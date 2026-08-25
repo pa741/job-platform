@@ -559,3 +559,77 @@ export interface PostingInsight {
   company: CompanyInfo | null;
   provenance: Provenance;
 }
+
+// ---------------------------------------------------------------------------
+// The concept vocabulary, and where the corpus's knowledge comes from.
+// ---------------------------------------------------------------------------
+
+export interface ConceptListItem {
+  concept: string;
+  label: string;
+  /** `Domain`, `Skill` or `Qualification`. Domains are never asserted directly. */
+  kind: string;
+}
+
+/** `Broader`, `Narrower`, `Implies`, `ImpliedBy`, `Related`, `SucceededBy`, `Succeeds`, `VariantOf`. */
+export type ConceptRelation =
+  | 'Broader' | 'Narrower' | 'Implies' | 'ImpliedBy'
+  | 'Related' | 'SucceededBy' | 'Succeeds' | 'VariantOf';
+
+export interface ConceptEdge {
+  concept: string;
+  label: string;
+  kind: string;
+  relation: ConceptRelation;
+  /** Distinct postings asserting the concept at the other end. Zero is a real answer. */
+  demand: number | null;
+}
+
+export interface ConceptLabel {
+  label: string;
+  /** `Preferred`, `Alternate`, or `Ambiguous` — names the concept but cannot be trusted to mean it. */
+  kind: string;
+}
+
+export interface ConceptAncestor {
+  concept: string;
+  label: string;
+  depth: number;
+}
+
+export interface ConceptDetail {
+  concept: string;
+  label: string;
+  kind: string;
+  labels: ConceptLabel[];
+  demand: number;
+  edges: ConceptEdge[];
+  /** The closure. What makes a domain rollup possible, and what the match scorer walks. */
+  ancestors: ConceptAncestor[];
+}
+
+export interface PolarityCount {
+  polarity: string;
+  assertions: number;
+}
+
+export interface SourceBreakdown {
+  /** `Board`, `Taxonomy` or `Model`, in descending order of trust. */
+  source: string;
+  assertions: number;
+  postings: number;
+  polarities: PolarityCount[];
+}
+
+export interface SourceComposition {
+  searchTerm: string | null;
+  sources: SourceBreakdown[];
+  totalAssertions: number;
+  /**
+   * Share of assertions carrying a strength rather than `Unspecified`, 0-1.
+   *
+   * The headline of the view. Near zero means the model pass has not run, and every match is
+   * therefore weighing "mentioned once in passing" the same as "must have".
+   */
+  gradedShare: number;
+}

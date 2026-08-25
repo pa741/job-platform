@@ -1,7 +1,8 @@
 import type {
-  ApplicationDetail, ApplicationSummary, DailyRollup, FacetsResponse, MatchDetail, MatchSummary,
+  ApplicationDetail, ApplicationSummary, ConceptDetail, ConceptListItem,
+  DailyRollup, FacetsResponse, MatchDetail, MatchSummary,
   MeResponse, MetricsSummary, PageResponse, PostingDetail, PostingInsight, PostingSummary, ProfileRequest,
-  ProfileResponse, RunResponse, ScraperHealth, SearchTermResponse,
+  ProfileResponse, RunResponse, ScraperHealth, SearchTermResponse, SourceComposition,
 } from './types';
 
 /** Thrown for any non-2xx response, carrying the RFC 9457 detail the API returns. */
@@ -122,6 +123,21 @@ export class JobPlatformApi {
    * company row server-side, and a list view has no use for any of it.
    */
   postingInsight = (id: number) => this.request<PostingInsight>(`/api/v1/postings/${id}/insight`);
+
+  /**
+   * The whole vocabulary.
+   *
+   * Served from the graph shipped in the API's build and touches no database, which is why it
+   * is safe to load on page open where nothing else that reads SQL is.
+   */
+  concepts = () =>
+    this.request<{ version: number; items: ConceptListItem[] }>('/api/v1/concepts');
+
+  concept = (key: string, searchTerm?: string) =>
+    this.request<ConceptDetail>(`/api/v1/concepts/${encodeURIComponent(key)}${JobPlatformApi.query({ searchTerm })}`);
+
+  sourceComposition = (searchTerm?: string) =>
+    this.request<SourceComposition>(`/api/v1/concepts/source-composition${JobPlatformApi.query({ searchTerm })}`);
 
   facets = (searchTerm?: string) =>
     this.request<FacetsResponse>(`/api/v1/postings/facets${JobPlatformApi.query({ searchTerm })}`);

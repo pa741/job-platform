@@ -4,6 +4,20 @@ using Microsoft.EntityFrameworkCore;
 
 namespace JobPlatform.Data.Sql;
 
+/// <param name="Source">Board tagging, a text match, or the model.</param>
+/// <param name="Polarity">
+/// How hard the posting asked. Only <see cref="AssertionSource.Model"/> can produce anything
+/// but <see cref="AssertionPolarity.Unspecified"/>, which is the single clearest measure of
+/// what the model pass adds over the deterministic ones.
+/// </param>
+/// <param name="Assertions">Rows. A concept recorded from two sources counts twice here.</param>
+/// <param name="Postings">Distinct postings. The same concept from two sources counts once.</param>
+public readonly record struct SourceComposition(
+    AssertionSource Source,
+    AssertionPolarity Polarity,
+    int Assertions,
+    int Postings);
+
 /// <summary>When the model last read this posting, and which model it was.</summary>
 /// <remarks>
 /// The payload is deliberately absent. It is the whole model response and is kept so a column
@@ -141,6 +155,92 @@ public sealed class JobPostingQueryRepository(JobsDbContext db)
         => db.JobPostings.AsNoTracking()
             .Include(p => p.SearchTerms)
             .FirstOrDefaultAsync(p => p.SourceKey == sourceKey, ct);
+
+
+    /// <summary>
+    /// How many distinct postings assert each of the given concepts.
+    /// </summary>
+    /// <remarks>
+    /// Bounded by the caller's key list on purpose. "Demand for every concept in the
+    /// vocabulary" is a 222-row aggregate over the whole assertion table; the concept explorer
+    /// needs one node and its neighbours, which is a dozen keys and an index seek.
+    ///
+    /// Counts <b>distinct postings</b>, not assertion rows. A concept the board tagged and the
+    /// description also mentioned is two rows for one posting, and reporting two would make
+    /// thoroughly-recorded concepts look more in demand than they are.
+    /// </remarks>
+    public async Task<IReadOnlyDictionary<string, int>> GetConceptDemandAsync(
+        IReadOnlyCollection<string> conceptKeys,
+        string? searchTerm = null,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(conceptKeys);
+
+        if (conceptKeys.Count == 0)
+        {
+            return new Dictionary<string, int>(StringComparer.Ordinal);
+        }
+
+        var keys = conceptKeys.ToList();
+        var query = db.PostingConcepts.AsNoTracking().Where(c => keys.Contains(c.Concept!.ConceptKey));
+
+        if (!string.IsNullOrWhiteSpace(searchTerm))
+        {
+            query = query.Where(c => c.Posting!.SearchTerms.Any(t => t.SearchTerm == searchTerm));
+        }
+
+        // Projected into an anonymous type and mapped afterwards: EF cannot translate a
+        // GroupBy straight into a positional record's constructor - it compiles and then fails
+        // at runtime with "could not be translated".
+        var rows = await query
+            .GroupBy(c => c.Concept!.ConceptKey)
+            .Select(g => new { Key = g.Key, Count = g.Select(c => c.PostingId).Distinct().Count() })
+            .ToListAsync(ct);
+
+        return rows.ToDictionary(r => r.Key, r => r.Count, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Where the corpus's knowledge actually comes from: assertions by source and strength.
+    /// </summary>
+    /// <remarks>
+    /// The only honest measure of what each pass contributes. Board tagging, text matching and
+    /// the model produce assertions that look identical once stored, and this is the query that
+    /// separates them - including the part that matters most, which is that only the model pass
+    /// can populate a polarity at all.
+    ///
+    /// <b>This reads Azure SQL to answer an aggregate question</b>, which the architecture
+    /// otherwise reserves for Cosmos. It is allowed on exactly the terms
+    /// <see cref="GetFacetsAsync"/> is: one round trip rather than several, cached hard by the
+    /// API, changing once a day when the ingest runs, and never on a bootstrap or polling path.
+    /// Putting it behind a timer that refetches, or on a page that loads it before anything
+    /// else, would break those terms and with them the monthly vCore grant.
+    /// </remarks>
+    public async Task<IReadOnlyList<SourceComposition>> GetSourceCompositionAsync(
+        string? searchTerm = null, CancellationToken ct = default)
+    {
+        var query = db.PostingConcepts.AsNoTracking();
+
+        if (!string.IsNullOrWhiteSpace(searchTerm))
+        {
+            query = query.Where(c => c.Posting!.SearchTerms.Any(t => t.SearchTerm == searchTerm));
+        }
+
+        var rows = await query
+            .GroupBy(c => new { c.Source, c.Polarity })
+            .Select(g => new
+            {
+                g.Key.Source,
+                g.Key.Polarity,
+                Assertions = g.Count(),
+                Postings = g.Select(c => c.PostingId).Distinct().Count(),
+            })
+            .ToListAsync(ct);
+
+        return rows
+            .Select(r => new SourceComposition(r.Source, r.Polarity, r.Assertions, r.Postings))
+            .ToList();
+    }
 
     /// <summary>
     /// The filter vocabulary a UI needs to build its controls, in one round trip.
