@@ -12,6 +12,9 @@ param tags object
 @description('Principal id of the shared managed identity that reads the secret.')
 param readerPrincipalId string
 
+@description('Object id of the human administrator, who has to be able to set the secret value.')
+param administratorObjectId string = ''
+
 @description('Name of the secret holding the OpenAI API key. Its VALUE is never set here.')
 param openAiSecretName string = 'openai-api-key'
 
@@ -65,6 +68,26 @@ resource secretsReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsUser)
     principalId: readerPrincipalId
     principalType: 'ServicePrincipal'
+  }
+}
+
+// Without this, the deploy succeeds and then nobody can put the key in: the vault is
+// RBAC-authorised, and creating a resource does not grant its creator data-plane access. The
+// same reasoning that makes the administrator a Cognitive Services OpenAI User on the Foundry
+// account and an Entra admin on SQL - a template that provisions something unusable is not
+// finished.
+@description('Built-in Key Vault Secrets Officer: set and read secret values.')
+var keyVaultSecretsOfficer = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
+
+resource administratorAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(administratorObjectId)) {
+  scope: vault
+  name: guid(vault.id, administratorObjectId, keyVaultSecretsOfficer)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsOfficer)
+    principalId: administratorObjectId
+    // Deliberately 'User'. Declaring a human as ServicePrincipal fails with a
+    // principal-not-found error that reads as though the object id were wrong.
+    principalType: 'User'
   }
 }
 
