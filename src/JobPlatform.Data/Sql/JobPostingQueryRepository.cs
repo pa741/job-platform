@@ -4,6 +4,30 @@ using Microsoft.EntityFrameworkCore;
 
 namespace JobPlatform.Data.Sql;
 
+/// <summary>When the model last read this posting, and which model it was.</summary>
+/// <remarks>
+/// The payload is deliberately absent. It is the whole model response and is kept so a column
+/// can be re-derived without re-calling anything - that is an operational concern, not
+/// something to ship down a read endpoint.
+/// </remarks>
+public sealed record ExtractionStamp(int Version, string? Model, DateTimeOffset ExtractedAtUtc);
+
+/// <summary>
+/// One posting and everything concluded about it, with the provenance intact.
+/// </summary>
+/// <remarks>
+/// The assertions carry their <see cref="AssertionSource"/> and their evidence phrase, which is
+/// the point: "this advert wants Kubernetes" is a claim, and "the employer tagged it", "the
+/// description contains the string" and "the model read <i>must have Kubernetes</i>" are three
+/// different qualities of evidence for it. Collapsing them loses the only thing that makes the
+/// conclusion checkable by a person.
+/// </remarks>
+public sealed record PostingProvenance(
+    Entities.JobPostingEntity Posting,
+    IReadOnlyList<ConceptAssertion> Concepts,
+    IReadOnlyList<UnresolvedMention> Mentions,
+    ExtractionStamp? Extraction);
+
 /// <summary>
 /// The read side. Separate from <see cref="JobPostingRepository"/>, which owns ingestion's
 /// writes, because the two have opposite constraints: the writer batches everything into two
@@ -50,6 +74,68 @@ public sealed class JobPostingQueryRepository(JobsDbContext db)
         => db.JobPostings.AsNoTracking()
             .Include(p => p.SearchTerms)
             .FirstOrDefaultAsync(p => p.Id == id, ct);
+
+    /// <summary>
+    /// One posting with everything the pipeline concluded about it.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="GetByIdAsync"/> rather than replacing it: this pulls six
+    /// collections and a company row, and the callers that only need the posting should not
+    /// pay for that.
+    ///
+    /// Split queries, for the reason the profile read uses them - six collections on one join
+    /// multiply into a cartesian product, and this row carries an unbounded description that
+    /// would be duplicated across every line of it.
+    ///
+    /// Only the current extraction is included. The table keeps a row per extractor version,
+    /// and the older ones are an audit trail rather than something a reader wants.
+    /// </remarks>
+    public async Task<PostingProvenance?> GetProvenanceAsync(long id, CancellationToken ct = default)
+    {
+        var posting = await db.JobPostings
+            .AsNoTracking()
+            .Include(p => p.SearchTerms)
+            .Include(p => p.JobTypes)
+            .Include(p => p.Tags)
+            .Include(p => p.CompanyRef)
+            .AsSplitQuery()
+            .FirstOrDefaultAsync(p => p.Id == id, ct);
+
+        if (posting is null)
+        {
+            return null;
+        }
+
+        // Projected with the concept key joined in, so a reader gets `skill.kubernetes`
+        // rather than an integer that means nothing without a second lookup.
+        var concepts = await db.PostingConcepts
+            .AsNoTracking()
+            .Where(c => c.PostingId == id)
+            .Select(c => new ConceptAssertion(
+                c.Concept!.ConceptKey,
+                c.Source,
+                c.Polarity,
+                c.YearsMin,
+                c.YearsMax,
+                c.EvidenceText,
+                c.Confidence))
+            .ToListAsync(ct);
+
+        var mentions = await db.PostingMentions
+            .AsNoTracking()
+            .Where(m => m.PostingId == id)
+            .Select(m => new UnresolvedMention(m.SurfaceForm, m.Reason, m.Occurrences))
+            .ToListAsync(ct);
+
+        var extraction = await db.PostingExtractions
+            .AsNoTracking()
+            .Where(e => e.PostingId == id)
+            .OrderByDescending(e => e.ExtractorVersion)
+            .Select(e => new ExtractionStamp(e.ExtractorVersion, e.Model, e.ExtractedAtUtc))
+            .FirstOrDefaultAsync(ct);
+
+        return new PostingProvenance(posting, concepts, mentions, extraction);
+    }
 
     public Task<JobPostingEntity?> GetBySourceKeyAsync(string sourceKey, CancellationToken ct = default)
         => db.JobPostings.AsNoTracking()

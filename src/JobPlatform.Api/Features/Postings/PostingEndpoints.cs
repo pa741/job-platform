@@ -38,6 +38,11 @@ public sealed class PostingEndpoints : IEndpointGroup
             .WithName("GetPosting")
             .WithSummary("One posting in full, including its description.")
             .CacheOutput(CacheSetup.PostingsPolicy);
+
+        group.MapGet("/{id:long}/insight", GetInsightAsync)
+            .WithName("GetPostingInsight")
+            .WithSummary("One posting with everything the pipeline concluded, and how.")
+            .CacheOutput(CacheSetup.PostingsPolicy);
     }
 
     private static async Task<IResult> SearchAsync(
@@ -168,6 +173,25 @@ public sealed class PostingEndpoints : IEndpointGroup
                 detail: $"No posting with id {id}.",
                 statusCode: StatusCodes.Status404NotFound)
             : TypedResults.Ok(posting.ToDetail());
+    }
+
+    /// <summary>
+    /// Everything concluded about one posting, with the evidence behind each conclusion.
+    /// </summary>
+    /// <remarks>
+    /// A second endpoint rather than more fields on the detail: it pulls six collections and a
+    /// company row, and the callers that only want the advert should not pay for that. Cached
+    /// on the same policy - the underlying rows change once a day at most, when a scrape run
+    /// re-reads the posting.
+    /// </remarks>
+    private static async Task<IResult> GetInsightAsync(
+        long id,
+        [FromServices] JobPostingQueryRepository repository,
+        CancellationToken ct)
+    {
+        var provenance = await repository.GetProvenanceAsync(id, ct);
+
+        return provenance is null ? TypedResults.NotFound() : TypedResults.Ok(provenance.ToInsight());
     }
 
     private static async Task<IResult> FacetsAsync(
