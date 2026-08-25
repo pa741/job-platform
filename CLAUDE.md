@@ -9,8 +9,9 @@ The Azure side of a job-market data pipeline. A separate repository
 and uploads timestamped CSVs to Blob Storage. This repository ingests them: postings into
 Azure SQL, metrics into Cosmos DB, triggered by Event Grid on blob creation.
 
-`../model.md` holds the target architecture for the whole system. Ingestion, Data and the
-API are built; Realtime and Frontend are not.
+`../model.md` holds the target architecture for the whole system. Ingestion, Data, the API,
+the Frontend, the candidate profile, matching and generated applications are built; Realtime
+is not.
 
 ## Public repo hygiene
 
@@ -24,9 +25,13 @@ best-effort.
 - **Never commit scraped data.** Real exports contain populated `emails` and descriptions
   carrying recruiter names and contact details. `*.csv` is gitignored except under
   `tests/**/Fixtures/`, and the fixture there is entirely synthetic.
-- **Never introduce a secret.** The architecture has one, and only one (see below). If a
-  change seems to need a password, key or connection secret, that is a signal the design
-  is being worked around — find the identity-based path instead.
+- **Never introduce a secret.** The architecture has none at all - the one exception it used
+  to carry was removed, not merely contained (see below). If a change seems to need a password,
+  key or connection secret, that is a signal the design is being worked around; find the
+  identity-based path instead.
+- **Never commit a real profile.** The profile tables hold somebody's employment history,
+  contact details and salary expectations. Nothing under `tests/` may contain a real one, and
+  no fixture, screenshot or example in this repository may either.
 - `local.settings.json`, `*.PublishSettings` and `*.pubxml` are gitignored because they
   genuinely carry credentials.
 - Before pushing, check `git ls-files` for stray CSVs and `git grep` for identifiers.
@@ -36,7 +41,7 @@ best-effort.
 
 ## Authentication model
 
-There is no password, key or connection secret anywhere, and it should stay that way:
+There is no password, key or connection secret anywhere, without qualification:
 
 - Azure SQL: `azureADOnlyAuthentication: true`. No SQL login exists. Connection strings use
   `Authentication=Active Directory Default`.
@@ -44,21 +49,24 @@ There is no password, key or connection secret anywhere, and it should stay that
   (`sqlRoleAssignments`), not a key.
 - Storage: identity-based connections (`__serviceUri` + `__credential=managedidentity`).
   The Functions host account sets `allowSharedKeyAccess: false`.
+- **Azure OpenAI: `disableLocalAuth: true`.** Access is a `Cognitive Services OpenAI User`
+  role assignment on the account. The keys the resource still mints in the portal will not
+  authenticate anything, so a leaked one is inert.
 - GitHub Actions: OIDC federated credential pinned to `main`. No client secret.
 - Container Apps: the API runs under the same identity, and validates callers' Entra bearer
   tokens. No inbound key either.
 
 The function runs under a **user-assigned** managed identity, deliberately: the Container
 Apps API needs the same grants, and a shared identity means granting once. That has now paid
-off — the API required no new role assignment and no new database user.
+off twice - the API required no new role assignment and no new database user, and the AI
+provider needed one role assignment covering both hosts.
 
-**The one exception is the Anthropic API key**, needed only when `Ai:Provider` is
-`anthropic`. It lives in Key Vault, is read by the shared identity through a Container Apps
-secret reference, and its *value* is set out of band with `az keyvault secret set` — never a
-Bicep parameter, never a template output, never in deployment history. The default provider
-is `none`, which provisions no vault and needs no key, so a fresh clone still deploys with
-nothing to leak. Nothing consumes the model yet: CV matching was removed and is being rebuilt
-with a different structure, and the provider layer was kept rather than torn out and redone.
+**There used to be exactly one exception**, and it is gone. The Anthropic API key needed a Key
+Vault, a Container Apps secret reference, an `az keyvault secret set` run out of band, and a
+paragraph in every document explaining why the exception was acceptable. Azure OpenAI
+authenticates with Microsoft Entra, so `infra/modules/keyvault.bicep` was deleted rather than
+maintained. If a change seems to need a password, key or connection secret, that is a signal the
+design is being worked around - there is now no precedent to point at.
 
 ## Key files
 
@@ -68,7 +76,7 @@ with a different structure, and the provider layer was kept rather than torn out
   applicant counts), so the parser reads by name and ignores what it does not model.
 - `src/JobPlatform.Core/Metrics/MetricsCalculator.cs` — every metric. Pure and Azure-free,
   which is why the metric surface is fully unit-testable.
-- `src/JobPlatform.Core/Enrichment/concepts.json` — the vocabulary. 213 concepts on a DAG,
+- `src/JobPlatform.Core/Enrichment/concepts.json` — the vocabulary. 222 concepts on a DAG,
   and the source of truth: the SQL tables are a projection of it, and it is also what the
   model is handed as its allowed output set. Changing it is a reviewable diff.
 - `src/JobPlatform.Core/Enrichment/ConceptGraph.cs` — the loader, the matcher and the
@@ -89,9 +97,20 @@ with a different structure, and the provider layer was kept rather than torn out
   `IEndpointGroup` each, registered in `Endpoints/EndpointGroupExtensions.cs`. Adding a
   feature is a folder plus one line there.
 - `src/JobPlatform.Data/Sql/JobPostingQueryRepository.cs` — every SQL read the API makes.
-- `src/JobPlatform.Ai/AiRegistration.cs` — the whole LLM abstraction: `BuildKernel` composes
-  Semantic Kernel over the Anthropic SDK. Registered but unconsumed, awaiting the rebuilt CV
-  matching.
+- `src/JobPlatform.Ai/AiRegistration.cs` — the whole LLM abstraction: `BuildKernel` puts two
+  Azure OpenAI deployments on one Kernel, addressed by service id. No key anywhere in it.
+- `src/JobPlatform.Ai/AiPrompt.cs` — the execution settings every prompt uses. Two of them are
+  load-bearing in ways that fail with a 400 rather than a compile error; read the remarks.
+- `src/JobPlatform.Core/Matching/MatchScorer.cs` — the whole scoring rulebook. Pure and
+  Azure-free, like `MetricsCalculator`, which is what makes the numbers assertable exactly.
+- `src/JobPlatform.Core/Profiles/CandidateProfile.cs` — the supply side of the match, and
+  `ToDocument()`, which is the exact text the extractor reads and the hash is taken over.
+- `src/JobPlatform.Data/Sql/CandidateProfileRepository.cs` — every profile read and write.
+  Takes a subject id and never a profile id; that is the authorisation boundary.
+- `src/JobPlatform.Ingestion/Functions/MatchSweepFunction.cs` — the nightly pass. Scores
+  everything, then spends the model budget on what clears the threshold.
+- `src/JobPlatform.Documents/MarkdownPdfRenderer.cs` — model output to PDF, through a parsed
+  AST and a fixed node mapping. No HTML step exists.
 
 ## Conventions and constraints
 
@@ -191,7 +210,7 @@ Curated in-house, deliberately. The alternatives were checked rather than assume
   list to find terms we have missed. No runtime dependency, no committed data, no attribution
   obligation.
 
-At 213 concepts in a slow-moving domain, the "taxonomies go stale" argument that justifies
+At 222 concepts in a slow-moving domain, the "taxonomies go stale" argument that justifies
 Lightcast's model at 34,000 skills does not apply. The unresolved-mention log is the growth
 mechanism, and it is derived from the corpus rather than guessed at.
 
@@ -282,23 +301,132 @@ Each of these cost a red CI run; none of them fail locally.
 - **`Api:AllowAnonymousReads` is the only switch that opens reads**, and it never opens
   `/me`. Do not make it depend on whether `AzureAd` happens to be configured — a mistyped
   section name would then silently publish the whole dataset.
-- **Semantic Kernel is the LLM abstraction, deliberately.** There is no official Microsoft SK
-  connector for Anthropic - only third-party alphas - so `AiRegistration.BuildKernel`
-  composes one: the Anthropic SDK's `AsIChatClient()` handed to SK's `AsChatCompletionService()`.
-  Keep prompts as Kernel prompt templates with `KernelArguments`; do not reach past the Kernel
-  to the SDK, or the point of the abstraction is lost. `AddAiProvider` registers a `Kernel`
-  only when `Ai:Provider` is `anthropic` *and* a key is present; anything else registers
-  nothing rather than throwing, so a missing environment variable cannot take down endpoints
-  that have nothing to do with AI. `AiRegistrationTests` resolves the service, because
-  registration is lazy and a Kernel that cannot be built is otherwise silent.
-- **`TreatWarningsAsErrors` is off** because SK's Extensions.AI bridge is experimental
-  (SKEXP0001). Warnings still appear in build output - do not let them accumulate.
-- **`Microsoft.Extensions.*` is pinned to 10.x on a net9.0 target**, because SK and the
-  Anthropic SDK both require `Microsoft.Extensions.AI` 10.5. With transitive pinning on,
+- **Semantic Kernel is the LLM abstraction, and the connector under it is first-party.**
+  `AiRegistration.BuildKernel` registers *two* Azure OpenAI chat services on one Kernel, under
+  the service ids `bulk` and `writing`, and a prompt names which one it wants through
+  `ServiceId` on its execution settings. That is the only thing deciding whether a call costs
+  Luna money or Sol money, and it fails silently if either registration is missing - Semantic
+  Kernel falls back to the only service present rather than throwing, so a missing writing
+  deployment means CVs quietly written by the cheap model. `AiRegistrationTests` asserts both
+  resolve.
+- **`AddAiProvider` registers a Kernel only when `Ai:Provider` is `azureopenai` *and* an
+  endpoint is present**; anything else registers nothing rather than throwing, so a missing
+  environment variable cannot take down endpoints with nothing to do with AI. There is no key
+  to check for. `IDocumentExtractor`, `ICandidacyAssessor` and `IApplicationWriter` are all
+  registered inside that same `if`, so consumers resolve them as **nullable** and skip their
+  step - never as required.
+- **`AiPrompt` carries two settings that fail obscurely when wrong.**
+  `SetNewMaxCompletionTokensEnabled` must be true or SK serialises `max_tokens`, which every
+  GPT-5 series model rejects with a 400 on the first real call. And `Temperature` is left
+  unset deliberately: reasoning models accept only the default and answer 400 for anything
+  else.
+- **`ReasoningEffort` is `low` for extraction and `medium` for assessment, and never `none`.**
+  At `none` the model stops reasoning about whether a phrase means "essential" or "desirable",
+  which is the one thing the deterministic pass cannot do and therefore the entire reason for
+  calling it.
+- **Extraction sends many documents per call, and the index is checked rather than trusted.**
+  The concept vocabulary is several thousand tokens and has to precede every extraction, so
+  sent per posting it dwarfs the adverts themselves; ten to a call amortises it tenfold. The
+  cost of that is a new failure mode - an answer landing against the wrong posting would be
+  wrong, self-consistent and undetectable afterwards - so `KernelDocumentExtractor.Distribute`
+  drops any out-of-range or duplicated index rather than clamping it, and the affected postings
+  are simply re-extracted by the backfill. `DocumentExtractorTests` pins reordering, duplicates,
+  short responses and out-of-range indices.
+- **The Azure OpenAI connector can express JSON mode**, which the provider-neutral settings
+  could not, so `AiJson.ExtractJsonObject` is now a net rather than the normal path. It stays,
+  and stays tested: a response format is a request to a provider, not a property of the
+  transport.
+- **`Microsoft.Extensions.*` is pinned to 10.x on a net9.0 target**, because Semantic Kernel and
+  its Azure OpenAI connector require `Microsoft.Extensions.AI` 10.5. With transitive pinning on,
   dropping these back to 9.0.0 fails the build with CS1705.
-- **The SK path cannot use structured outputs.** SK's execution settings are provider-neutral,
-  so the model may return fenced or prose-wrapped JSON; `AiJson.ExtractJsonObject` absorbs that
-  and `AiJsonTests` pins the behaviour. Do not assume a bare JSON body.
+- **`TreatWarningsAsErrors` is on.** It was off for the experimental SK/Anthropic bridge, which
+  no longer exists. The one experimental API still used is suppressed at the single line that
+  needs it in `AiPrompt`, so the next experimental API somebody reaches for still fails the
+  build.
+
+### Matching
+
+- **The arithmetic runs on everything; the model runs on what survives it.** A corpus-wide pass
+  is tens of thousands of pairs and almost all are obvious rejections. `MatchScorer` is pure and
+  Azure-free like `MetricsCalculator`, and `MatchScorerTests` asserts exact numbers because of
+  it. Changes to the weights belong there with a matching assertion.
+- **Silence drops an axis rather than failing it.** Most postings state no salary, many state no
+  arrangement, 18% of titles carry no seniority. An axis the posting cannot answer contributes
+  nothing to the numerator *and* nothing to the denominator, and `MatchComponent.Weight` records
+  what each carried for that pair. Scoring silence as zero would rank a posting that says
+  nothing below one that says something incompatible; scoring it as full marks would make
+  vagueness a competitive advantage. **A client rendering a zero-weight axis as a zero score is
+  showing a penalty that was never applied.**
+- **`AssertionPolarity.Unspecified` is weighted as preferred, not as required.** It is by far the
+  most common polarity - only the model pass can tell essential from desirable and it has not
+  necessarily run - so treating it as a hard requirement would score most of the corpus at zero.
+- **Both verdicts are stored and neither overwrites the other.** The score says how much of the
+  posting the profile covers; the model's verdict says whether the rest matters. They disagree
+  fairly often and the disagreement is the informative part: a 58 the model calls strong is
+  precisely the posting worth surfacing. A re-score that moves the number clears the assessment,
+  because the judgement was made against different arithmetic; a re-score that does not move it
+  leaves the assessment alone, because paying for it again buys nothing.
+- **The sweep is a timer, not a page load.** `MatchSweepFunction` runs at 03:30 UTC, after the
+  ingest and extraction queues have drained. A shortlist that costs model calls to look at is one
+  nobody can afford to browse. `run-match-sweep` exists for the case the timer cannot serve -
+  somebody who has just filled in their profile - and is a Function-key admin route deliberately.
+- **The scoring pass needs no model at all.** `MatchSweepFunction` is registered
+  unconditionally and `ICandidacyAssessor` is the nullable half, so a deployment with no AI
+  provider still produces ranked matches - just without the judgement layer.
+
+### Profiles and generated documents
+
+- **A form, not an uploaded CV.** Parsing a PDF back into structure is a lossy guess at what the
+  person already knows. The generated CV is an *output* of the profile, not a rewrite of an
+  input.
+- **`CandidateProfileRepository` takes a subject id and never a profile id.** That is the
+  authorisation boundary expressed as a type: there is no overload an endpoint could hand a
+  route parameter to, so a stranger's employment history cannot be read by mistake.
+  `ApplicationDocumentRepository` follows the same rule. Read `oid` through
+  `CallerIdentity.SubjectId`, never `ClaimTypes.NameIdentifier` - that resolves to `sub`, which
+  is pairwise per application, so a profile stored under it is orphaned by a second app
+  registration.
+- **A save is a replace, not a merge.** A partial update cannot express "delete the third job",
+  which is a thing people do. Concept rows survive it, because they are derived from the text
+  rather than submitted with it.
+- **`ExtractionInputHash` is computed from `ToDocument()`, not from the whole record.** A profile
+  is saved repeatedly while somebody edits it and most of those saves change a phone number. Only
+  a change to the text the extractor actually reads should cost a model call and invalidate
+  scored matches.
+- **Only `AssertionSource.Model` rows are replaced by an extraction.** Declared skills are the
+  candidate's own structured claim and are stored under `AssertionSource.Board` - the supply-side
+  equivalent of an employer's tagging - and the model has no business overwriting them, exactly
+  as it does not overwrite a board tag on the posting side.
+- **`ProfileConcepts` mirrors `PostingConcepts` column for column, `Source` in the key
+  included.** That is the payoff of a shape fixed before there was a profile: matching is a join
+  between two tables of identical shape. Do not let them drift.
+- **The demand and supply halves of `AssertionPolarity` are numerically separated on purpose.**
+  `Required` is 3 and `Expert` is 13, so a demand value stored in a supply column compares as
+  weaker than every genuine claim and quietly deflates the match. Both the API mapping and the
+  repository clamp rather than store.
+- **The profile endpoints read and write Azure SQL, which is otherwise reserved for posting
+  browse and search.** That is deliberate and bounded: fetched once when the page opens, written
+  when somebody presses save. It must never become a polling path, and **nothing here may join a
+  client's bootstrap sequence** - the reason `/search-terms` is served from Cosmos.
+- **No output cache on any per-principal route.** A shared cache keyed on a URL with no user in
+  it is exactly how one person is served another's record.
+- **Generation requires an existing match.** The writer is handed the gap list as the set of
+  claims it must not make; a document written without one has nothing stopping it from inventing
+  the skills the candidate lacks. Refusing to generate for an unscored posting is what keeps that
+  guarantee real.
+- **The markdown is the record; the PDF is rendered per request.** Storing the PDF would mean a
+  layout change could not reach documents already generated, and would put megabytes into a
+  database billed by the second.
+- **`MarkdownPdfRenderer` walks a parsed AST and emits from a fixed set of node types.** There is
+  no HTML step and nothing the model returns is ever interpreted as markup. An unmapped node
+  renders as its plain text rather than being dropped - silently losing a node would take content
+  out of a document somebody is about to send to an employer.
+- **PDFsharp's platform-independent build resolves no fonts at all** and throws on its first call
+  without a resolver, including for its own internal error font. `EmbeddedFontResolver` embeds
+  Roboto (SIL OFL 1.1) and resolves *any* family name, because MigraDoc asks for "Courier New"
+  whatever the document says. Installing fonts in the container was rejected: it renders
+  differently on a developer's machine and turns a missing apt package into a 500 on somebody's
+  CV download.
 
 ## Common tasks
 
@@ -320,8 +448,13 @@ dotnet run --project tools/JobPlatform.DbAdmin -- seed-concepts "<connection-str
 # Full provision (idempotent)
 ./scripts/provision.ps1 -ResourceGroup <rg> -LandingStorageAccount <account>
 
-# ...with the AI provider enabled; the script prints the `az keyvault secret set` to run
-./scripts/provision.ps1 -ResourceGroup <rg> -LandingStorageAccount <account> -AiProvider anthropic
+# ...with the AI provider enabled. Provisions a Foundry resource with two deployments and
+# grants the shared identity Cognitive Services OpenAI User on it. There is no key to set
+# afterwards, and no follow-up command to run.
+./scripts/provision.ps1 -ResourceGroup <rg> -LandingStorageAccount <account> -AiProvider azureopenai
+
+# Score every profile against the corpus now, rather than waiting for 03:30 UTC.
+curl -X POST "https://<function-app>.azurewebsites.net/api/run-match-sweep?code=<function-key>"   -H 'Content-Type: application/json' -d '{}'
 
 # Build the API image the way CI does (context is the repo root, not the project directory)
 docker build -f src/JobPlatform.Api/Dockerfile -t job-platform-api .

@@ -1,6 +1,9 @@
+using JobPlatform.Api.Features.Applications;
+using JobPlatform.Api.Features.Matches;
 using JobPlatform.Api.Features.Meta;
 using JobPlatform.Api.Features.Metrics;
 using JobPlatform.Api.Features.Postings;
+using JobPlatform.Api.Features.Profiles;
 using JobPlatform.Api.Features.Runs;
 
 namespace JobPlatform.Api.Endpoints;
@@ -13,6 +16,9 @@ public static class EndpointGroupExtensions
         new PostingEndpoints(),
         new RunEndpoints(),
         new MetricEndpoints(),
+        new ProfileEndpoints(),
+        new MatchEndpoints(),
+        new ApplicationEndpoints(),
     ];
 
     /// <summary>

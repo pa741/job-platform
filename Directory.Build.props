@@ -5,12 +5,14 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <!-- Warnings are not errors, because Semantic Kernel's Microsoft.Extensions.AI bridge is
-         marked experimental (SKEXP0001) and emits a diagnostic that cannot be silenced
-         without either this or a per-project NoWarn. Semantic Kernel is a deliberate
-         architectural choice here, so the build accommodates it rather than the reverse.
-         Warnings still surface in build output and in CI logs. -->
-    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <!-- Back on. This was off because the Semantic Kernel path used to compose a chat service
+         by hand over the Anthropic SDK, through SK's Microsoft.Extensions.AI bridge, which is
+         marked experimental (SKEXP0001). Azure OpenAI has a first-party GA connector, so that
+         composition is gone and with it the diagnostic. The one experimental API still used -
+         SetNewMaxCompletionTokensEnabled - is suppressed at the single line that needs it in
+         AiPrompt, rather than project-wide, so the next experimental API somebody reaches for
+         still fails the build. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>

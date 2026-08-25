@@ -35,6 +35,7 @@
     <ProjectReference Include="..\JobPlatform.Core\JobPlatform.Core.csproj" />
     <ProjectReference Include="..\JobPlatform.Data\JobPlatform.Data.csproj" />
     <ProjectReference Include="..\JobPlatform.Ai\JobPlatform.Ai.csproj" />
+    <ProjectReference Include="..\JobPlatform.Documents\JobPlatform.Documents.csproj" />
   </ItemGroup>
 
 </Project>

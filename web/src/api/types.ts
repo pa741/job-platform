@@ -236,3 +236,204 @@ export interface MeResponse {
   tenantId: string | null;
   scopes: string[];
 }
+
+// ---------------------------------------------------------------------------
+// Profile, matching and generated applications.
+//
+// Every one of these is per-principal: the API resolves whose data to return from the token's
+// `oid` claim, and none of these calls carries an identifier for whose profile it wants. There
+// is deliberately no way for the client to ask for somebody else's.
+// ---------------------------------------------------------------------------
+
+/** `Unknown`, `OnSite`, `Hybrid` or `Remote`. Unknown means no preference, not on-site. */
+export type WorkArrangementName = 'Unknown' | 'OnSite' | 'Hybrid' | 'Remote';
+
+/** The supply half of the assertion polarity. The demand half is not valid here. */
+export type SkillLevel = 'Familiar' | 'Proficient' | 'Expert';
+
+export interface ProfileExperience {
+  company: string;
+  title: string;
+  startDate: string | null;
+  /** Null means current. */
+  endDate: string | null;
+  locationCity: string | null;
+  locationCountry: string | null;
+  description: string | null;
+}
+
+export interface ProfileEducation {
+  institution: string;
+  qualification: string;
+  fieldOfStudy: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  grade: string | null;
+  description: string | null;
+}
+
+export interface ProfileProject {
+  name: string;
+  description: string | null;
+  url: string | null;
+  completedOn: string | null;
+}
+
+export interface ProfileCertification {
+  name: string;
+  issuer: string | null;
+  year: number | null;
+}
+
+export interface ProfileLanguage {
+  name: string;
+  level: string | null;
+}
+
+export interface ProfileLink {
+  label: string;
+  url: string;
+}
+
+/** A skill claimed outright, keyed against the shared concept vocabulary. */
+export interface DeclaredSkill {
+  conceptKey: string;
+  level: SkillLevel | null;
+  years: number | null;
+}
+
+/**
+ * The profile form.
+ *
+ * No subject id. The API takes it from the token, which is what stops a request body naming
+ * somebody else's directory object id from writing into their profile.
+ */
+export interface ProfileRequest {
+  fullName: string | null;
+  headline: string | null;
+  email: string | null;
+  phone: string | null;
+  summary: string | null;
+  locationCity: string | null;
+  locationCountry: string | null;
+  willingToRelocate: boolean;
+  preferredArrangement: WorkArrangementName | null;
+  maxDaysInOffice: number | null;
+  minimumSalary: number | null;
+  salaryCurrency: string | null;
+  jobTypes: string[];
+  yearsExperience: number | null;
+  seniority: string | null;
+  experiences: ProfileExperience[];
+  education: ProfileEducation[];
+  projects: ProfileProject[];
+  certifications: ProfileCertification[];
+  languages: ProfileLanguage[];
+  links: ProfileLink[];
+  declaredSkills: DeclaredSkill[];
+}
+
+/** A concept the model read out of the candidate's own prose. */
+export interface ExtractedSkill {
+  conceptKey: string;
+  label: string;
+  level: string;
+  years: number | null;
+  /** The phrase it was read from. What makes an inference checkable by the candidate. */
+  evidence: string | null;
+}
+
+export interface ProfileResponse extends ProfileRequest {
+  updatedUtc: string | null;
+  /**
+   * What was inferred, kept apart from what was declared. Merging the two would hide which is
+   * which from the person they are about.
+   */
+  extractedSkills: ExtractedSkill[];
+  extractedAtUtc: string | null;
+}
+
+/** `Weak`, `Possible` or `Strong`. Null until the nightly sweep has judged this pair. */
+export type CandidacyVerdict = 'Weak' | 'Possible' | 'Strong' | 'Unknown';
+
+export interface MatchSummary {
+  postingId: number;
+  title: string;
+  company: string | null;
+  location: string | null;
+  annualSalaryMin: number | null;
+  annualSalaryMax: number | null;
+  annualSalaryCurrency: string | null;
+  workArrangement: string;
+  seniority: string;
+  datePosted: string | null;
+
+  /** 0-100 from the deterministic scorer. Always present. */
+  score: number;
+  requiredGapCount: number;
+
+  /** Null until the model has judged this pair. Not the same as a Weak verdict. */
+  verdict: CandidacyVerdict | null;
+  assessmentScore: number | null;
+  rationale: string | null;
+
+  scoredAtUtc: string;
+  assessedAtUtc: string | null;
+}
+
+export interface MatchComponent {
+  /** `requiredSkills`, `seniority`, `salary`… */
+  name: string;
+  /** 0-1 within this axis. */
+  score: number;
+  /**
+   * Share of the total this axis carried. **Zero means the posting said nothing** and the axis
+   * was dropped rather than failed - rendering it as a zero score shows a penalty never applied.
+   */
+  weight: number;
+}
+
+export interface ConceptMatch {
+  required: string;
+  requiredLabel: string;
+  held: string;
+  heldLabel: string;
+  /** `Exact`, `Specialisation`, `Generalisation`, `Implied`, `Related` or `Superseded`. */
+  relation: string;
+  credit: number;
+  demand: string;
+}
+
+export interface ConceptGap {
+  concept: string;
+  label: string;
+  demand: string;
+  yearsMin: number | null;
+}
+
+export interface MatchDetail extends MatchSummary {
+  components: MatchComponent[];
+  matched: ConceptMatch[];
+  gaps: ConceptGap[];
+  strengths: string[];
+  assessmentGaps: string[];
+  emphasise: string[];
+  hasApplication: boolean;
+}
+
+export interface ApplicationSummary {
+  id: number;
+  postingId: number;
+  postingTitle: string;
+  company: string | null;
+  revision: number;
+  instructions: string | null;
+  model: string | null;
+  createdAtUtc: string;
+}
+
+export interface ApplicationDetail extends ApplicationSummary {
+  curriculumVitaeMarkdown: string;
+  coverLetterMarkdown: string;
+  emphasised: string[];
+}

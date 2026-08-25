@@ -38,18 +38,23 @@ param allowAnonymousReads bool = false
 @description('Origins allowed to call the API from a browser, e.g. the Static Web App.')
 param allowedOrigins array = []
 
-@description('Which AI provider the API resolves: none (no credentials) or anthropic.')
+@description('Which AI provider the API resolves: none, or azureopenai.')
 @allowed([
   'none'
-  'anthropic'
+  'azureopenai'
 ])
 param aiProvider string = 'none'
 
-@description('Key Vault secret URI holding the Anthropic key. Required only when aiProvider is anthropic.')
-param anthropicSecretUri string = ''
+@description('Azure OpenAI endpoint. Not a secret - the identity is what authenticates.')
+param openAiEndpoint string = ''
 
-var useAnthropic = aiProvider == 'anthropic' && !empty(anthropicSecretUri)
-var anthropicSecretName = 'anthropic-api-key'
+@description('Deployment name for the high-volume pass: extraction and candidacy assessment.')
+param openAiBulkDeployment string = ''
+
+@description('Deployment name for the writing pass: tailored CV and cover letter.')
+param openAiWritingDeployment string = ''
+
+var useAzureOpenAi = aiProvider == 'azureopenai' && !empty(openAiEndpoint)
 
 // Array-typed configuration binds by index, so each origin becomes its own variable. Hoisted
 // out of the container definition because a for-expression cannot appear inside concat().
@@ -120,13 +125,12 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
       }
       // No registry credential: the image is public. A private registry would mean either a
       // stored password or an AcrPull grant, and the image contains no secrets to protect.
-      secrets: useAnthropic ? [
-        {
-          name: anthropicSecretName
-          keyVaultUrl: anthropicSecretUri
-          identity: identityResourceId
-        }
-      ] : []
+      //
+      // And no secrets at all any more. This block used to carry a Key Vault reference to an
+      // Anthropic API key - the single exception in the whole architecture. Azure OpenAI
+      // authenticates with the same managed identity as everything else, so the vault, the
+      // reference and the key are gone rather than merely well-handled.
+      secrets: []
     }
     template: {
       containers: [
@@ -195,10 +199,20 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'APPLICATIONINSIGHTS_AUTHENTICATION_STRING'
               value: 'ClientId=${identityClientId};Authorization=AAD'
             }
-          ], allowedOriginEnv, useAnthropic ? [
+          ], allowedOriginEnv, useAzureOpenAi ? [
             {
-              name: 'Ai__Anthropic__ApiKey'
-              secretRef: anthropicSecretName
+              // Configuration, not a credential. The identity named above is what the token is
+              // issued for; this only says which resource to ask.
+              name: 'Ai__AzureOpenAi__Endpoint'
+              value: openAiEndpoint
+            }
+            {
+              name: 'Ai__AzureOpenAi__BulkDeployment'
+              value: openAiBulkDeployment
+            }
+            {
+              name: 'Ai__AzureOpenAi__WritingDeployment'
+              value: openAiWritingDeployment
             }
           ] : [])
           probes: [

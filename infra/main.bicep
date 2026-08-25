@@ -50,15 +50,22 @@ param apiAllowAnonymousReads bool = false
 @description('Browser origins allowed to call the API, e.g. the Static Web App.')
 param apiAllowedOrigins array = []
 
-// Defaults to none so a fresh deploy needs no Key Vault, no key and no third-party account.
-// Nothing consumes the model yet - this is the credential path standing ready for whatever
-// AI-backed feature lands next.
-@description('Which AI provider the API is configured for. "anthropic" additionally provisions a Key Vault.')
+// Defaults to none so a fresh deploy provisions no model capacity and incurs no model spend.
+// Selecting azureopenai adds a Foundry resource with two deployments - and, notably, no
+// secret: the shared managed identity authenticates to it the same way it does to SQL, Cosmos
+// and Storage, which is what removed the one exception this architecture used to carry.
+@description('Which AI provider the platform is configured for. "azureopenai" additionally provisions a Foundry resource.')
 @allowed([
   'none'
-  'anthropic'
+  'azureopenai'
 ])
 param aiProvider string = 'none'
+
+@description('Model behind the high-volume deployment: extraction and candidacy assessment.')
+param aiBulkModelName string = 'gpt-5.6-luna'
+
+@description('Model behind the writing deployment: tailored CV and cover letter.')
+param aiWritingModelName string = 'gpt-5.6-sol'
 
 // Separate from `location` for the same reason `sqlLocation` is, and with the same trap:
 // Static Web Apps is offered in a handful of regions, and a region can additionally stop
@@ -204,19 +211,29 @@ module functionApp 'modules/functionapp.bicep' = {
     cosmosAccountEndpoint: cosmos.outputs.accountEndpoint
     cosmosDatabaseName: cosmos.outputs.databaseName
     sqlConnectionString: sql.outputs.connectionString
+    aiProvider: aiProvider
+    openAiEndpoint: aiProvider == 'azureopenai' ? openAi!.outputs.endpoint : ''
+    openAiBulkDeployment: aiProvider == 'azureopenai' ? openAi!.outputs.bulkDeployment : ''
+    openAiWritingDeployment: aiProvider == 'azureopenai' ? openAi!.outputs.writingDeployment : ''
   }
 }
 
-// Provisioned only when an LLM provider is selected. The default deploys no vault at all,
-// which keeps the "no secret exists to leak" property intact for anyone cloning this.
-module keyVault 'modules/keyvault.bicep' = if (aiProvider == 'anthropic') {
-  name: 'keyVault'
+// Provisioned only when an AI provider is selected. The default deploys nothing, so a fresh
+// clone of this public repository still stands up the whole pipeline at no model cost.
+//
+// Note what is NOT here any more: a Key Vault. It existed for one Anthropic API key, and
+// Azure OpenAI's Entra authentication removed the need for it entirely.
+module openAi 'modules/openai.bicep' = if (aiProvider == 'azureopenai') {
+  name: 'openAi'
   params: {
     location: location
     namePrefix: namePrefix
     resourceToken: resourceToken
     tags: tags
-    apiPrincipalId: identity.outputs.principalId
+    callerPrincipalId: identity.outputs.principalId
+    administratorObjectId: administratorObjectId
+    bulkModelName: aiBulkModelName
+    writingModelName: aiWritingModelName
   }
 }
 
@@ -254,7 +271,9 @@ module containerApp 'modules/containerapp.bicep' = {
       ? union(apiAllowedOrigins, [staticWebApp!.outputs.url])
       : apiAllowedOrigins
     aiProvider: aiProvider
-    anthropicSecretUri: aiProvider == 'anthropic' ? keyVault!.outputs.anthropicSecretUri : ''
+    openAiEndpoint: aiProvider == 'azureopenai' ? openAi!.outputs.endpoint : ''
+    openAiBulkDeployment: aiProvider == 'azureopenai' ? openAi!.outputs.bulkDeployment : ''
+    openAiWritingDeployment: aiProvider == 'azureopenai' ? openAi!.outputs.writingDeployment : ''
   }
 }
 
@@ -289,8 +308,9 @@ module eventGrid 'modules/eventgrid.bicep' = {
 }
 
 // ---------------------------------------------------------------------------
-// Outputs. Deliberately no secrets: SQL is Entra-only, Cosmos has local auth
-// disabled, and storage uses identity-based connections.
+// Outputs. There are no secrets to omit: SQL is Entra-only, Cosmos and the Foundry
+// resource both have local auth disabled, storage uses identity-based connections,
+// and CI federates with OIDC. Every value below is safe in deployment history.
 // ---------------------------------------------------------------------------
 
 output functionAppName string = functionApp.outputs.name
@@ -308,7 +328,8 @@ output apiName string = containerApp.outputs.name
 output apiUrl string = containerApp.outputs.url
 output apiFqdn string = containerApp.outputs.fqdn
 output aiProvider string = aiProvider
+output aiEndpoint string = aiProvider == 'azureopenai' ? openAi!.outputs.endpoint : ''
+output aiBulkDeployment string = aiProvider == 'azureopenai' ? openAi!.outputs.bulkDeployment : ''
+output aiWritingDeployment string = aiProvider == 'azureopenai' ? openAi!.outputs.writingDeployment : ''
 output webName string = deployWeb ? staticWebApp!.outputs.name : ''
 output webUrl string = deployWeb ? staticWebApp!.outputs.url : ''
-output keyVaultName string = aiProvider == 'anthropic' ? keyVault!.outputs.vaultName : ''
-output anthropicSecretName string = aiProvider == 'anthropic' ? keyVault!.outputs.anthropicSecretName : ''

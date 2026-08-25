@@ -1,0 +1,144 @@
+using JobPlatform.Core.Matching;
+
+namespace JobPlatform.Data.Sql.Entities;
+
+/// <summary>
+/// One candidate against one posting: what the arithmetic said, and what the model said.
+/// </summary>
+/// <remarks>
+/// <b>Both verdicts are stored, and neither overwrites the other.</b> The scorer's number says
+/// how much of the posting the profile covers; the model's says whether what it does not cover
+/// matters. They disagree fairly often and the disagreement is the informative part - a role
+/// scoring 58 that the model calls strong is precisely the posting worth surfacing, and
+/// collapsing the two into one column would delete the only signal that says so.
+///
+/// The score half is written by a deterministic pass over every candidate posting; the
+/// assessment half is written later, by the nightly sweep, and only for rows that cleared the
+/// threshold. So an assessed row always has a score and a scored row often has no assessment -
+/// which is why every assessment column is nullable and <see cref="AssessedAtUtc"/> rather than
+/// a flag is what says whether the model has been here.
+///
+/// <see cref="ScorerVersion"/> and <see cref="AssessmentVersion"/> are the same backfill
+/// mechanism the extraction rows carry: change the weights or the prompt, bump the constant,
+/// and everything below it is stale without anything needing to be deleted.
+/// </remarks>
+public sealed class JobMatchEntity
+{
+    public long Id { get; set; }
+
+    public long ProfileId { get; set; }
+    public CandidateProfileEntity? Profile { get; set; }
+
+    public long PostingId { get; set; }
+    public JobPostingEntity? Posting { get; set; }
+
+    // --- the deterministic half ---------------------------------------------
+
+    /// <summary>0-100, from <see cref="MatchScorer"/>. Always present.</summary>
+    public int Score { get; set; }
+
+    /// <summary>
+    /// The per-axis breakdown, as JSON.
+    /// </summary>
+    /// <remarks>
+    /// JSON rather than columns because the axes are a property of the scorer, not of the
+    /// schema: adding one is a change to <see cref="MatchScorer"/> and a version bump, and it
+    /// should not also be a migration. Nothing queries inside this - it is read back whole, to
+    /// be shown - which is the condition under which a JSON column is the right call rather
+    /// than the lazy one.
+    /// </remarks>
+    public string? ComponentsJson { get; set; }
+
+    /// <summary>Which requirements the profile meets, and how. Read back whole.</summary>
+    public string? MatchedJson { get; set; }
+
+    /// <summary>Which requirements it does not. The half the candidate can act on.</summary>
+    public string? GapsJson { get; set; }
+
+    /// <summary>How many unmet requirements the posting marked essential. Promoted for sorting.</summary>
+    public int RequiredGapCount { get; set; }
+
+    public int ScorerVersion { get; set; }
+
+    public DateTimeOffset ScoredAtUtc { get; set; }
+
+    // --- the model half, written only for rows that cleared the threshold ----
+
+    /// <summary>Null until the sweep reaches this row. Never a default - see the remarks.</summary>
+    public CandidacyVerdict? Verdict { get; set; }
+
+    /// <summary>The model's own 0-100. Kept beside <see cref="Score"/>, never averaged with it.</summary>
+    public int? AssessmentScore { get; set; }
+
+    public string? Rationale { get; set; }
+
+    /// <summary>Sentences, as a JSON array. Read back whole, never queried into.</summary>
+    public string? StrengthsJson { get; set; }
+    public string? AssessmentGapsJson { get; set; }
+
+    /// <summary>
+    /// What to lead with if they apply.
+    /// </summary>
+    /// <remarks>
+    /// The bridge between the two models. When a CV is generated later this is handed to the
+    /// writing deployment as guidance, so the document argues the case the candidate was
+    /// already shown instead of the second model re-deciding and contradicting the first.
+    /// </remarks>
+    public string? EmphasiseJson { get; set; }
+
+    public string? AssessmentModel { get; set; }
+
+    public int? AssessmentVersion { get; set; }
+
+    /// <summary>Null means the model has not been here. The only reliable way to ask.</summary>
+    public DateTimeOffset? AssessedAtUtc { get; set; }
+
+    /// <summary>The model's response for this pair, kept verbatim.</summary>
+    public string? AssessmentPayloadJson { get; set; }
+}
+
+/// <summary>
+/// A generated CV and cover letter, kept as written.
+/// </summary>
+/// <remarks>
+/// Stored rather than streamed and forgotten, for three reasons that all turned out to matter.
+/// A candidate who applied with a particular version of their CV needs to be able to see what
+/// they sent. Regenerating costs a call on the expensive deployment, so re-reading a draft must
+/// not trigger one. And a second generation is a revision of the first, which is only true if
+/// the first still exists - hence rows per generation rather than one row updated in place.
+///
+/// The markdown is the record; the PDF is a rendering of it and is produced on demand. Storing
+/// the PDF would mean a change to the layout could not reach documents already generated, and
+/// would put megabytes into a database billed by the second.
+/// </remarks>
+public sealed class ApplicationDocumentEntity
+{
+    public long Id { get; set; }
+
+    public long ProfileId { get; set; }
+    public CandidateProfileEntity? Profile { get; set; }
+
+    public long PostingId { get; set; }
+    public JobPostingEntity? Posting { get; set; }
+
+    /// <summary>1 for the first draft for this pair, incrementing per regeneration.</summary>
+    public int Revision { get; set; }
+
+    /// <summary>Unbounded. The tailored CV, as markdown.</summary>
+    public string? CurriculumVitaeMarkdown { get; set; }
+
+    /// <summary>Unbounded. The cover letter, as markdown.</summary>
+    public string? CoverLetterMarkdown { get; set; }
+
+    /// <summary>What this draft chose to lead with, as a JSON array of sentences.</summary>
+    public string? EmphasisedJson { get; set; }
+
+    /// <summary>What the candidate asked for, verbatim. Kept so a revision is comparable.</summary>
+    public string? Instructions { get; set; }
+
+    public string? Model { get; set; }
+
+    public int WriterVersion { get; set; }
+
+    public DateTimeOffset CreatedAtUtc { get; set; }
+}

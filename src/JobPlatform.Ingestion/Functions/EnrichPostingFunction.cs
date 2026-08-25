@@ -19,6 +19,12 @@ namespace JobPlatform.Ingestion.Functions;
 /// anything expensive inside it replays in full on every retry. Here a failure costs one
 /// batch, and the input hash makes a replayed batch converge rather than duplicate.
 ///
+/// The queue message carries a batch and the whole batch goes to the model in as few calls as
+/// the extractor can manage. That is where the cost of this pipeline actually lives: the
+/// concept vocabulary has to precede every extraction as the model's allowed output set, and
+/// sent once per posting it dwarfs the adverts themselves. This function stays indifferent to
+/// how the extractor packs them - it hands over a list and reads the answers back by position.
+///
 /// The whole function is inert without an AI provider: <c>IDocumentExtractor?</c> resolves to
 /// null, the message is acknowledged, and nothing happens. That is not a degraded mode — it is
 /// the configuration this system ships in, and the queue is empty in it anyway because the
@@ -60,7 +66,23 @@ public sealed class EnrichPostingFunction(
             .Select(c => new { c.ConceptKey, c.Id })
             .ToDictionaryAsync(c => c.ConceptKey, c => c.Id, StringComparer.Ordinal, ct);
 
-        var extracted = 0;
+        // Everything already current, in one query. Asking per posting was a round trip each
+        // to a database that auto-pauses and is billed by the second, on a path that runs for
+        // every blob the scraper uploads.
+        var postingIds = postings.Select(p => p.Id).ToList();
+
+        var current = await db.PostingExtractions
+            .Where(e => postingIds.Contains(e.PostingId)
+                && e.ExtractorVersion == DocumentExtraction.CurrentVersion)
+            .Select(e => new { e.PostingId, e.InputHash })
+            .ToListAsync(ct);
+
+        var currentHashes = current
+            .GroupBy(e => e.PostingId)
+            .ToDictionary(g => g.Key, g => g.Select(e => e.InputHash).ToHashSet(StringComparer.Ordinal));
+
+        var pending = new List<(long Id, string InputHash)>();
+        var requests = new List<ExtractionRequest>();
         var skipped = 0;
 
         foreach (var posting in postings)
@@ -75,38 +97,46 @@ public sealed class EnrichPostingFunction(
             // The idempotency key. A replayed message, or a posting re-listed with unchanged
             // text, converges on the row that is already there instead of paying for the
             // model again - the same contract ScrapeRuns.BlobPath carries for ingestion.
-            var alreadyDone = await db.PostingExtractions.AnyAsync(
-                e => e.PostingId == posting.Id
-                    && e.ExtractorVersion == DocumentExtraction.CurrentVersion
-                    && e.InputHash == inputHash,
-                ct);
-
-            if (alreadyDone)
+            if (currentHashes.TryGetValue(posting.Id, out var hashes) && hashes.Contains(inputHash))
             {
                 skipped++;
                 continue;
             }
 
-            var result = await extractor.ExtractAsync(
-                new ExtractionRequest(DocumentKind.Posting, posting.Description, posting.Title), ct);
+            pending.Add((posting.Id, inputHash));
+            requests.Add(new ExtractionRequest(DocumentKind.Posting, posting.Description, posting.Title));
+        }
 
-            if (result is null)
+        // One call covering many postings rather than one call each. The concept vocabulary is
+        // several thousand tokens and has to precede every extraction, so sending it per
+        // posting is most of what a corpus-wide pass costs; the extractor decides how many
+        // documents fit in a call and this loop is indifferent to the answer.
+        var results = requests.Count == 0
+            ? []
+            : await extractor.ExtractBatchAsync(requests, ct);
+
+        var extracted = 0;
+
+        for (var i = 0; i < pending.Count && i < results.Count; i++)
+        {
+            if (results[i] is not { } result)
             {
                 continue;
             }
 
-            await ApplyAsync(posting.Id, inputHash, result, conceptIds, ct);
+            await ApplyAsync(pending[i].Id, pending[i].InputHash, result, conceptIds, ct);
             extracted++;
         }
 
-        if (extracted > 0 || skipped > 0)
+        if (extracted > 0)
         {
             await db.SaveChangesAsync(ct);
         }
 
         logger.LogInformation(
-            "Extraction batch: {Extracted} extracted, {Skipped} already current, {Missing} not found.",
-            extracted, skipped, keys.Count - postings.Count);
+            "Extraction batch: {Extracted} extracted, {Skipped} already current, {Failed} returned nothing, "
+            + "{Missing} not found.",
+            extracted, skipped, pending.Count - extracted, keys.Count - postings.Count);
     }
 
     /// <summary>

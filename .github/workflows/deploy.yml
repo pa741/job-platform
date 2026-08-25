@@ -36,6 +36,10 @@ env:
   JP_API_CLIENT_ID: ${{ vars.JP_API_CLIENT_ID }}
   JP_API_ALLOWED_ORIGINS: ${{ vars.JP_API_ALLOWED_ORIGINS }}
   JP_AI_PROVIDER: ${{ vars.JP_AI_PROVIDER }}
+  # Which models sit behind the two deployments. Both empty-guarded in main.bicepparam, so an
+  # undefined repository variable takes the default rather than reaching the template as ''.
+  JP_AI_BULK_MODEL: ${{ vars.JP_AI_BULK_MODEL }}
+  JP_AI_WRITING_MODEL: ${{ vars.JP_AI_WRITING_MODEL }}
   # Load-bearing. Unset, the template parameter falls back to the free serverless offer and
   # the deployment tries to downgrade a paid database, which Azure rejects outright with
   # "Cannot update paid database to free database" - a failed pipeline, every push.

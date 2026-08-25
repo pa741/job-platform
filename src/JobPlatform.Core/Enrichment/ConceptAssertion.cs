@@ -25,16 +25,19 @@ public enum AssertionSource
 /// </summary>
 /// <remarks>
 /// One enum spanning both sides of the match on purpose. A posting asserts demand
-/// (<see cref="Mentioned"/>..<see cref="Required"/>); a CV will assert supply
+/// (<see cref="Mentioned"/>..<see cref="Required"/>); a profile asserts supply
 /// (<see cref="Familiar"/>..<see cref="Expert"/>). Which half applies is determined by the
-/// subject, so a single value type lets <c>PostingConcepts</c> and the eventual
-/// <c>ProfileConcepts</c> share a column definition — and lets matching be a join between two
-/// tables of identical shape rather than two pipelines to reconcile.
+/// subject, so a single value type lets <c>PostingConcepts</c> and <c>ProfileConcepts</c>
+/// share a column definition — and lets matching be a join between two tables of identical
+/// shape rather than two pipelines to reconcile.
 ///
 /// The values are ordinal within each half, so "at least preferred" is a comparison rather
 /// than a set membership test. The gap between the halves is deliberate: it leaves room, and
-/// it makes a demand value accidentally compared against a supply value obviously wrong
-/// rather than subtly wrong.
+/// it makes a demand value accidentally compared against a supply value obviously wrong rather
+/// than subtly wrong. That has since earned its keep — <see cref="Required"/> is 3 and
+/// <see cref="Expert"/> is 13, so a demand value stored in a supply column compares as weaker
+/// than every genuine claim, which both the API mapping and the profile repository clamp
+/// against rather than store.
 /// </remarks>
 public enum AssertionPolarity
 {
@@ -67,11 +70,11 @@ public enum AssertionPolarity
 /// One subject bound to one concept. The shared shape of demand and supply.
 /// </summary>
 /// <remarks>
-/// This interface is the CV contract, written down before there is a CV. Requirements come out
-/// of a posting and qualifications will come out of a profile through the same vocabulary and
-/// into the same column set, so the eventual match is a join rather than a translation layer.
-/// Only the posting side is built; defining the shape once costs nothing now and a rewrite
-/// later.
+/// This interface was the CV contract, written down before there was a CV. Requirements come
+/// out of a posting and qualifications come out of a profile through the same vocabulary and
+/// into the same column set, so the match is a join rather than a translation layer. Both
+/// sides are now built, and the shape did not have to move to accommodate the second one —
+/// which is the payoff of having defined it once, early.
 /// </remarks>
 public interface IConceptAssertion
 {
