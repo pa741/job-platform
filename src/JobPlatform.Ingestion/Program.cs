@@ -175,5 +175,6 @@ builder.Services.AddScoped<IngestionPipeline>();
 builder.Services.AddScoped<CandidateProfileRepository>();
 builder.Services.AddScoped<JobMatchRepository>();
 builder.Services.AddScoped<ExtractionBatchRepository>();
+builder.Services.AddScoped<PostingExtractionWriter>();
 
 builder.Build().Run();
