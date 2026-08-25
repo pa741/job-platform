@@ -324,6 +324,13 @@ Each of these cost a red CI run; none of them fail locally.
   At `none` the model stops reasoning about whether a phrase means "essential" or "desirable",
   which is the one thing the deterministic pass cannot do and therefore the entire reason for
   calling it.
+- **The queue's concurrency and the deployment's capacity are one setting in two files.**
+  `host.json`'s `batchSize` + `newBatchThreshold` decide how many invocations run at once;
+  each makes one model call at a time. Multiply those by the batch's token cost and it has to
+  fit under the deployment's TPM. Left at 4/2 against a 100k-TPM deployment, the first real
+  backfill spent its calls collecting HTTP 429s and quietly extracted almost nothing - the
+  function swallows a provider failure by design, so the symptom was a stalled count rather
+  than a red anything. Change either number and check the other.
 - **Extraction sends many documents per call, and the index is checked rather than trusted.**
   The concept vocabulary is several thousand tokens and has to precede every extraction, so
   sent per posting it dwarfs the adverts themselves; ten to a call amortises it tenfold. The

@@ -26,8 +26,11 @@ param writingModelName string = 'gpt-5.6-sol'
 
 param writingModelVersion string = '2026-07-09'
 
+// Tokens per minute, in thousands, and a rate ceiling rather than a reservation: Global
+// Standard bills per token, so a higher number costs nothing until tokens actually flow. It
+// was 100, and the first real backfill spent most of its calls collecting HTTP 429s.
 @description('Thousands of tokens per minute for the bulk deployment.')
-param bulkCapacity int = 100
+param bulkCapacity int = 250
 
 @description('Thousands of tokens per minute for the writing deployment. Small: one call per application.')
 param writingCapacity int = 20
