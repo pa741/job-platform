@@ -74,6 +74,13 @@ param aiBulkModelVersion string = '2026-07-09'
 @description('Model behind the writing deployment: tailored CV and cover letter.')
 param aiWritingModelName string = 'gpt-5.6-sol'
 
+// Off by default, and the only thing in this template that provisions a place to keep a
+// secret. It buys the gpt-5.6 family for batch extraction, which Azure's batch matrix does not
+// carry, and a rate pool separate from the interactive deployment's. A clone that leaves this
+// false deploys with no vault and nothing to leak, and the backfill falls back to the queue.
+@description('Provision a Key Vault for an OpenAI API key, enabling the batch extraction path.')
+param aiOpenAiBatchEnabled bool = false
+
 @description('Version of the writing model. Must match the model name.')
 param aiWritingModelVersion string = '2026-07-09'
 
@@ -225,6 +232,7 @@ module functionApp 'modules/functionapp.bicep' = {
     openAiEndpoint: aiProvider == 'azureopenai' ? openAi!.outputs.endpoint : ''
     openAiBulkDeployment: aiProvider == 'azureopenai' ? openAi!.outputs.bulkDeployment : ''
     openAiWritingDeployment: aiProvider == 'azureopenai' ? openAi!.outputs.writingDeployment : ''
+    openAiApiKeySecretUri: aiOpenAiBatchEnabled ? keyVault!.outputs.openAiSecretUri : ''
   }
 }
 
@@ -233,6 +241,18 @@ module functionApp 'modules/functionapp.bicep' = {
 //
 // Note what is NOT here any more: a Key Vault. It existed for one Anthropic API key, and
 // Azure OpenAI's Entra authentication removed the need for it entirely.
+// The one vault, for the one secret. See the module for why it came back after being deleted.
+module keyVault 'modules/keyvault.bicep' = if (aiOpenAiBatchEnabled) {
+  name: 'keyVault'
+  params: {
+    location: location
+    namePrefix: namePrefix
+    resourceToken: resourceToken
+    tags: tags
+    readerPrincipalId: identity.outputs.principalId
+  }
+}
+
 module openAi 'modules/openai.bicep' = if (aiProvider == 'azureopenai') {
   name: 'openAi'
   params: {
@@ -343,5 +363,7 @@ output aiProvider string = aiProvider
 output aiEndpoint string = aiProvider == 'azureopenai' ? openAi!.outputs.endpoint : ''
 output aiBulkDeployment string = aiProvider == 'azureopenai' ? openAi!.outputs.bulkDeployment : ''
 output aiWritingDeployment string = aiProvider == 'azureopenai' ? openAi!.outputs.writingDeployment : ''
+output keyVaultName string = aiOpenAiBatchEnabled ? keyVault!.outputs.vaultName : ''
+output openAiSecretName string = aiOpenAiBatchEnabled ? keyVault!.outputs.openAiSecretName : ''
 output webName string = deployWeb ? staticWebApp!.outputs.name : ''
 output webUrl string = deployWeb ? staticWebApp!.outputs.url : ''

@@ -636,7 +636,7 @@ judgement layer and the generated documents are absent.
 
 ## Public repository
 
-**There is no secret in this design at all**, and that is now unqualified:
+**There is one secret, it is optional, and everything else is keyless:**
 
 - Azure SQL is **Entra-only** (`azureADOnlyAuthentication`) — no SQL login exists.
 - Cosmos DB has **local auth disabled** — the keys are not usable.
@@ -650,10 +650,17 @@ judgement layer and the generated documents are absent.
   reached with the shared managed identity, so a key leaking would be a key that authenticates
   nothing.
 
-There used to be exactly one exception: an Anthropic API key, in a Key Vault, set out of band
-so it appeared in no template or deployment history. Moving to Azure OpenAI removed the need
-for it, so the vault module was deleted rather than kept well-managed — which is a better
-outcome than the careful handling it replaced.
+The exception is an **OpenAI API key**, and only when the batch extraction path is enabled. The
+Anthropic key that used to be the exception was deleted outright when the provider moved to
+Azure OpenAI; this one came back for a narrower reason. OpenAI's Batch API carries the
+`gpt-5.6` family that Azure's batch matrix does not, and gives a corpus-wide pass a rate pool
+separate from the interactive deployment's — which is what stalled the first real backfill.
+There is no identity-based path to `api.openai.com`.
+
+It is fenced accordingly: off by default, so a clone deploys with no vault at all; scoped to
+**job adverts only**, so candidate profiles stay on the Azure path and personal data never
+leaves the tenant; and its value set out of band with `az keyvault secret set`, appearing in no
+template, parameter file, output or deployment history.
 
 What still needs care, and how it is handled:
 

@@ -87,6 +87,12 @@ builder.Services.AddSingleton(provider =>
 // same managed identity everything else here uses.
 builder.Services.AddAiProvider(configuration);
 
+// The batch path, registered independently of the interactive one. A deployment can have
+// either, both or neither; both is the intended arrangement - Azure for profiles, where a
+// person is waiting and personal data stays in the tenant, and OpenAI's batch endpoint for job
+// adverts, where nobody is waiting and the rate pool is separate.
+builder.Services.AddOpenAiBatchProvider(configuration);
+
 // The producer is registered under exactly the same condition as the consumer it feeds.
 // Without it the pipeline receives a null queue and writes nothing, so an unconfigured
 // deployment never accumulates work for a model that will never run.
@@ -168,5 +174,6 @@ builder.Services.AddScoped<IngestionPipeline>();
 // ICandidacyAssessor would add.
 builder.Services.AddScoped<CandidateProfileRepository>();
 builder.Services.AddScoped<JobMatchRepository>();
+builder.Services.AddScoped<ExtractionBatchRepository>();
 
 builder.Build().Run();

@@ -35,6 +35,9 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
     public DbSet<ProfileConceptEntity> ProfileConcepts => Set<ProfileConceptEntity>();
     public DbSet<ProfileMentionEntity> ProfileMentions => Set<ProfileMentionEntity>();
 
+    public DbSet<ExtractionBatchEntity> ExtractionBatches => Set<ExtractionBatchEntity>();
+    public DbSet<ExtractionBatchItemEntity> ExtractionBatchItems => Set<ExtractionBatchItemEntity>();
+
     public DbSet<JobMatchEntity> JobMatches => Set<JobMatchEntity>();
     public DbSet<ApplicationDocumentEntity> ApplicationDocuments => Set<ApplicationDocumentEntity>();
 
@@ -192,6 +195,7 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
         ConfigureAssertions(modelBuilder);
         ConfigureProfiles(modelBuilder);
         ConfigureMatches(modelBuilder);
+        ConfigureExtractionBatches(modelBuilder);
 
         modelBuilder.Entity<JobPostingSearchTerm>(entity =>
         {
@@ -502,6 +506,53 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
             entity.HasOne(e => e.Profile)
                 .WithMany()
                 .HasForeignKey(e => e.ProfileId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Posting)
+                .WithMany()
+                .HasForeignKey(e => e.PostingId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+    }
+
+    /// <summary>
+    /// Batches handed to a provider, and the documents inside them.
+    /// </summary>
+    /// <remarks>
+    /// The items cascade from the batch: an item has no meaning without the submission it
+    /// belonged to. The posting side is Restrict for the reason it always is here - a posting is
+    /// a shared record and must not be deletable out from under the rows referencing it.
+    /// </remarks>
+    private static void ConfigureExtractionBatches(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<ExtractionBatchEntity>(entity =>
+        {
+            entity.ToTable("ExtractionBatches");
+            entity.HasKey(e => e.Id);
+
+            // The idempotency guarantee: one row per provider batch, so a collector running
+            // twice cannot apply one batch's results twice.
+            entity.HasIndex(e => e.ProviderBatchId).IsUnique();
+
+            // What the collector selects on: everything still open, oldest first.
+            entity.HasIndex(e => new { e.State, e.SubmittedAtUtc });
+
+            entity.Property(e => e.ProviderBatchId).HasMaxLength(100).IsRequired();
+            entity.Property(e => e.Model).HasMaxLength(100);
+            entity.Property(e => e.State).HasConversion<int>();
+            entity.Property(e => e.Error).HasMaxLength(2000);
+        });
+
+        modelBuilder.Entity<ExtractionBatchItemEntity>(entity =>
+        {
+            entity.ToTable("ExtractionBatchItems");
+            entity.HasKey(e => new { e.BatchId, e.PostingId });
+
+            entity.Property(e => e.InputHash).HasMaxLength(64).IsFixedLength().IsRequired();
+
+            entity.HasOne(e => e.Batch)
+                .WithMany(b => b.Items)
+                .HasForeignKey(e => e.BatchId)
                 .OnDelete(DeleteBehavior.Cascade);
 
             entity.HasOne(e => e.Posting)
