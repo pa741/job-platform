@@ -7,15 +7,17 @@ import { Overview } from './pages/Overview';
 import { Postings } from './pages/Postings';
 import { Profile } from './pages/Profile';
 import { Matches } from './pages/Matches';
+import { Vocabulary } from './pages/Vocabulary';
 import { ErrorNote } from './components/Primitives';
 import { useTheme, type Theme } from './theme/useTheme';
 import './theme/app.css';
 
-type Page = 'overview' | 'postings' | 'matches' | 'profile';
+type Page = 'overview' | 'postings' | 'vocabulary' | 'matches' | 'profile';
 
 const PAGES: { id: Page; label: string }[] = [
   { id: 'overview', label: 'Overview' },
   { id: 'postings', label: 'Postings' },
+  { id: 'vocabulary', label: 'Vocabulary' },
   { id: 'matches', label: 'Matches' },
   { id: 'profile', label: 'Profile' },
 ];
@@ -173,6 +175,7 @@ function Dashboard({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => 
             the signed-in person rather than about a slice of the corpus, so they render even
             when the platform has ingested nothing at all - which is exactly the state somebody
             filling in their profile for the first time is in. */}
+        {page === 'vocabulary' && <Vocabulary api={api} searchTerm={searchTerm} />}
         {page === 'matches' && <Matches api={api} />}
         {page === 'profile' && <Profile api={api} />}
       </main>

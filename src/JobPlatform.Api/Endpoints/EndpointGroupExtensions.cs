@@ -1,4 +1,5 @@
 using JobPlatform.Api.Features.Applications;
+using JobPlatform.Api.Features.Concepts;
 using JobPlatform.Api.Features.Matches;
 using JobPlatform.Api.Features.Meta;
 using JobPlatform.Api.Features.Metrics;
@@ -16,6 +17,7 @@ public static class EndpointGroupExtensions
         new PostingEndpoints(),
         new RunEndpoints(),
         new MetricEndpoints(),
+        new ConceptEndpoints(),
         new ProfileEndpoints(),
         new MatchEndpoints(),
         new ApplicationEndpoints(),
