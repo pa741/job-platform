@@ -38,7 +38,7 @@
   </ItemGroup>
 
   <!-- Microsoft.Extensions.* sits on the 10.x line, ahead of the net9.0 target framework.
-       Both Semantic Kernel and the Anthropic SDK depend on Microsoft.Extensions.AI 10.5,
+       Semantic Kernel and its Azure OpenAI connector depend on Microsoft.Extensions.AI 10.5,
        which requires it; with CentralPackageTransitivePinningEnabled on, leaving these at
        9.0.0 downgrades the transitive resolution and the build fails with CS1705. The 10.x
        packages carry net9.0 assets, so the target framework does not have to move. -->
@@ -62,13 +62,20 @@
 
   <ItemGroup Label="AI">
     <!-- Semantic Kernel is the orchestration layer: Kernel, IChatCompletionService,
-         ChatHistory and prompt templates.
-         There is no official Microsoft SK connector for Anthropic - the only NuGet options
-         are third-party alphas - so the transport underneath is the official Anthropic SDK,
-         adapted with AsIChatClient() and handed to SK through its Microsoft.Extensions.AI
-         bridge. SK owns the abstraction; the SDK owns the wire. -->
+         ChatHistory and prompt templates. The Microsoft.SemanticKernel metapackage already
+         carries Connectors.AzureOpenAI, so the connector under the Kernel is first-party and
+         GA - which is what let the hand-composed Anthropic transport, and the API key it
+         needed, be deleted outright rather than abstracted over. -->
     <PackageVersion Include="Microsoft.SemanticKernel" Version="1.80.0" />
-    <PackageVersion Include="Anthropic" Version="12.42.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Documents">
+    <!-- BSD-2-Clause. The model writes markdown; this parses it into an AST the renderer
+         walks. Nothing here ever runs on model output as HTML. -->
+    <PackageVersion Include="Markdig" Version="1.3.2" />
+    <!-- MIT, and deliberately the platform-independent build rather than -gdi: the API runs
+         in a Linux container with no GDI+ and no system fonts to draw through. -->
+    <PackageVersion Include="PDFsharp-MigraDoc" Version="6.2.4" />
   </ItemGroup>
 
   <ItemGroup Label="Testing">

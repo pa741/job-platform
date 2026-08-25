@@ -30,7 +30,7 @@ param(
     [string]$LandingContainer = 'jobs-landing',
     [string]$DeploymentName = 'jobplatform-ingest',
 
-    [ValidateSet('none', 'anthropic')]
+    [ValidateSet('none', 'azureopenai')]
     [string]$AiProvider = 'none',
 
     [string]$ApiClientId = '',
@@ -55,7 +55,7 @@ if (-not $SkipProviderRegistration) {
     $providers = @(
         'Microsoft.Web', 'Microsoft.DocumentDB', 'Microsoft.Sql', 'Microsoft.EventGrid',
         'Microsoft.Insights', 'Microsoft.OperationalInsights', 'Microsoft.ManagedIdentity',
-        'Microsoft.App', 'Microsoft.KeyVault'
+        'Microsoft.App', 'Microsoft.CognitiveServices'
     )
     foreach ($provider in $providers) {
         $state = az provider show -n $provider --query registrationState -o tsv 2>$null
@@ -130,25 +130,22 @@ if (-not $SkipMigrations) {
     }
 }
 
-# The vault is created empty and the key is set by hand, deliberately: passing it as a
-# parameter would put it in the deployment history, where it would outlive any rotation.
-if ($AiProvider -eq 'anthropic') {
-    $vaultName = $outputs.keyVaultName.value
-    $secretName = $outputs.anthropicSecretName.value
-
-    $existing = az keyvault secret show --vault-name $vaultName --name $secretName --query id -o tsv 2>$null
-
-    if (-not $existing) {
-        Write-Host ''
-        Write-Host 'AI provider is "anthropic" but the key vault has no key yet.' -ForegroundColor Yellow
-        Write-Host 'No model is reachable until you set it:' -ForegroundColor Yellow
-        Write-Host "  az keyvault secret set --vault-name $vaultName --name $secretName --value '<your-key>'" -ForegroundColor Yellow
-        Write-Host 'Then restart the container app to pick it up:' -ForegroundColor Yellow
-        Write-Host "  az containerapp revision restart -g $ResourceGroup -n $($outputs.apiName.value)" -ForegroundColor Yellow
-    }
-    else {
-        Write-Host "    key vault    : $vaultName (secret '$secretName' present)"
-    }
+# There is no secret to set. This block used to print an `az keyvault secret set` command and
+# tell you nothing worked until you ran it; Azure OpenAI authenticates with the shared managed
+# identity, so provisioning is complete when the deployment finishes.
+#
+# What can still go wrong is quota. Some subscription tiers have none for the GPT-5.6 family
+# and the deployment fails outright rather than degrading, so the failure is loud - but the
+# error names a quota code rather than saying "ask for capacity", which is worth pointing at.
+if ($AiProvider -eq 'azureopenai') {
+    Write-Host ''
+    Write-Host '    ai endpoint  : ' -NoNewline
+    Write-Host $outputs.aiEndpoint.value
+    Write-Host "    deployments  : $($outputs.aiBulkDeployment.value) (bulk), $($outputs.aiWritingDeployment.value) (writing)"
+    Write-Host '    auth         : managed identity. There is no key, and none is needed.'
+    Write-Host ''
+    Write-Host 'To call the models as yourself while developing locally, sign in with az login;' -ForegroundColor Gray
+    Write-Host 'the template already grants your admin object id Cognitive Services OpenAI User.' -ForegroundColor Gray
 }
 
 Write-Host ''

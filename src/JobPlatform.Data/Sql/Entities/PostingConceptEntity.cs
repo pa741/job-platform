@@ -6,11 +6,12 @@ namespace JobPlatform.Data.Sql.Entities;
 /// One posting bound to one concept — what the advert asks for.
 /// </summary>
 /// <remarks>
-/// <b>This shape is the CV contract.</b> When qualifications start coming out of a profile they
-/// land in a <c>ProfileConcepts</c> table with these same columns, differing only in which half
-/// of <see cref="AssertionPolarity"/> is meaningful. Matching is then a join between two tables
-/// of identical shape rather than two pipelines to reconcile. Only the posting side exists
-/// today; the shape was fixed now because retrofitting it later is the expensive version.
+/// <b>This shape is the CV contract, and it is now honoured on both sides.</b> Qualifications
+/// coming out of a profile land in <c>ProfileConcepts</c> with these same columns, differing
+/// only in which half of <see cref="AssertionPolarity"/> is meaningful. Matching is therefore a
+/// join between two tables of identical shape rather than two pipelines to reconcile. Fixing
+/// the shape before the second side existed is what made that true; retrofitting it would have
+/// been the expensive version. <b>Do not let the two drift.</b>
 ///
 /// The primary key includes <see cref="Source"/>, so a concept the employer tagged <i>and</i>
 /// the description mentioned produces two rows. They are not equally good evidence and an

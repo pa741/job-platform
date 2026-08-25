@@ -1,13 +1,15 @@
 # job-platform
 
-Azure-side ingestion for a job-market data pipeline. A scraper
+The Azure side of a job-market data pipeline. A scraper
 ([`job-scrapper`](https://github.com/pa741/job-scrapper)) runs on a NAS and uploads
 timestamped CSVs of job postings to Blob Storage; this repository turns each upload into
-queryable relational data and a set of market metrics, within seconds of it landing.
+queryable relational data and a set of market metrics, within seconds of it landing — and then
+matches those postings against a candidate's own profile, writing a tailored CV and cover
+letter for the ones worth applying to.
 
 Built to run at **zero cost** on Azure free tiers, with **no secrets anywhere** — every
-service-to-service hop is authenticated by managed identity, and CI deploys through OIDC
-federation rather than a stored credential.
+service-to-service hop is authenticated by managed identity, the language models included, and
+CI deploys through OIDC federation rather than a stored credential.
 
 ```
 NAS scraper ──CSV──> Blob Storage: jobs-landing/jobs/*.csv
@@ -30,8 +32,16 @@ NAS scraper ──CSV──> Blob Storage: jobs-landing/jobs/*.csv
               │    pairs/…/pairs.parquet          title ↔ concept, for training
               ▼
      API  (Container Apps, scale-to-zero)
-     postings, metrics
+     postings, metrics, profile, matches, generated documents
+              ▲
+              │
+   Azure Function  (timer, 03:30 UTC)
+   score every profile × posting ─┬─> above threshold ──> model ──> verdict
+                                  └─> below            ──> stored, unjudged
 ```
+
+Both model passes run on **Azure OpenAI in Microsoft Foundry**, reached with the same managed
+identity as everything else. There is no API key anywhere in this system, and no Key Vault.
 
 ## What it does
 
@@ -57,7 +67,7 @@ postings whose content actually changed.
 Most of what a job advert says is in its description, and a description is not something you
 can `GROUP BY`. Three passes turn it into something you can.
 
-**The vocabulary** is 213 concepts — skills, the domains above them, and qualifications
+**The vocabulary** is 222 concepts — skills, the domains above them, and qualifications
 including UK security clearances — arranged as a **DAG rather than a tree**. Two parent axes:
 `type.*` says what kind of thing a concept is, `area.*` says where it is used. That is not
 tidiness; the data needs it. Python is a language *and* is used in backend, data and ML, and
@@ -148,6 +158,24 @@ ingest function uses.
 | `GET /api/v1/metrics/scraper-health` | Which columns have silently gone empty |
 | `GET /health`, `/health/ready` | Liveness (touches nothing), readiness (Cosmos only) |
 
+Everything above is about the corpus. The routes below are about the signed-in person, and
+none of them takes an identifier for *whose* data it wants — the API resolves that from the
+token's `oid` claim, so there is no way for a client to ask for somebody else's. All of them
+require a principal unconditionally: the `Api:AllowAnonymousReads` switch that opens the
+posting endpoints during development never reaches them.
+
+| Route | |
+| --- | --- |
+| `GET /api/v1/profile` | The caller's profile. 404 where they have not created one, which is a real state rather than an error |
+| `PUT /api/v1/profile` | Replaces it with the submitted form, and re-reads it for skills when the text actually changed |
+| `DELETE /api/v1/profile` | Erases the profile, every match and every generated document |
+| `GET /api/v1/matches` | Scored matches, best first. `minScore`, `assessedOnly`, paging |
+| `GET /api/v1/matches/{postingId}` | One match with the breakdown behind the number |
+| `POST /api/v1/applications/{postingId}` | Writes a tailored CV and cover letter. The only route that spends money on the expensive model |
+| `GET /api/v1/applications`, `/{id}` | Generated drafts, as markdown |
+| `GET /api/v1/applications/{id}/cv.pdf` | The CV, rendered |
+| `GET /api/v1/applications/{id}/cover-letter.pdf` | The cover letter, rendered |
+
 OpenAPI at `/openapi/v1.json`, with a Scalar UI at `/scalar/v1`.
 
 ### Searching the structured axes
@@ -186,34 +214,141 @@ detail only, behind output caching and a rate limiter. For the same reason the
 readiness probe checks Cosmos and never SQL: a probe alone would hold the database awake
 around the clock.
 
-**Semantic Kernel is the LLM abstraction, with a composed connector.** There is no official
-Microsoft SK connector for Anthropic — the only NuGet packages are third-party alphas, which
-is not a dependency worth carrying. So the Kernel is assembled from supported parts: the
-official Anthropic SDK exposes an `IChatClient` through `Microsoft.Extensions.AI`, and SK
-consumes any `IChatClient` as an `IChatCompletionService`. SK owns the prompt templates and
-the chat abstraction; the SDK owns the wire. Swapping provider is a change to one method,
-`AiRegistration.BuildKernel`.
+**Semantic Kernel is the LLM abstraction, over a first-party connector.** The provider is
+Azure OpenAI in Microsoft Foundry, and `AiRegistration.BuildKernel` puts two deployments on one
+Kernel — `bulk` and `writing` — which a prompt selects between by service id. That is the only
+thing deciding whether a call costs the cheap model's money or the expensive one's.
 
-That choice has a visible cost, which is the honest part: SK's execution settings are
-provider-neutral, so they cannot express Anthropic's structured-output constraint. A model
-may wrap its JSON in a code fence or a sentence of preamble, so a caller has to tolerate that
-rather than being guaranteed a bare body. `AiJson.ExtractJsonObject` absorbs it and
-`AiJsonTests` pins the behaviour.
+This replaced a hand-composed connector. There is no official Microsoft SK connector for
+Anthropic, so the Kernel used to be assembled from the Anthropic SDK's `IChatClient` handed to
+SK's experimental `Microsoft.Extensions.AI` bridge. Two things fell out of moving:
 
-**Nothing calls the model yet.** The API's first AI-backed feature — CV-to-posting matching —
-was removed: it is being rebuilt with a different structure and flow. What was kept is the
-provider layer and its credential path, because that part is orthogonal to whatever consumes
-it. `AddAiProvider` registers a `Kernel` only when `Ai:Provider` is `anthropic` *and* a key is
-present; anything else registers nothing rather than throwing, so an absent environment
-variable cannot take down endpoints that have nothing to do with AI. `AiRegistrationTests`
-resolves the service rather than merely registering it, since a Kernel that cannot be built is
-otherwise silent until something asks for one.
+- **The API key is gone, and with it the only secret in the system.** Azure OpenAI
+  authenticates with Microsoft Entra, so the same user-assigned managed identity that already
+  reaches SQL, Cosmos and Storage reaches the models. The Key Vault, the Container Apps secret
+  reference and the out-of-band `az keyvault secret set` were deleted rather than tidied up, and
+  the account sets `disableLocalAuth: true` so the keys it still mints in the portal will not
+  authenticate anything.
+- **Structured output became expressible.** SK's provider-neutral settings could not ask for it;
+  the Azure OpenAI connector can, so a response is guaranteed to parse.
+  `AiJson.ExtractJsonObject` stays as a net rather than as the normal path — a response format
+  is a request to a provider, not a property of the transport — and `AiJsonTests` still pins it.
+
+**Two models, because the two jobs have opposite shapes.**
+
+| | Deployment | Runs on | Why |
+| --- | --- | --- | --- |
+| Extraction, candidacy assessment | `gpt-5.6-luna` | Every posting; every shortlisted pair | Cheapest of the 5.6 family, 1.05M context. High volume, structured output, judged in aggregate. |
+| Tailored CV and cover letter | `gpt-5.6-sol` | Once per application | Roughly 25× the price per token, and the call ratio runs several thousand to one the other way. This is the artefact a human reads. |
+
+Both are deployment *names* rather than model ids, so pointing one at a newer release is a
+repository variable, not a code change.
+
+**"In batches" means many documents per request, not the Batch API.** Azure's Global Batch
+matrix does not yet carry the GPT-5.6 family — it tops out at `gpt-5.4` — so the 24-hour batch
+discount is unavailable for Luna today. That turns out not to matter much, because the saving
+that actually counts here is elsewhere: the 222-concept vocabulary has to precede every
+extraction as the model's allowed output set, and sent once per posting it dwarfs the adverts
+themselves. Ten documents to a call pays for it once instead of ten times.
+
+The cost of batching is a failure mode worth naming. An extraction landing against the wrong
+posting would be wrong, internally consistent, and undetectable afterwards — so the model is
+asked to echo each document's index, and `KernelDocumentExtractor` drops any answer whose index
+is out of range or repeated rather than clamping it. Those postings simply have no extraction
+row and are picked up by the backfill. Reordering, duplicates, short responses and out-of-range
+indices are all pinned by tests.
+
+## Matching
+
+A candidate fills in a form — experience, education, projects, certifications, declared
+skills — rather than uploading a CV. Parsing a PDF back into structure is a lossy guess at
+something the person already knows: which employer, which dates, which bullet point is the one
+that matters. Asking directly produces a record with fields, which is what makes the generated
+CV an *output* rather than a rewrite of an input.
+
+The free text in that form goes through the same extractor a job advert does, with the same
+vocabulary, into a `ProfileConcepts` table with the same columns as `PostingConcepts`. **That
+is the whole payoff of a shape fixed before there was a profile to put in it: matching is a
+join, not a second pipeline.**
+
+**The arithmetic runs on everything; the model runs on what survives it.** `MatchScorer` is pure
+and Azure-free, like the metrics calculator, and scores every candidate pair over seven axes:
+essential skills, other skills, seniority, experience, working arrangement, salary and location.
+It reasons through the concept graph rather than by string equality — holding EKS satisfies a
+Kubernetes requirement outright, holding Kubernetes satisfies a containerisation requirement
+through a curated `implies` edge, holding Kubernetes against an EKS requirement earns partial
+credit, and holding Vue against a React requirement earns a little. Every one of those is
+reported back with the relation that produced it, because "you have Vue, they want React" is an
+argument rather than a match, and presenting it as one is how somebody ends up in the wrong
+interview.
+
+**Silence drops an axis rather than failing it.** Most postings state no salary, many state no
+working arrangement, and 18% of titles carry no seniority. An axis the posting cannot answer
+contributes nothing to the numerator *and* nothing to the denominator. Scoring it as zero would
+rank a posting that says nothing below one that says something incompatible; scoring it as full
+marks would make vagueness a competitive advantage.
+
+What clears a threshold is then read by the model, in batches, and the profile travels once for
+the whole batch rather than once per posting. It is not asked to score from scratch: it is
+handed the number, the matched concepts and the gaps, and asked the one question the arithmetic
+cannot answer — whether the gaps matter. A missing Kubernetes on a role that mentions it once in
+a nice-to-have list is not the same fact as a missing Kubernetes on a platform role, and no
+weighting scheme distinguishes them because the difference is in the prose.
+
+**Both verdicts are stored and neither overwrites the other.** They disagree fairly often, and
+the disagreement is the informative part: a 58 the model calls strong is precisely the posting
+worth surfacing, and collapsing the two into one column deletes the only signal that says so.
+
+All of it runs at 03:30 UTC, after the ingest and extraction queues have drained — never when
+somebody opens the page. A shortlist that costs model calls to look at is one nobody can afford
+to browse.
+
+## Generated applications
+
+For a matched posting, the writing deployment produces a tailored CV and cover letter as
+markdown, which the API renders to PDF on demand.
+
+The gap list from the match is passed in as **the set of claims the document must not make**.
+Tailoring means choosing what to lead with and rewriting real work to foreground the relevant
+part of it; it never means adding what is not there. A CV that invents a year of Kubernetes is
+not a better CV — it is one that falls apart in the interview, and it is the candidate rather
+than this system that pays for that. Generation therefore requires an existing match: a document
+written without a gap list has nothing stopping it.
+
+Markdown, and never HTML. `MarkdownPdfRenderer` parses the model's output into an abstract
+syntax tree and maps each node type onto a fixed set of document elements, so there is no path
+by which a response becomes markup that anything executes or styles. The layout belongs to this
+repository; the model supplies words and structure only. A node type with no mapping renders as
+its plain text rather than being dropped — silently losing one would take content out of a
+document somebody is about to send to an employer.
+
+The markdown is the record and the PDF is a rendering of it, produced per request. Storing the
+PDF would mean a layout change could not reach documents already generated, and would put
+megabytes of binary into a database billed by the second.
+
+One trap worth writing down: PDFsharp's platform-independent build resolves **no fonts at all**,
+and throws on its first call without a resolver — including for its own internal error font.
+Roboto is embedded under the SIL Open Font License, and the resolver answers for any family name
+because MigraDoc asks for "Courier New" whatever the document says. Installing fonts in the
+container was the alternative and was rejected: it renders differently on a developer's machine
+and turns a missing apt package into a 500 on somebody's CV download.
 
 ## The dashboard
 
 A React SPA on Static Web Apps (Free tier), signing in with MSAL and calling the API with
-an Entra bearer token. Two pages: an overview of the market metrics, and a filterable
-postings browser.
+an Entra bearer token. Four pages: an overview of the market metrics, a filterable postings
+browser, the candidate's own matches, and the profile form that feeds them.
+
+The last two behave differently from the first two on purpose. Overview and Postings are about
+a slice of the corpus and wait on the search-term bootstrap; Profile and Matches are about the
+signed-in person and render even when the platform has ingested nothing at all — which is
+exactly the state somebody filling in their profile for the first time is in.
+
+The match view shows the per-axis breakdown behind the score, and **omits every axis the
+posting said nothing about** rather than drawing it at zero: the scorer drops those from the
+denominator, so rendering them would show a penalty that was never applied. It also names the
+relation behind each satisfied requirement, because "you have Vue, they want React" is an
+argument rather than a match.
 
 **The overview shows two salary numbers, and the gap between them is the point.** "Salary in
 the columns" is what the scraper delivered; "salary known" is what is there once descriptions
@@ -275,11 +410,13 @@ component changing. The UI shows which feed is live so freshness is never a gues
 ## Repository layout
 
 ```
-src/JobPlatform.Core         Domain, CSV parsing, metrics, the concept vocabulary and every
-                             deterministic classifier. No Azure dependencies.
+src/JobPlatform.Core         Domain, CSV parsing, metrics, the concept vocabulary, the match
+                             scorer and every deterministic classifier. No Azure dependencies.
 src/JobPlatform.Data         EF Core (SQL) + Cosmos repositories, read and write sides.
-src/JobPlatform.Ingestion    The Azure Function.
-src/JobPlatform.Ai           Semantic Kernel + Claude provider. Standalone, so the SDK reaches nothing else.
+src/JobPlatform.Ingestion    The Azure Functions: ingest, extraction, curated export, match sweep.
+src/JobPlatform.Ai           Semantic Kernel over Azure OpenAI. Reaches Core and nothing else.
+src/JobPlatform.Documents    Markdown to PDF. Knows nothing about postings or profiles, which
+                             is what makes it testable by handing it a string.
 src/JobPlatform.Api          The API. Vertical slices under Features/.
 web/                         React dashboard. Vite, MSAL, Recharts.
 tools/JobPlatform.DbAdmin    Schema migration and identity grants.
@@ -301,9 +438,13 @@ dotnet test
 ```
 
 That includes the API's integration tests, which boot the real application against SQLite and
-an in-memory metrics source, and the Semantic Kernel composition, which is built with a
-throwaway string in place of a key — enough to prove every link in the graph resolves without
-reaching the network.
+an in-memory metrics source; the Semantic Kernel composition, which resolves both deployments
+without a credential because there is no longer one to supply; the extraction batching, driven
+by a stub chat service so a reordered or duplicated index can be asserted rather than hoped
+for; the scoring rules, against the real 222-concept vocabulary rather than a synthetic one;
+and the PDF renderer, over a table of inputs the prompt explicitly asks the model *not* to
+produce — because a prompt is a request, not a guarantee, and the cost of being wrong is a
+candidate's download failing.
 
 The fixture is **synthetic** — hand-built to reproduce the shape of real scraper output
 (empty salary columns, 40% date coverage, a description full of newlines and quotes)
@@ -460,20 +601,31 @@ whole dataset.
 
 ### Enabling the AI provider
 
-Nothing calls the model yet — this provisions the credential path, not a feature.
-
 ```powershell
-./scripts/provision.ps1 -ResourceGroup <rg> -LandingStorageAccount <account> -AiProvider anthropic
-az keyvault secret set --vault-name <vault> --name anthropic-api-key --value '<key>'
-az containerapp revision restart -g <rg> -n <api-app>
+./scripts/provision.ps1 -ResourceGroup <rg> -LandingStorageAccount <account> -AiProvider azureopenai
 ```
 
-The key is set out of band on purpose. Passing it as a deployment parameter would write it
-into the deployment history, where it would outlive any rotation.
+That is the whole procedure. It provisions a Foundry resource with two deployments and grants
+the shared managed identity `Cognitive Services OpenAI User` on it; there is no key to set
+afterwards and no follow-up command to run.
+
+Two things can still go wrong, and both fail loudly rather than silently:
+
+- **Quota.** Some subscription tiers have none for the GPT-5.6 family and the deployment is
+  rejected outright. Request capacity in the portal, or point `JP_AI_BULK_MODEL` and
+  `JP_AI_WRITING_MODEL` at models you do have.
+- **Nothing is extracted retroactively.** The daily path only queues postings whose text is
+  new or changed, so the existing corpus needs a backfill — see *Backfilling* above. It is
+  limited per call on purpose: the first run would otherwise queue everything, and that bill
+  should be a decision rather than a side effect.
+
+Without a provider configured the platform still works. Deterministic enrichment runs, matches
+are still scored — the scorer is pure arithmetic over the concept graph — and only the
+judgement layer and the generated documents are absent.
 
 ## Public repository
 
-There is exactly one secret in this design, and it is optional:
+**There is no secret in this design at all**, and that is now unqualified:
 
 - Azure SQL is **Entra-only** (`azureADOnlyAuthentication`) — no SQL login exists.
 - Cosmos DB has **local auth disabled** — the keys are not usable.
@@ -483,12 +635,14 @@ There is exactly one secret in this design, and it is optional:
 - The API validates **Entra bearer tokens** and reaches both databases with the shared
   managed identity — no inbound key, no outbound connection secret.
 - The API image is **public on GHCR**, so pulling it needs no registry credential either.
+- **Azure OpenAI has local auth disabled** — the same treatment Cosmos gets. The models are
+  reached with the shared managed identity, so a key leaking would be a key that authenticates
+  nothing.
 
-The single exception is the **Anthropic API key**, and only when the AI provider is enabled.
-It lives in Key Vault, read by the managed identity through a Container Apps secret reference;
-its value is set with `az keyvault secret set` and appears in no template, parameter file,
-output or deployment history. The default is `none`, which needs no key and provisions no
-vault, so a fresh clone of this repository still deploys with nothing to leak.
+There used to be exactly one exception: an Anthropic API key, in a Key Vault, set out of band
+so it appeared in no template or deployment history. Moving to Azure OpenAI removed the need
+for it, so the vault module was deleted rather than kept well-managed — which is a better
+outcome than the careful handling it replaced.
 
 What still needs care, and how it is handled:
 
@@ -496,6 +650,12 @@ What still needs care, and how it is handled:
   from environment variables. Nothing identifying is committed.
 - **Scraped PII.** Real exports contain populated `emails` and descriptions carrying
   recruiter contact details. No scraped output is committed; the test fixture is synthetic.
+- **Candidate PII.** The profile tables hold somebody's employment history, contact details
+  and salary expectations. Every read and write is scoped to the caller's own `oid`, and the
+  repositories take a subject id rather than a profile id so an endpoint cannot be written
+  that reads a stranger's record by mistake. `DELETE /api/v1/profile` erases the profile,
+  every match and every generated document — a system that stores an employment history
+  without offering a way to remove it is not one anybody should hand a CV to.
 - `.gitignore` was the repository's first commit, before any other file existed.
 - CI runs `gitleaks`, and `pull_request` (never `pull_request_target`) keeps fork code away
   from secrets.
@@ -530,8 +690,8 @@ three uploads totalling 455 rows reduced to 286 distinct postings, with a re-upl
 correctly reporting 0 new and leaving the row count unchanged — idempotency demonstrated on
 live data rather than asserted. CI and the OIDC deployment workflow both run green.
 
-The API is built, tested and deployed to Container Apps: 36 tests cover the route surface,
-the authorization rules, and the Semantic Kernel composition and its response handling. It
+The API is built, tested and deployed to Container Apps: its tests cover the route surface,
+the authorization rules, the Semantic Kernel composition and its response handling. It
 runs under the same managed identity as the ingest function and needed
 no new role assignment and no new database user to do it - which is what the user-assigned
 identity was chosen for in the first place.
@@ -550,7 +710,13 @@ Verified live against the real ingested data, with a real Entra token:
 The cold start is the cost of `minReplicas: 0`, and it is the right trade here: the API is
 idle most of the day, and an always-warm replica would burn the free grant serving nobody.
 
+The candidate profile, matching and generated applications are built on top of that: a
+form-filled profile extracted into the same concept vocabulary as a posting, a pure scorer
+that runs over every pair nightly, a model pass over what clears the threshold, and a tailored
+CV and cover letter rendered to PDF. 365 tests cover them, and moving the provider to Azure
+OpenAI removed the last secret in the system on the way through.
+
 Still to come, per the architecture in `model.md`: a Cosmos change-feed function driving
-Web PubSub for live metrics (the `leases` container is already provisioned), and CV matching,
-which is being rebuilt with a different structure and flow — the AI provider layer it will run
-on is already in place.
+Web PubSub for live metrics (the `leases` container is already provisioned). And when Azure's
+Global Batch matrix picks up the GPT-5.6 family, the extraction pass becomes a candidate for
+the 24-hour batch discount on top of the per-call packing it already does.

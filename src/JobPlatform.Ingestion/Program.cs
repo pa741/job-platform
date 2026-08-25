@@ -80,9 +80,11 @@ builder.Services.AddSingleton(provider =>
         .GetBlobContainerClient(containerName);
 });
 
-// Registers a Kernel and an IDocumentExtractor only when Ai:Provider is anthropic and a
-// key is present. Anything else registers nothing and does not throw - a missing environment
-// variable must not take down an ingest that has nothing to do with AI.
+// Registers a Kernel, an IDocumentExtractor and an ICandidacyAssessor only when
+// Ai:Provider is azureopenai and an endpoint is configured. Anything else registers nothing
+// and does not throw - a missing environment variable must not take down an ingest that has
+// nothing to do with AI. There is no key to check for: Azure OpenAI authenticates with the
+// same managed identity everything else here uses.
 builder.Services.AddAiProvider(configuration);
 
 // The producer is registered under exactly the same condition as the consumer it feeds.
@@ -138,9 +140,17 @@ builder.Services.AddSingleton(provider =>
 builder.Services.AddScoped<CuratedExporter>();
 
 builder.Services.AddSingleton<JobCsvParser>();
+builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<MetricsCalculator>();
 builder.Services.AddScoped<MetricsRepository>();
 builder.Services.AddScoped<JobPostingRepository>();
 builder.Services.AddScoped<IngestionPipeline>();
+
+// The match sweep. Registered unconditionally, unlike the extraction queue above: its scoring
+// pass is pure arithmetic over the concept graph and needs no model at all, so a deployment
+// with no AI provider still produces ranked matches - just without the judgement layer that
+// ICandidacyAssessor would add.
+builder.Services.AddScoped<CandidateProfileRepository>();
+builder.Services.AddScoped<JobMatchRepository>();
 
 builder.Build().Run();

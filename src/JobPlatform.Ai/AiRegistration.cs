@@ -1,11 +1,14 @@
-using Anthropic;
+using Azure.Core;
+using Azure.Identity;
+using JobPlatform.Ai.Applications;
 using JobPlatform.Ai.Extraction;
+using JobPlatform.Ai.Matching;
+using JobPlatform.Core.Applications;
 using JobPlatform.Core.Enrichment;
-using Microsoft.Extensions.AI;
+using JobPlatform.Core.Matching;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.SemanticKernel;
-using Microsoft.SemanticKernel.ChatCompletion;
 
 namespace JobPlatform.Ai;
 
@@ -15,14 +18,16 @@ public static class AiRegistration
     /// Registers the LLM provider selected by <c>Ai:Provider</c>.
     /// </summary>
     /// <remarks>
-    /// Nothing consumes the <see cref="Kernel"/> yet - the CV matching that used to is being
-    /// rebuilt with a different structure. The registration stays wired anyway, so the path
-    /// from configuration through the Key Vault-backed secret to a working chat service is
-    /// exercised by a test rather than discovered for the first time by whatever adopts it.
+    /// A provider of <c>none</c>, an unrecognised provider, or a missing endpoint all register
+    /// no Kernel and do not throw. Failing startup would mean an absent environment variable
+    /// takes down every endpoint, including those with nothing to do with AI — and the three
+    /// consumers below are all resolved as nullable for the same reason.
     ///
-    /// A provider of <c>none</c>, an unrecognised provider, or a missing key all register no
-    /// Kernel and do not throw. Failing startup would mean an absent environment variable
-    /// takes down every endpoint, including those with nothing to do with AI.
+    /// Note what is <i>not</i> checked: a credential. Azure OpenAI authenticates with Entra, so
+    /// there is no key to be present or absent, and no code path here that can fail for want of
+    /// a secret. Whether the identity actually holds <c>Cognitive Services OpenAI User</c> on
+    /// the resource is answered by the first call, not by registration — the same contract
+    /// every other identity-based connection in this system runs under.
     /// </remarks>
     public static IServiceCollection AddAiProvider(
         this IServiceCollection services, IConfiguration configuration)
@@ -30,56 +35,84 @@ public static class AiRegistration
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        services.Configure<AiProviderOptions>(
-            configuration.GetSection(AiProviderOptions.SectionName));
+        services.Configure<AzureOpenAiOptions>(
+            configuration.GetSection(AzureOpenAiOptions.SectionName));
 
-        var provider = configuration[AiProviderOptions.ProviderKey] ?? "none";
-        var apiKey = configuration[$"{AiProviderOptions.SectionName}:ApiKey"];
-        var model = configuration[$"{AiProviderOptions.SectionName}:Model"] ?? "claude-opus-5";
+        var provider = configuration[AzureOpenAiOptions.ProviderKey] ?? "none";
 
-        if (!string.Equals(provider, "anthropic", StringComparison.OrdinalIgnoreCase)
-            || string.IsNullOrWhiteSpace(apiKey))
+        var options = configuration.GetSection(AzureOpenAiOptions.SectionName).Get<AzureOpenAiOptions>()
+            ?? new AzureOpenAiOptions();
+
+        // The API resolves its identity through a top-level key, because SQL and Cosmos need
+        // the same value. Falling back to it means the AI section does not have to repeat it.
+        options.ManagedIdentityClientId ??= configuration["ManagedIdentityClientId"];
+
+        if (!string.Equals(provider, "azureopenai", StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrWhiteSpace(options.Endpoint))
         {
             return services;
         }
 
-        services.AddSingleton(BuildKernel(apiKey, model));
+        services.AddSingleton(BuildKernel(options));
 
-        // Inside the same `if`, deliberately. No Kernel means no extractor, so a consumer
-        // resolving IDocumentExtractor? gets null and skips the step - the pipeline still
-        // runs and nothing is enqueued for a model that does not exist.
+        // Inside the same `if`, deliberately. No Kernel means no extractor, no assessor and no
+        // writer, so a consumer resolving one of these as nullable gets null and skips the
+        // step — the pipeline still runs and nothing is enqueued for a model that does not
+        // exist.
         services.AddSingleton<IDocumentExtractor, KernelDocumentExtractor>();
+        services.AddSingleton<ICandidacyAssessor, KernelCandidacyAssessor>();
+        services.AddSingleton<IApplicationWriter, KernelApplicationWriter>();
 
         return services;
     }
 
     /// <summary>
-    /// Builds the Kernel prompts are invoked through.
+    /// Builds the Kernel every prompt is invoked through.
     /// </summary>
     /// <remarks>
-    /// There is no official Microsoft Semantic Kernel connector for Anthropic - the only
-    /// packages on NuGet are third-party alphas, which is not a dependency this repository
-    /// should carry. So the chat service is composed instead: the official Anthropic SDK
-    /// exposes an <c>IChatClient</c> through Microsoft.Extensions.AI, and Semantic Kernel
-    /// consumes any <c>IChatClient</c> as an <see cref="IChatCompletionService"/>.
+    /// Two chat completion services on one Kernel, distinguished by service id, so a caller
+    /// picks the model by naming which job it is doing rather than by holding a different
+    /// Kernel. <see cref="AzureOpenAiOptions.BulkServiceId"/> is the cheap high-volume
+    /// deployment; <see cref="AzureOpenAiOptions.WritingServiceId"/> is the expensive one. A
+    /// prompt selects between them through <c>ServiceId</c> on its execution settings.
     ///
-    /// The result is the arrangement Semantic Kernel is actually for - prompt templates,
-    /// Kernel arguments, a provider-neutral chat abstraction - with a supported, GA transport
-    /// underneath. Swapping to Azure OpenAI or a future first-party Anthropic connector is a
-    /// change to this method alone.
+    /// The credential is a <see cref="TokenCredential"/>, not a key. Semantic Kernel's Azure
+    /// OpenAI connector takes one directly and refreshes the token itself, which is what makes
+    /// the whole no-secret property hold end to end rather than only at the vault boundary.
     ///
-    /// <c>AsChatCompletionService</c> is marked experimental (SKEXP0001); that is why
-    /// TreatWarningsAsErrors is off in Directory.Build.props.
+    /// This method replaced a hand-composed Anthropic transport — <c>AsIChatClient()</c> handed
+    /// to <c>AsChatCompletionService()</c> — that existed only because Semantic Kernel has no
+    /// official Anthropic connector. Moving to Azure OpenAI made that composition unnecessary:
+    /// the connector here ships in the Semantic Kernel metapackage and is GA, so nothing in
+    /// this file is experimental and nothing reaches past the Kernel to an SDK.
     /// </remarks>
-    private static Kernel BuildKernel(string apiKey, string model)
+    internal static Kernel BuildKernel(AzureOpenAiOptions options)
     {
+        ArgumentNullException.ThrowIfNull(options);
+
         var builder = Kernel.CreateBuilder();
 
-        // Singleton client: it owns the connection pool.
-        IChatClient chatClient = new AnthropicClient { ApiKey = apiKey }
-            .AsIChatClient(model);
+        // A single credential instance, shared. Each one maintains its own token cache, so
+        // constructing them per service would mean two identical round trips to IMDS.
+        TokenCredential credential = new DefaultAzureCredential(
+            new DefaultAzureCredentialOptions
+            {
+                ManagedIdentityClientId = string.IsNullOrWhiteSpace(options.ManagedIdentityClientId)
+                    ? null
+                    : options.ManagedIdentityClientId,
+            });
 
-        builder.Services.AddSingleton(chatClient.AsChatCompletionService());
+        builder.AddAzureOpenAIChatCompletion(
+            deploymentName: options.BulkDeployment,
+            endpoint: options.Endpoint!,
+            credentials: credential,
+            serviceId: AzureOpenAiOptions.BulkServiceId);
+
+        builder.AddAzureOpenAIChatCompletion(
+            deploymentName: options.WritingDeployment,
+            endpoint: options.Endpoint!,
+            credentials: credential,
+            serviceId: AzureOpenAiOptions.WritingServiceId);
 
         return builder.Build();
     }

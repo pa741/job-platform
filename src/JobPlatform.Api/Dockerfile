@@ -11,6 +11,7 @@ COPY Directory.Build.props Directory.Packages.props ./
 COPY src/JobPlatform.Core/JobPlatform.Core.csproj src/JobPlatform.Core/
 COPY src/JobPlatform.Data/JobPlatform.Data.csproj src/JobPlatform.Data/
 COPY src/JobPlatform.Ai/JobPlatform.Ai.csproj     src/JobPlatform.Ai/
+COPY src/JobPlatform.Documents/JobPlatform.Documents.csproj src/JobPlatform.Documents/
 COPY src/JobPlatform.Api/JobPlatform.Api.csproj   src/JobPlatform.Api/
 RUN dotnet restore src/JobPlatform.Api/JobPlatform.Api.csproj
 

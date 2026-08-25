@@ -24,6 +24,20 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
     public DbSet<PostingTagEntity> PostingTags => Set<PostingTagEntity>();
     public DbSet<PostingExtractionEntity> PostingExtractions => Set<PostingExtractionEntity>();
 
+    public DbSet<CandidateProfileEntity> CandidateProfiles => Set<CandidateProfileEntity>();
+    public DbSet<ProfileExperienceEntity> ProfileExperiences => Set<ProfileExperienceEntity>();
+    public DbSet<ProfileEducationEntity> ProfileEducation => Set<ProfileEducationEntity>();
+    public DbSet<ProfileProjectEntity> ProfileProjects => Set<ProfileProjectEntity>();
+    public DbSet<ProfileCertificationEntity> ProfileCertifications => Set<ProfileCertificationEntity>();
+    public DbSet<ProfileLanguageEntity> ProfileLanguages => Set<ProfileLanguageEntity>();
+    public DbSet<ProfileLinkEntity> ProfileLinks => Set<ProfileLinkEntity>();
+    public DbSet<ProfileJobTypeEntity> ProfileJobTypes => Set<ProfileJobTypeEntity>();
+    public DbSet<ProfileConceptEntity> ProfileConcepts => Set<ProfileConceptEntity>();
+    public DbSet<ProfileMentionEntity> ProfileMentions => Set<ProfileMentionEntity>();
+
+    public DbSet<JobMatchEntity> JobMatches => Set<JobMatchEntity>();
+    public DbSet<ApplicationDocumentEntity> ApplicationDocuments => Set<ApplicationDocumentEntity>();
+
     /// <summary>
     /// On SQLite, stores <see cref="DateTimeOffset"/> as ticks.
     /// </summary>
@@ -176,6 +190,8 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
 
         ConfigureConceptGraph(modelBuilder);
         ConfigureAssertions(modelBuilder);
+        ConfigureProfiles(modelBuilder);
+        ConfigureMatches(modelBuilder);
 
         modelBuilder.Entity<JobPostingSearchTerm>(entity =>
         {
@@ -207,6 +223,290 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
             entity.HasOne(e => e.LastSeenRun)
                 .WithMany()
                 .HasForeignKey(e => e.LastSeenRunId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+    }
+
+    /// <summary>
+    /// The candidate's own record, and the concepts extracted from it.
+    /// </summary>
+    /// <remarks>
+    /// Every child cascades from the profile: none of it means anything without the person, and
+    /// deleting a profile has to take the whole record with it rather than leaving orphaned
+    /// employment history behind. The concept side stays Restrict, because a concept is a lookup
+    /// shared with the entire posting corpus and removing one must not silently delete evidence.
+    ///
+    /// <c>ProfileConcepts</c> is deliberately configured to match <c>PostingConcepts</c> column
+    /// for column, including <c>Source</c> in the key. Matching joins the two, and a join between
+    /// two tables of the same shape is the entire payoff of having fixed that shape before there
+    /// was a profile to put in it.
+    /// </remarks>
+    private static void ConfigureProfiles(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<CandidateProfileEntity>(entity =>
+        {
+            entity.ToTable("CandidateProfiles");
+            entity.HasKey(e => e.Id);
+
+            // The only lookup path there is. Unique, because a second row for one principal
+            // would make "the caller's profile" an ambiguous question.
+            entity.HasIndex(e => e.SubjectId).IsUnique();
+
+            // Entra object ids are GUIDs, but the column is sized for the general case rather
+            // than assuming a format the token is not obliged to keep.
+            entity.Property(e => e.SubjectId).HasMaxLength(100).IsRequired();
+
+            entity.Property(e => e.FullName).HasMaxLength(200);
+            entity.Property(e => e.Headline).HasMaxLength(300);
+            entity.Property(e => e.Email).HasMaxLength(320);
+            entity.Property(e => e.Phone).HasMaxLength(50);
+            entity.Property(e => e.LocationCity).HasMaxLength(150);
+            entity.Property(e => e.LocationCountry).HasMaxLength(100);
+            entity.Property(e => e.SalaryCurrency).HasMaxLength(10);
+            entity.Property(e => e.MinimumSalary).HasPrecision(12, 2);
+            entity.Property(e => e.ExtractionInputHash).HasMaxLength(64).IsFixedLength();
+            entity.Property(e => e.ExtractionModel).HasMaxLength(100);
+
+            // Unbounded, like a posting's description: a personal statement is prose, and
+            // capping it would silently truncate the part the extractor reads best.
+            entity.Property(e => e.Summary);
+            entity.Property(e => e.ExtractionPayloadJson);
+        });
+
+        modelBuilder.Entity<ProfileExperienceEntity>(entity =>
+        {
+            entity.ToTable("ProfileExperiences");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.ProfileId, e.Ordinal });
+
+            entity.Property(e => e.Company).HasMaxLength(300).IsRequired();
+            entity.Property(e => e.Title).HasMaxLength(300).IsRequired();
+            entity.Property(e => e.LocationCity).HasMaxLength(150);
+            entity.Property(e => e.LocationCountry).HasMaxLength(100);
+            entity.Property(e => e.Description);
+
+            entity.HasOne(e => e.Profile)
+                .WithMany(p => p.Experiences)
+                .HasForeignKey(e => e.ProfileId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ProfileEducationEntity>(entity =>
+        {
+            entity.ToTable("ProfileEducation");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.ProfileId, e.Ordinal });
+
+            entity.Property(e => e.Institution).HasMaxLength(300).IsRequired();
+            entity.Property(e => e.Qualification).HasMaxLength(200).IsRequired();
+            entity.Property(e => e.FieldOfStudy).HasMaxLength(200);
+            entity.Property(e => e.Grade).HasMaxLength(100);
+            entity.Property(e => e.Description);
+
+            entity.HasOne(e => e.Profile)
+                .WithMany(p => p.Education)
+                .HasForeignKey(e => e.ProfileId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ProfileProjectEntity>(entity =>
+        {
+            entity.ToTable("ProfileProjects");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.ProfileId, e.Ordinal });
+
+            entity.Property(e => e.Name).HasMaxLength(300).IsRequired();
+            entity.Property(e => e.Url).HasMaxLength(1000);
+            entity.Property(e => e.Description);
+
+            entity.HasOne(e => e.Profile)
+                .WithMany(p => p.Projects)
+                .HasForeignKey(e => e.ProfileId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ProfileCertificationEntity>(entity =>
+        {
+            entity.ToTable("ProfileCertifications");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.ProfileId, e.Ordinal });
+
+            entity.Property(e => e.Name).HasMaxLength(300).IsRequired();
+            entity.Property(e => e.Issuer).HasMaxLength(300);
+
+            entity.HasOne(e => e.Profile)
+                .WithMany(p => p.Certifications)
+                .HasForeignKey(e => e.ProfileId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ProfileLanguageEntity>(entity =>
+        {
+            entity.ToTable("ProfileLanguages");
+            entity.HasKey(e => new { e.ProfileId, e.Name });
+
+            entity.Property(e => e.Name).HasMaxLength(100).IsRequired();
+            entity.Property(e => e.Level).HasMaxLength(50);
+
+            entity.HasOne(e => e.Profile)
+                .WithMany(p => p.Languages)
+                .HasForeignKey(e => e.ProfileId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ProfileLinkEntity>(entity =>
+        {
+            entity.ToTable("ProfileLinks");
+            entity.HasKey(e => new { e.ProfileId, e.Label });
+
+            entity.Property(e => e.Label).HasMaxLength(50).IsRequired();
+            entity.Property(e => e.Url).HasMaxLength(1000).IsRequired();
+
+            entity.HasOne(e => e.Profile)
+                .WithMany(p => p.Links)
+                .HasForeignKey(e => e.ProfileId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ProfileJobTypeEntity>(entity =>
+        {
+            entity.ToTable("ProfileJobTypes");
+            entity.HasKey(e => new { e.ProfileId, e.JobType });
+
+            // Sized to match JobPostingJobTypes exactly. The two are compared, so a difference
+            // here would be a truncation that only ever shows up as a match that never fires.
+            entity.Property(e => e.JobType).HasMaxLength(30).IsRequired();
+
+            entity.HasOne(e => e.Profile)
+                .WithMany(p => p.JobTypes)
+                .HasForeignKey(e => e.ProfileId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ProfileConceptEntity>(entity =>
+        {
+            entity.ToTable("ProfileConcepts");
+
+            // Source in the key, exactly as on the posting side: a skill the candidate declared
+            // and also wrote about is two rows, and the match is allowed to prefer the stronger
+            // of the two rather than having to guess which one survived a collapse.
+            entity.HasKey(e => new { e.ProfileId, e.ConceptId, e.Source });
+
+            // The supply query: which candidates hold this concept. The mirror of the demand
+            // index on PostingConcepts, and what the match join reads.
+            entity.HasIndex(e => new { e.ConceptId, e.ProfileId });
+
+            entity.Property(e => e.Source).HasConversion<int>();
+            entity.Property(e => e.Polarity).HasConversion<int>();
+            entity.Property(e => e.EvidenceText).HasMaxLength(120);
+
+            entity.HasOne(e => e.Profile)
+                .WithMany(p => p.Concepts)
+                .HasForeignKey(e => e.ProfileId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Concept)
+                .WithMany()
+                .HasForeignKey(e => e.ConceptId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<ProfileMentionEntity>(entity =>
+        {
+            entity.ToTable("ProfileMentions");
+            entity.HasKey(e => new { e.ProfileId, e.SurfaceForm });
+
+            entity.HasIndex(e => new { e.Reason, e.SurfaceForm });
+
+            entity.Property(e => e.SurfaceForm).HasMaxLength(120).IsRequired();
+            entity.Property(e => e.Reason).HasConversion<int>();
+
+            entity.HasOne(e => e.Profile)
+                .WithMany(p => p.Mentions)
+                .HasForeignKey(e => e.ProfileId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+    }
+
+    /// <summary>
+    /// Scored matches and the documents generated from them.
+    /// </summary>
+    /// <remarks>
+    /// The profile side cascades and the posting side does not, which is the asymmetry the data
+    /// actually has: deleting a profile should take that person's matches with it, while a
+    /// posting is a shared record that must not be deletable out from under the matches
+    /// referencing it. SQL Server refuses two cascade paths into one table anyway, and this is
+    /// the direction that is right on its own terms rather than merely the one permitted.
+    /// </remarks>
+    private static void ConfigureMatches(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<JobMatchEntity>(entity =>
+        {
+            entity.ToTable("JobMatches");
+            entity.HasKey(e => e.Id);
+
+            // One row per pair. The sweep upserts against this, so a re-score converges rather
+            // than accumulating a row per night - the same contract every other write path in
+            // this system carries.
+            entity.HasIndex(e => new { e.ProfileId, e.PostingId }).IsUnique();
+
+            // The shortlist query: this candidate's matches, best first. Without it, "show me
+            // my top 50" is a scan of every pair ever scored for them.
+            entity.HasIndex(e => new { e.ProfileId, e.Score });
+
+            // What the nightly sweep selects on: this profile, not yet assessed.
+            entity.HasIndex(e => new { e.ProfileId, e.AssessedAtUtc });
+
+            entity.Property(e => e.AssessmentModel).HasMaxLength(100);
+            entity.Property(e => e.Verdict).HasConversion<int?>();
+            entity.Property(e => e.Rationale).HasMaxLength(2000);
+
+            // Unbounded: read back whole to be shown, never queried into.
+            entity.Property(e => e.ComponentsJson);
+            entity.Property(e => e.MatchedJson);
+            entity.Property(e => e.GapsJson);
+            entity.Property(e => e.StrengthsJson);
+            entity.Property(e => e.AssessmentGapsJson);
+            entity.Property(e => e.EmphasiseJson);
+            entity.Property(e => e.AssessmentPayloadJson);
+
+            entity.HasOne(e => e.Profile)
+                .WithMany()
+                .HasForeignKey(e => e.ProfileId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Posting)
+                .WithMany()
+                .HasForeignKey(e => e.PostingId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<ApplicationDocumentEntity>(entity =>
+        {
+            entity.ToTable("ApplicationDocuments");
+            entity.HasKey(e => e.Id);
+
+            // Rows per generation rather than one row updated in place, so a revision is part
+            // of the key rather than a column that overwrites what the candidate already sent.
+            entity.HasIndex(e => new { e.ProfileId, e.PostingId, e.Revision }).IsUnique();
+            entity.HasIndex(e => new { e.ProfileId, e.CreatedAtUtc });
+
+            entity.Property(e => e.Model).HasMaxLength(100);
+            entity.Property(e => e.Instructions).HasMaxLength(2000);
+
+            // Unbounded: whole documents.
+            entity.Property(e => e.CurriculumVitaeMarkdown);
+            entity.Property(e => e.CoverLetterMarkdown);
+            entity.Property(e => e.EmphasisedJson);
+
+            entity.HasOne(e => e.Profile)
+                .WithMany()
+                .HasForeignKey(e => e.ProfileId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Posting)
+                .WithMany()
+                .HasForeignKey(e => e.PostingId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
     }

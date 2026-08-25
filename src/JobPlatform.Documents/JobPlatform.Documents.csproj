@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>JobPlatform.Documents</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- No project reference. This layer turns markdown into a PDF and knows nothing about
+         postings, profiles or matching - which is what makes it testable by handing it a
+         string, and what keeps a change to the CV layout out of the domain. -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Markdig" />
+    <PackageReference Include="PDFsharp-MigraDoc" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Embedded, not copied to output. PDFsharp's platform-independent build resolves no
+         fonts of its own, so without these the renderer throws on its first call - see
+         EmbeddedFontResolver. Roboto, SIL OFL 1.1; the licence travels with them. -->
+    <EmbeddedResource Include="Fonts/*.ttf" />
+    <None Include="Fonts/OFL.txt" />
+  </ItemGroup>
+
+</Project>

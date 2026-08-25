@@ -79,6 +79,9 @@ builder.Services.AddDbContext<JobsDbContext>(options =>
 });
 
 builder.Services.AddScoped<JobPostingQueryRepository>();
+builder.Services.AddScoped<CandidateProfileRepository>();
+builder.Services.AddScoped<JobMatchRepository>();
+builder.Services.AddScoped<ApplicationDocumentRepository>();
 builder.Services.AddScoped<MetricsQueryRepository>();
 builder.Services.AddScoped<IMetricsSource>(sp => sp.GetRequiredService<MetricsQueryRepository>());
 

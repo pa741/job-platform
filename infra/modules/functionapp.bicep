@@ -27,6 +27,22 @@ param cosmosDatabaseName string
 @description('Passwordless (Entra) SQL connection string.')
 param sqlConnectionString string
 
+@description('Which AI provider the functions resolve: none, or azureopenai.')
+@allowed([
+  'none'
+  'azureopenai'
+])
+param aiProvider string = 'none'
+
+@description('Azure OpenAI endpoint. Not a secret - the identity is what authenticates.')
+param openAiEndpoint string = ''
+
+@description('Deployment name for the high-volume pass: extraction and candidacy assessment.')
+param openAiBulkDeployment string = ''
+
+@description('Deployment name for the writing pass. Nothing here uses it today; it is set so that a function which needs it is a code change and not a deploy.')
+param openAiWritingDeployment string = ''
+
 var deploymentContainerName = 'deployment-package'
 
 // A storage account of its own, separate from the landing zone. The Functions host keeps
@@ -135,7 +151,7 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
       alwaysOn: false
       minTlsVersion: '1.2'
       ftpsState: 'Disabled'
-      appSettings: [
+      appSettings: concat([
         {
           name: 'FUNCTIONS_EXTENSION_VERSION'
           value: '~4'
@@ -215,7 +231,27 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'APPLICATIONINSIGHTS_AUTHENTICATION_STRING'
           value: 'ClientId=${identityClientId};Authorization=AAD'
         }
-      ]
+        {
+          // The extraction queue consumer and the nightly match sweep both live here, so the
+          // functions need the same provider configuration the API has. No key travels with
+          // it: the identity above is what the token is issued for.
+          name: 'Ai__Provider'
+          value: aiProvider
+        }
+      ], aiProvider == 'azureopenai' && !empty(openAiEndpoint) ? [
+        {
+          name: 'Ai__AzureOpenAi__Endpoint'
+          value: openAiEndpoint
+        }
+        {
+          name: 'Ai__AzureOpenAi__BulkDeployment'
+          value: openAiBulkDeployment
+        }
+        {
+          name: 'Ai__AzureOpenAi__WritingDeployment'
+          value: openAiWritingDeployment
+        }
+      ] : [])
     }
   }
   dependsOn: [

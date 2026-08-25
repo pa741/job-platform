@@ -103,3 +103,116 @@ label { font-size: 12px; color: var(--text-secondary); display: block; margin-bo
 }
 .tooltip .k { color: var(--text-secondary); }
 .tooltip .v { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+/* ---------------------------------------------------------------------------
+   Profile form, match breakdown and generated drafts.
+
+   Every colour below is a token from tokens.css. Nothing here introduces a hex: the
+   categorical slots are validated for colour-vision separation and contrast in both modes,
+   and a hex chosen by eye cannot be checked against that by eye either.
+   --------------------------------------------------------------------------- */
+
+.grid.cols { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+
+/* Two columns where there is room, one where there is not. A profile form is filled in on a
+   laptop and read back on a phone, and a fixed two-up is unusable on the second. */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.field-label { font-size: 12px; color: var(--text-secondary); font-weight: 600; }
+.field-hint { font-size: 11px; color: var(--text-muted); }
+
+.field input,
+.field select,
+.field textarea,
+.filters input[type='range'] {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--page);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  width: 100%;
+}
+
+.field textarea { resize: vertical; min-height: 70px; line-height: 1.45; }
+
+/* A visible focus ring, always. The form is long and keyboard-driven for anyone filling it in
+   properly, and the default outline disappears against the dark surface. */
+.field input:focus-visible,
+.field select:focus-visible,
+.field textarea:focus-visible {
+  outline: 2px solid var(--series-1);
+  outline-offset: 1px;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+  margin: 6px 0;
+}
+
+.check input { width: auto; margin: 0; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
+.chip-x {
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 0 0 2px;
+}
+
+.chip-x:hover { color: var(--status-critical); }
+
+.repeat-item {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 0;
+  border-top: 1px solid var(--gridline);
+}
+
+.repeat-item:first-of-type { border-top: 0; }
+.repeat-actions { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
+.repeat-actions .btn { padding: 3px 8px; font-size: 12px; }
+
+/* One scoring axis: label, bar, number. The number is always written out, so the bar is
+   reinforcement rather than the only encoding - the same rule the Meter primitive follows. */
+.axis { display: flex; align-items: center; gap: 8px; margin: 5px 0; font-size: 12px; }
+.axis-label { flex: 0 0 140px; color: var(--text-secondary); }
+.axis-track { flex: 1; height: 6px; background: var(--gridline); border-radius: 999px; overflow: hidden; }
+.axis-fill { display: block; height: 100%; background: var(--series-1); }
+.axis-value { flex: 0 0 40px; text-align: right; font-variant-numeric: tabular-nums; }
+
+.tight { margin: 4px 0 10px; padding-left: 18px; font-size: 13px; }
+.tight li { margin: 2px 0; }
+
+.draft { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--gridline); }
+
+/* Preformatted, never rendered as markup. The PDF is the artefact; this is a preview, and
+   model output has no business being interpreted as HTML in the browser. */
+.markdown {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 420px;
+  overflow-y: auto;
+}

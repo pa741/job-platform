@@ -5,15 +5,19 @@ import { apiRequest } from './auth/msalConfig';
 import type { SearchTermResponse } from './api/types';
 import { Overview } from './pages/Overview';
 import { Postings } from './pages/Postings';
+import { Profile } from './pages/Profile';
+import { Matches } from './pages/Matches';
 import { ErrorNote } from './components/Primitives';
 import { useTheme, type Theme } from './theme/useTheme';
 import './theme/app.css';
 
-type Page = 'overview' | 'postings';
+type Page = 'overview' | 'postings' | 'matches' | 'profile';
 
 const PAGES: { id: Page; label: string }[] = [
   { id: 'overview', label: 'Overview' },
   { id: 'postings', label: 'Postings' },
+  { id: 'matches', label: 'Matches' },
+  { id: 'profile', label: 'Profile' },
 ];
 
 export function App() {
@@ -146,9 +150,16 @@ function Dashboard({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => 
       </header>
 
       <main>
-        {error ? <ErrorNote error={error} onRetry={loadTerms} /> : null}
-        {!error && !terms && <div className="empty">Loading…</div>}
-        {terms?.length === 0 && (
+        {/* The search-term bootstrap gates the corpus pages only. Profile and Matches are
+            about the signed-in person, so neither an error nor a slow load here should stand
+            between somebody and their own record. */}
+        {error && page !== 'profile' && page !== 'matches'
+          ? <ErrorNote error={error} onRetry={loadTerms} />
+          : null}
+        {!error && !terms && page !== 'profile' && page !== 'matches' && (
+          <div className="empty">Loading…</div>
+        )}
+        {terms?.length === 0 && page !== 'profile' && page !== 'matches' && (
           <div className="empty">
             The platform has no ingested data yet. Run the scraper, or replay a blob through
             the ingest function.
@@ -157,6 +168,13 @@ function Dashboard({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => 
 
         {searchTerm && page === 'overview' && <Overview api={api} searchTerm={searchTerm} />}
         {searchTerm && page === 'postings' && <Postings api={api} searchTerm={searchTerm} />}
+
+        {/* Neither of these is scoped by search term, and neither waits on one. They are about
+            the signed-in person rather than about a slice of the corpus, so they render even
+            when the platform has ingested nothing at all - which is exactly the state somebody
+            filling in their profile for the first time is in. */}
+        {page === 'matches' && <Matches api={api} />}
+        {page === 'profile' && <Profile api={api} />}
       </main>
     </>
   );

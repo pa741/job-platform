@@ -3,17 +3,17 @@ namespace JobPlatform.Core.Enrichment;
 /// <summary>What kind of document is being read.</summary>
 /// <remarks>
 /// The reason this contract talks about documents rather than postings. Requirements come out
-/// of an advert and qualifications will come out of a CV through the same vocabulary and into
-/// the same assertion shape, so pointing the extractor at a profile later is a prompt-template
-/// swap rather than a second component. Writing it the other way round costs nothing now and
-/// a rewrite later.
+/// of an advert and qualifications come out of a profile through the same vocabulary and into
+/// the same assertion shape, so pointing the extractor at a profile turned out to be a
+/// prompt-template argument rather than a second component — which is exactly what writing it
+/// this way round was for.
 /// </remarks>
 public enum DocumentKind
 {
     /// <summary>A job advert. Demand: what an employer is asking for.</summary>
     Posting = 0,
 
-    /// <summary>A CV or profile. Supply: what a candidate holds. Not yet produced.</summary>
+    /// <summary>A candidate profile. Supply: what a candidate holds.</summary>
     Profile = 1,
 }
 
@@ -101,4 +101,39 @@ public interface IDocumentExtractor
 {
     /// <summary>Null when the model returned nothing usable. Never throws for a bad response.</summary>
     Task<DocumentExtraction?> ExtractAsync(ExtractionRequest request, CancellationToken ct = default);
+
+    /// <summary>
+    /// Several documents in one pass. The result is positional: index <c>i</c> answers
+    /// <c>requests[i]</c>, and any element may be null exactly as
+    /// <see cref="ExtractAsync"/> may return null.
+    /// </summary>
+    /// <remarks>
+    /// This exists because of what has to precede every extraction: the whole concept
+    /// vocabulary, several thousand tokens of it, as the model's allowed output set. Sent once
+    /// per document, it is most of what each call costs — the advert itself is the small half.
+    /// Packing ten documents into one call pays for the vocabulary once instead of ten times,
+    /// and that ratio, not the per-token price, is what makes a corpus-wide pass affordable.
+    ///
+    /// A default implementation loops, so an extractor that has no cheaper way to do this is
+    /// still correct and no caller has to branch on which kind it has. The positional contract
+    /// is the part implementations must honour: a batch that comes back short, reordered, or
+    /// with an index attached to the wrong document silently writes one posting's requirements
+    /// onto another, which is worse than returning nothing. <see cref="ExtractionRequest"/>
+    /// carries no identity for exactly that reason — correlating on position is checkable,
+    /// correlating on a model-supplied id is not.
+    /// </remarks>
+    async Task<IReadOnlyList<DocumentExtraction?>> ExtractBatchAsync(
+        IReadOnlyList<ExtractionRequest> requests, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(requests);
+
+        var results = new DocumentExtraction?[requests.Count];
+
+        for (var i = 0; i < requests.Count; i++)
+        {
+            results[i] = await ExtractAsync(requests[i], ct).ConfigureAwait(false);
+        }
+
+        return results;
+    }
 }
