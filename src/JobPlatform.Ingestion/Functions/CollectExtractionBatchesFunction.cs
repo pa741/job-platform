@@ -30,6 +30,7 @@ namespace JobPlatform.Ingestion.Functions;
 public sealed class CollectExtractionBatchesFunction(
     JobsDbContext db,
     ExtractionBatchRepository batches,
+    PostingExtractionWriter writer,
     TimeProvider time,
     ILogger<CollectExtractionBatchesFunction> logger,
     IBatchDocumentExtractor? extractor = null)
@@ -140,9 +141,7 @@ public sealed class CollectExtractionBatchesFunction(
             return 0;
         }
 
-        var conceptIds = await db.Concepts
-            .Select(c => new { c.ConceptKey, c.Id })
-            .ToDictionaryAsync(c => c.ConceptKey, c => c.Id, StringComparer.Ordinal, ct);
+        var conceptIds = await writer.GetConceptIdsAsync(ct);
 
         var succeeded = 0;
         var failed = 0;
@@ -162,7 +161,7 @@ public sealed class CollectExtractionBatchesFunction(
                 continue;
             }
 
-            await ApplyOneAsync(item, extraction, conceptIds, now, ct);
+            await writer.ApplyAsync(item.PostingId, item.InputHash, extraction, conceptIds, now, ct);
             succeeded++;
         }
 
@@ -174,74 +173,5 @@ public sealed class CollectExtractionBatchesFunction(
             providerBatchId, succeeded, failed, items.Count);
 
         return succeeded;
-    }
-
-    /// <summary>
-    /// Records one extraction and replaces that posting's model-sourced assertions.
-    /// </summary>
-    /// <remarks>
-    /// Deliberately the same shape as <c>EnrichPostingFunction.ApplyAsync</c>: only the
-    /// <see cref="AssertionSource.Model"/> rows are replaced, because the board-supplied and
-    /// text-matched assertions are different evidence from a different pass and this one has no
-    /// business overwriting them. The hash written is the one captured at submission, so the
-    /// idempotency key describes the text that was actually read.
-    /// </remarks>
-    private async Task ApplyOneAsync(
-        PendingBatchItem item,
-        DocumentExtraction extraction,
-        Dictionary<string, int> conceptIds,
-        DateTimeOffset now,
-        CancellationToken ct)
-    {
-        await db.PostingConcepts
-            .Where(c => c.PostingId == item.PostingId && c.Source == AssertionSource.Model)
-            .ExecuteDeleteAsync(ct);
-
-        await db.PostingMentions
-            .Where(m => m.PostingId == item.PostingId && m.Reason == MentionReason.UnknownModelSkill)
-            .ExecuteDeleteAsync(ct);
-
-        db.PostingExtractions.Add(new PostingExtractionEntity
-        {
-            PostingId = item.PostingId,
-            ExtractorVersion = extraction.Version,
-            InputHash = item.InputHash,
-            Model = extraction.Model,
-            ExtractedAtUtc = now,
-            PayloadJson = extraction.PayloadJson,
-        });
-
-        foreach (var assertion in extraction.Concepts)
-        {
-            if (!conceptIds.TryGetValue(assertion.ConceptKey, out var conceptId))
-            {
-                continue;
-            }
-
-            db.PostingConcepts.Add(new PostingConceptEntity
-            {
-                PostingId = item.PostingId,
-                ConceptId = conceptId,
-                Source = AssertionSource.Model,
-                Polarity = assertion.Polarity,
-                YearsMin = assertion.YearsMin,
-                YearsMax = assertion.YearsMax,
-                EvidenceText = assertion.EvidenceText,
-                Confidence = assertion.Confidence,
-                ResolverVersion = extraction.Version,
-            });
-        }
-
-        foreach (var mention in extraction.Mentions.DistinctBy(m => m.SurfaceForm, StringComparer.OrdinalIgnoreCase))
-        {
-            db.PostingMentions.Add(new PostingMentionEntity
-            {
-                PostingId = item.PostingId,
-                SurfaceForm = mention.SurfaceForm,
-                Reason = mention.Reason,
-                Occurrences = mention.Occurrences,
-                ResolverVersion = extraction.Version,
-            });
-        }
     }
 }

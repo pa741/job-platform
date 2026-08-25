@@ -32,6 +32,8 @@ namespace JobPlatform.Ingestion.Functions;
 /// </remarks>
 public sealed class EnrichPostingFunction(
     JobsDbContext db,
+    PostingExtractionWriter writer,
+    TimeProvider time,
     ILogger<EnrichPostingFunction> logger,
     IDocumentExtractor? extractor = null)
 {
@@ -62,9 +64,7 @@ public sealed class EnrichPostingFunction(
             .Select(p => new { p.Id, p.SourceKey, p.Title, p.Description })
             .ToListAsync(ct);
 
-        var conceptIds = await db.Concepts
-            .Select(c => new { c.ConceptKey, c.Id })
-            .ToDictionaryAsync(c => c.ConceptKey, c => c.Id, StringComparer.Ordinal, ct);
+        var conceptIds = await writer.GetConceptIdsAsync(ct);
 
         // Everything already current, in one query. Asking per posting was a round trip each
         // to a database that auto-pauses and is billed by the second, on a path that runs for
@@ -124,7 +124,9 @@ public sealed class EnrichPostingFunction(
                 continue;
             }
 
-            await ApplyAsync(pending[i].Id, pending[i].InputHash, result, conceptIds, ct);
+            await writer.ApplyAsync(
+                pending[i].Id, pending[i].InputHash, result, conceptIds, time.GetUtcNow(), ct);
+
             extracted++;
         }
 
@@ -137,74 +139,6 @@ public sealed class EnrichPostingFunction(
             "Extraction batch: {Extracted} extracted, {Skipped} already current, {Failed} returned nothing, "
             + "{Missing} not found.",
             extracted, skipped, pending.Count - extracted, keys.Count - postings.Count);
-    }
-
-    /// <summary>
-    /// Records the extraction and replaces this posting's model-sourced assertions.
-    /// </summary>
-    /// <remarks>
-    /// Only the <see cref="AssertionSource.Model"/> rows are replaced. The board-supplied and
-    /// text-matched assertions are different evidence produced by a different pass, and this
-    /// one has no business overwriting them — that separation is the reason <c>Source</c> is
-    /// part of the assertion's primary key.
-    /// </remarks>
-    private async Task ApplyAsync(
-        long postingId,
-        string inputHash,
-        DocumentExtraction result,
-        Dictionary<string, int> conceptIds,
-        CancellationToken ct)
-    {
-        await db.PostingConcepts
-            .Where(c => c.PostingId == postingId && c.Source == AssertionSource.Model)
-            .ExecuteDeleteAsync(ct);
-
-        await db.PostingMentions
-            .Where(m => m.PostingId == postingId && m.Reason == MentionReason.UnknownModelSkill)
-            .ExecuteDeleteAsync(ct);
-
-        db.PostingExtractions.Add(new PostingExtractionEntity
-        {
-            PostingId = postingId,
-            ExtractorVersion = result.Version,
-            InputHash = inputHash,
-            Model = result.Model,
-            ExtractedAtUtc = DateTimeOffset.UtcNow,
-            PayloadJson = result.PayloadJson,
-        });
-
-        foreach (var assertion in result.Concepts)
-        {
-            if (!conceptIds.TryGetValue(assertion.ConceptKey, out var conceptId))
-            {
-                continue;
-            }
-
-            db.PostingConcepts.Add(new PostingConceptEntity
-            {
-                PostingId = postingId,
-                ConceptId = conceptId,
-                Source = AssertionSource.Model,
-                Polarity = assertion.Polarity,
-                YearsMin = assertion.YearsMin,
-                YearsMax = assertion.YearsMax,
-                EvidenceText = assertion.EvidenceText,
-                Confidence = assertion.Confidence,
-                ResolverVersion = result.Version,
-            });
-        }
-
-        foreach (var mention in result.Mentions.DistinctBy(m => m.SurfaceForm, StringComparer.OrdinalIgnoreCase))
-        {
-            db.PostingMentions.Add(new PostingMentionEntity
-            {
-                PostingId = postingId,
-                SurfaceForm = mention.SurfaceForm,
-                Reason = mention.Reason,
-                Occurrences = mention.Occurrences,
-                ResolverVersion = result.Version,
-            });
-        }
     }
 
     private ExtractionBatch? Deserialize(string message)
