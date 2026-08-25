@@ -56,6 +56,9 @@ public sealed class OpenAiBatchOptions
     /// all-or-nothing to resubmit, and a smaller one that expires costs less to redo than a
     /// large one. It also keeps the input file well clear of the size limit without anyone
     /// having to measure it.
+    ///
+    /// A submission larger than this is trimmed rather than split - one call submits one batch,
+    /// and the caller already reports a `more` flag for the remainder.
     /// </remarks>
     public int MaxBatchSize { get; set; } = 2_000;
 

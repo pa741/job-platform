@@ -62,6 +62,23 @@ public sealed class OpenAiBatchExtractor(
             return null;
         }
 
+        // The ceiling was declared and documented as a bound and then never applied, which the
+        // first corpus-sized submission exposed: 2,459 documents went out under a stated limit
+        // of 2,000. It was harmless - the provider's own ceiling is fifty thousand - but an
+        // option that reads as a safety limit and enforces nothing is worse than no option.
+        //
+        // Truncating rather than splitting, deliberately. One call submits one batch; the
+        // caller decides what to do with the remainder, and it already knows how, because the
+        // backfill it is called from is a bounded endpoint that reports `more`.
+        if (usable.Count > _options.MaxBatchSize)
+        {
+            logger?.LogInformation(
+                "Trimming a submission of {Count} to the configured ceiling of {Max}.",
+                usable.Count, _options.MaxBatchSize);
+
+            usable = usable.Take(_options.MaxBatchSize).ToList();
+        }
+
         try
         {
             var jsonl = BuildRequestFile(usable);
