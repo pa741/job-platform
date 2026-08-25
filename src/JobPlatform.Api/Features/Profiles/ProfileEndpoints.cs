@@ -116,12 +116,28 @@ public sealed class ProfileEndpoints : IEndpointGroup
         var extracted = await ExtractAsync(
             profiles, extractor, view, time, loggerFactory.CreateLogger<ProfileEndpoints>(), ct);
 
-        return TypedResults.Ok(view.Profile.ToResponse(
-            extracted?.Concepts ?? view.Extracted,
-            extracted is null ? view.ExtractedAtUtc : time.GetUtcNow()));
+        // Re-read rather than reusing what came back from the model. See ExtractAsync: what it
+        // returns is deliberately a bool, so the extraction itself is not in scope here to be
+        // handed to a caller by mistake.
+        var stored = extracted ? await profiles.GetAsync(subjectId, ct) ?? view : view;
+
+        return TypedResults.Ok(stored.Profile.ToResponse(stored.Extracted, stored.ExtractedAtUtc));
     }
 
-    private static async Task<DocumentExtraction?> ExtractAsync(
+    /// <summary>
+    /// Reads the profile for concepts and stores them. Returns whether anything was stored.
+    /// </summary>
+    /// <remarks>
+    /// <b>A bool, and not the extraction, on purpose.</b> Returning the
+    /// <see cref="DocumentExtraction"/> is what caused the bug this shape now prevents: the
+    /// caller returned it straight to the client, so <c>PUT</c> answered <c>Required</c> where
+    /// <c>GET</c> answered <c>Expert</c> for the same skill. The extractor speaks the demand
+    /// half of <see cref="AssertionPolarity"/> - it is the same prompt that reads adverts - and
+    /// the repository translates to the supply half on the way in, so the model's own output is
+    /// never the right thing to show anybody. Making it unavailable to the caller is stronger
+    /// than remembering not to use it.
+    /// </remarks>
+    private static async Task<bool> ExtractAsync(
         CandidateProfileRepository profiles,
         IDocumentExtractor extractor,
         ProfileView view,
@@ -133,7 +149,7 @@ public sealed class ProfileEndpoints : IEndpointGroup
 
         if (string.IsNullOrWhiteSpace(document))
         {
-            return null;
+            return false;
         }
 
         try
@@ -143,20 +159,20 @@ public sealed class ProfileEndpoints : IEndpointGroup
 
             if (extraction is null)
             {
-                return null;
+                return false;
             }
 
             await profiles.ApplyExtractionAsync(
                 view.Id, extraction, Hash(document), time.GetUtcNow(), ct);
 
-            return extraction;
+            return true;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // The profile is already saved. Losing the extraction costs inferred skills until
             // the next sweep; failing the request would cost the candidate their typing.
             logger.LogWarning(ex, "Storing a profile succeeded but extracting it did not.");
-            return null;
+            return false;
         }
     }
 
