@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { JobPlatformApi, PostingQuery } from '../api/client';
 import type { FacetsResponse, PageResponse, PostingSummary } from '../api/types';
 import { Card, ErrorNote } from '../components/Primitives';
+import { PostingInsightPanel } from './PostingInsightPanel';
 
 const PAGE_SIZE = 25;
 
@@ -131,6 +132,10 @@ export function Postings({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
   const [error, setError] = useState<unknown>();
   const [loading, setLoading] = useState(false);
   const [offset, setOffset] = useState(0);
+
+  // Which posting's insight panel is open. Held here rather than in the row so that opening a
+  // second one closes the first: two expanded panels in a table is a scrolling puzzle.
+  const [inspecting, setInspecting] = useState<number>();
 
   const [q, setQ] = useState('');
   const [site, setSite] = useState('');
@@ -285,7 +290,7 @@ export function Postings({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
           <thead>
             <tr>
               <th>Title</th><th>Company</th><th>Level</th><th>Working</th>
-              <th>Location</th><th className="num">Salary</th><th className="num">Seen</th>
+              <th>Location</th><th className="num">Salary</th><th className="num">Seen</th><th />
             </tr>
           </thead>
           <tbody>
@@ -309,6 +314,15 @@ export function Postings({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
                 <td>{posting.city ?? posting.location ?? '—'}</td>
                 <td className="num"><Salary posting={posting} /></td>
                 <td className="num">{posting.seenCount}</td>
+                <td>
+                  <button
+                    className="btn"
+                    onClick={() => setInspecting((current) => (current === posting.id ? undefined : posting.id))}
+                    aria-expanded={inspecting === posting.id}
+                  >
+                    {inspecting === posting.id ? 'Hide' : 'Inspect'}
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -317,6 +331,18 @@ export function Postings({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
 
       {page?.items.length === 0 && !loading && (
         <div className="empty">No postings match these filters.</div>
+      )}
+
+      {/* Below the table rather than inside a row: the panel is tall, and expanding a row
+          in place pushes everything the reader was comparing off the screen. */}
+      {inspecting !== undefined && (
+        <div style={{ marginTop: 16 }}>
+          <PostingInsightPanel
+            api={api}
+            postingId={inspecting}
+            onClose={() => setInspecting(undefined)}
+          />
+        </div>
       )}
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>

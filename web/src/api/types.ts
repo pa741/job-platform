@@ -80,6 +80,36 @@ export interface PostingSummary {
 }
 
 export interface PostingDetail {
+  /** Verbatim applicant caption, e.g. "Over 200 applicants". LinkedIn only. */
+  applicants: string | null;
+
+  /**
+   * The figure parsed out of `applicants`. The competition signal.
+   *
+   * Sparse — LinkedIn is the only board that publishes it — so null means "not stated",
+   * never zero.
+   */
+  applicantCount: number | null;
+
+  /** Openings this listing covers, where the board says. Naukri and freehire. */
+  vacancyCount: number | null;
+
+  /**
+   * The board's own three-way work mode.
+   *
+   * Worth showing beside the derived `workArrangement`: this is what the employer stated and
+   * that is what we concluded. Where they disagree, the disagreement is the story.
+   */
+  workFromHomeType: string | null;
+
+  listingType: string | null;
+
+  /** `inside`, `outside`, or null. UK contract postings only. */
+  ir35: string | null;
+
+  /** Null where the posting is silent, which is not the same as "no". */
+  visaSponsorship: boolean | null;
+
   summary: PostingSummary;
   description: string | null;
   jobUrlDirect: string | null;
@@ -445,4 +475,87 @@ export interface ApplicationDetail extends ApplicationSummary {
   curriculumVitaeMarkdown: string;
   coverLetterMarkdown: string;
   emphasised: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Posting insight: everything the pipeline concluded about one posting, and how.
+//
+// The provenance is the point. A list of skills is the shallow half; which of them the
+// employer tagged, which a string match found, which the model read out of prose — and the
+// exact phrase — is what makes a conclusion checkable rather than merely presented.
+// ---------------------------------------------------------------------------
+
+/** `Board` (employer's own tagging), `Taxonomy` (string match), `Model` (a judgement). */
+export type AssertionSource = 'Board' | 'Taxonomy' | 'Model';
+
+/** Demand half. Only the model pass can produce anything but `Unspecified`. */
+export type DemandPolarity = 'Required' | 'Preferred' | 'Mentioned' | 'Unspecified';
+
+export interface Assertion {
+  concept: string;
+  label: string;
+  kind: string;
+  source: AssertionSource;
+  polarity: DemandPolarity;
+  yearsMin: number | null;
+  yearsMax: number | null;
+  /** The phrase it was read from, verbatim. Null for board tags, which have none. */
+  evidence: string | null;
+  confidence: number | null;
+}
+
+/** A domain reached by walking the closure up from the asserted concepts. */
+export interface Rollup {
+  concept: string;
+  label: string;
+  count: number;
+}
+
+export interface Mention {
+  surfaceForm: string;
+  /** `Ambiguous`, `UnknownBoardSkill` or `UnknownModelSkill`. */
+  reason: string;
+  occurrences: number;
+}
+
+export interface PostingTag {
+  name: string;
+  value: string | null;
+}
+
+export interface Attribution {
+  searchTerm: string;
+  firstSeenUtc: string;
+  lastSeenUtc: string;
+}
+
+export interface CompanyInfo {
+  displayName: string;
+  industry: string | null;
+  employeesBand: string | null;
+  revenue: string | null;
+  url: string | null;
+}
+
+/** Which passes have run, and at which version. The honest footer. */
+export interface Provenance {
+  enrichmentVersion: number;
+  extractorVersion: number | null;
+  model: string | null;
+  extractedAtUtc: string | null;
+  seenCount: number;
+  firstSeenUtc: string;
+  lastSeenUtc: string;
+}
+
+export interface PostingInsight {
+  detail: PostingDetail;
+  concepts: Assertion[];
+  domains: Rollup[];
+  mentions: Mention[];
+  tags: PostingTag[];
+  jobTypes: string[];
+  foundBy: Attribution[];
+  company: CompanyInfo | null;
+  provenance: Provenance;
 }

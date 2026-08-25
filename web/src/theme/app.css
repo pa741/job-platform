@@ -216,3 +216,51 @@ label { font-size: 12px; color: var(--text-secondary); display: block; margin-bo
   max-height: 420px;
   overflow-y: auto;
 }
+
+/* ---------------------------------------------------------------------------
+   Posting insight: one requirement per row, with the evidence it was read from.
+
+   No colour carries meaning here. The source of an assertion is three named things, not a
+   scale, and a reader should not have to learn a legend to know whether a claim is the
+   employer's own or a model's inference — so the badge is a word.
+   --------------------------------------------------------------------------- */
+
+.assertions { display: flex; flex-direction: column; gap: 2px; }
+
+.assertion {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--gridline);
+}
+
+.assertion:last-child { border-bottom: 0; }
+.assertion-label { font-weight: 600; }
+
+.assertion-source {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+  cursor: help;
+  white-space: nowrap;
+}
+
+/* The quoted phrase the assertion came from. Recessive, because it is the justification
+   rather than the claim — but present, because it is the only thing that makes the claim
+   checkable by a person. */
+.assertion-evidence {
+  flex: 1 1 240px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

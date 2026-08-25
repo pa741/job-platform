@@ -138,6 +138,49 @@ public sealed record PostingDetail
     public string? ExperienceRange { get; init; }
     public string? CompanyNumEmployees { get; init; }
 
+    /// <summary>
+    /// Verbatim applicant caption, e.g. "Over 200 applicants". LinkedIn only.
+    /// </summary>
+    /// <remarks>
+    /// Kept beside <see cref="ApplicantCount"/> rather than replaced by it, for the same reason
+    /// the raw salary columns sit beside the annualised ones: "Over 200" and "200" are not the
+    /// same statement, and only the caption says which one the board actually made.
+    /// </remarks>
+    public string? Applicants { get; init; }
+
+    /// <summary>
+    /// The figure parsed out of <see cref="Applicants"/>. The competition signal.
+    /// </summary>
+    /// <remarks>
+    /// The single most decision-relevant number on a posting after salary, and it was being
+    /// parsed, normalised and stored without ever reaching a screen. Sparse - LinkedIn is the
+    /// only board that publishes it - so a client must treat null as "not stated" rather than
+    /// as zero.
+    /// </remarks>
+    public int? ApplicantCount { get; init; }
+
+    /// <summary>Openings this listing covers, where the board says. Naukri and freehire.</summary>
+    public int? VacancyCount { get; init; }
+
+    /// <summary>
+    /// The board's own three-way work mode: <c>remote</c>, <c>hybrid</c>, <c>onsite</c>.
+    /// </summary>
+    /// <remarks>
+    /// Worth showing next to the derived <see cref="PostingSummary.WorkArrangement"/>, because
+    /// this is what the employer stated and that is what we concluded. Where they disagree, the
+    /// disagreement is the interesting part.
+    /// </remarks>
+    public string? WorkFromHomeType { get; init; }
+
+    public string? ListingType { get; init; }
+
+    /// <summary><c>inside</c>, <c>outside</c>, or null. UK contract postings only.</summary>
+    public string? Ir35 { get; init; }
+
+    /// <summary>Null where the posting is silent, which is not the same as "no".</summary>
+    public bool? VisaSponsorship { get; init; }
+
+
     public required string ContentHash { get; init; }
     public int FirstSeenRunId { get; init; }
     public int LastSeenRunId { get; init; }
@@ -191,3 +234,125 @@ public sealed record SearchTermResponse(
     int PostingCount,
     string? LastScrapeDate,
     DateTimeOffset? UpdatedAtUtc);
+
+/// <summary>
+/// One posting with everything the pipeline concluded, and how it concluded it.
+/// </summary>
+/// <remarks>
+/// <b>Provenance is the point of this contract.</b> A list of skills a posting wants is the
+/// shallow half; which of them the employer tagged, which a string match found, which the model
+/// read out of prose - and the exact phrase it read - is what makes the conclusion checkable
+/// rather than merely presented. This is also the only place the concept graph becomes visible
+/// to a person: the rollup below is computed through the closure and cannot be derived by a
+/// client that does not carry the vocabulary.
+/// </remarks>
+public sealed record PostingInsight
+{
+    public required PostingDetail Detail { get; init; }
+
+    /// <summary>What the posting asks for, each with its source and evidence.</summary>
+    public IReadOnlyList<AssertionResponse> Concepts { get; init; } = [];
+
+    /// <summary>
+    /// The domains this posting rolls up to, with how many of its concepts sit under each.
+    /// </summary>
+    /// <remarks>
+    /// Derived by walking the closure upward from every asserted concept, never by matching the
+    /// domain's name in the text - adverts do not describe themselves as "backend development",
+    /// and matching the phrase would count the handful that happen to use it as though they
+    /// were the population. Server-side because the closure lives in the vocabulary, and a
+    /// client would need the whole graph to compute it.
+    /// </remarks>
+    public IReadOnlyList<RollupResponse> Domains { get; init; } = [];
+
+    /// <summary>
+    /// Surface forms seen and deliberately not resolved.
+    /// </summary>
+    /// <remarks>
+    /// Shown rather than hidden. "Nobody asked for this" and "we could not tell" are different
+    /// answers, and this is the only place a reader can see which one they are looking at - it
+    /// is also where the next batch of vocabulary comes from.
+    /// </remarks>
+    public IReadOnlyList<MentionResponse> Mentions { get; init; } = [];
+
+    /// <summary>Sparse facts: visa sponsorship, IR35. Name plus an optional value.</summary>
+    public IReadOnlyList<TagResponse> Tags { get; init; } = [];
+
+    /// <summary>Normalised job types, as a set rather than the delimited column.</summary>
+    public IReadOnlyList<string> JobTypes { get; init; } = [];
+
+    /// <summary>Which configured searches surfaced this posting, and when each last did.</summary>
+    public IReadOnlyList<AttributionResponse> FoundBy { get; init; } = [];
+
+    public CompanyResponse? Company { get; init; }
+
+    /// <summary>
+    /// Which passes have run over this posting, and at which version.
+    /// </summary>
+    /// <remarks>
+    /// The honest footer. A posting enriched at version 1 and never re-read is a different
+    /// object from one at the current version, and without this the difference is invisible -
+    /// a reader would take a thin set of concepts for a thin advert.
+    /// </remarks>
+    public required ProvenanceResponse Provenance { get; init; }
+}
+
+/// <param name="Concept">The stable key, e.g. <c>skill.kubernetes</c>.</param>
+/// <param name="Label">Its human-readable name.</param>
+/// <param name="Kind"><c>Skill</c> or <c>Qualification</c>. Domains are never asserted directly.</param>
+/// <param name="Source">
+/// <c>Board</c> (the employer's own tagging), <c>Taxonomy</c> (a string match against the text)
+/// or <c>Model</c> (a judgement). Not equally good evidence, and worth rendering differently.
+/// </param>
+/// <param name="Polarity">
+/// <c>Required</c>, <c>Preferred</c>, <c>Mentioned</c> or <c>Unspecified</c>. Only the model
+/// pass can populate anything but Unspecified - a regex cannot tell essential from desirable.
+/// </param>
+/// <param name="Evidence">The phrase it was read from, verbatim. Null for board tags, which have none.</param>
+public readonly record struct AssertionResponse(
+    string Concept,
+    string Label,
+    string Kind,
+    string Source,
+    string Polarity,
+    int? YearsMin,
+    int? YearsMax,
+    string? Evidence,
+    double? Confidence);
+
+/// <param name="Concept">A domain key, e.g. <c>area.backend</c>.</param>
+/// <param name="Count">How many of this posting's concepts sit beneath it in the closure.</param>
+public readonly record struct RollupResponse(string Concept, string Label, int Count);
+
+/// <param name="Reason">
+/// <c>Ambiguous</c> (the form names a concept but cannot be trusted to mean it - "Go", "R"),
+/// <c>UnknownBoardSkill</c> or <c>UnknownModelSkill</c>.
+/// </param>
+public readonly record struct MentionResponse(string SurfaceForm, string Reason, int Occurrences);
+
+public readonly record struct TagResponse(string Name, string? Value);
+
+public readonly record struct AttributionResponse(
+    string SearchTerm,
+    DateTimeOffset FirstSeenUtc,
+    DateTimeOffset LastSeenUtc);
+
+public readonly record struct CompanyResponse(
+    string DisplayName,
+    string? Industry,
+    string? EmployeesBand,
+    string? Revenue,
+    string? Url);
+
+/// <param name="EnrichmentVersion">Which deterministic classifier set produced the columns.</param>
+/// <param name="ExtractorVersion">Which model pass produced the assertions. Null where none has run.</param>
+/// <param name="Model">The deployment that answered.</param>
+/// <param name="SeenCount">How many scrape runs have surfaced this posting.</param>
+public readonly record struct ProvenanceResponse(
+    int EnrichmentVersion,
+    int? ExtractorVersion,
+    string? Model,
+    DateTimeOffset? ExtractedAtUtc,
+    int SeenCount,
+    DateTimeOffset FirstSeenUtc,
+    DateTimeOffset LastSeenUtc);

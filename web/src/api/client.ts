@@ -1,6 +1,6 @@
 import type {
   ApplicationDetail, ApplicationSummary, DailyRollup, FacetsResponse, MatchDetail, MatchSummary,
-  MeResponse, MetricsSummary, PageResponse, PostingDetail, PostingSummary, ProfileRequest,
+  MeResponse, MetricsSummary, PageResponse, PostingDetail, PostingInsight, PostingSummary, ProfileRequest,
   ProfileResponse, RunResponse, ScraperHealth, SearchTermResponse,
 } from './types';
 
@@ -114,6 +114,14 @@ export class JobPlatformApi {
     this.request<PageResponse<PostingSummary>>(`/api/v1/postings${JobPlatformApi.query({ ...params })}`);
 
   posting = (id: number) => this.request<PostingDetail>(`/api/v1/postings/${id}`);
+
+  /**
+   * Everything concluded about one posting, with the evidence behind each conclusion.
+   *
+   * A second call rather than more fields on `posting`: it pulls six collections and a
+   * company row server-side, and a list view has no use for any of it.
+   */
+  postingInsight = (id: number) => this.request<PostingInsight>(`/api/v1/postings/${id}/insight`);
 
   facets = (searchTerm?: string) =>
     this.request<FacetsResponse>(`/api/v1/postings/facets${JobPlatformApi.query({ searchTerm })}`);
