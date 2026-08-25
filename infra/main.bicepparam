@@ -50,6 +50,14 @@ param aiBulkModelName = empty(readEnvironmentVariable('JP_AI_BULK_MODEL', ''))
 param aiWritingModelName = empty(readEnvironmentVariable('JP_AI_WRITING_MODEL', ''))
   ? 'gpt-5.6-sol'
   : readEnvironmentVariable('JP_AI_WRITING_MODEL', '')
+// Versions travel with their names. Overriding one without the other fails the deployment
+// with a "model not found" that names neither.
+param aiBulkModelVersion = empty(readEnvironmentVariable('JP_AI_BULK_MODEL_VERSION', ''))
+  ? '2026-07-09'
+  : readEnvironmentVariable('JP_AI_BULK_MODEL_VERSION', '')
+param aiWritingModelVersion = empty(readEnvironmentVariable('JP_AI_WRITING_MODEL_VERSION', ''))
+  ? '2026-07-09'
+  : readEnvironmentVariable('JP_AI_WRITING_MODEL_VERSION', '')
 // Comma-separated in the environment, e.g. "https://app.example.net,https://localhost:5173".
 param apiAllowedOrigins = empty(readEnvironmentVariable('JP_API_ALLOWED_ORIGINS', ''))
   ? []
