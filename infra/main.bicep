@@ -61,11 +61,21 @@ param apiAllowedOrigins array = []
 ])
 param aiProvider string = 'none'
 
+// A model name without its version is only half a pin: the two have to move together, and a
+// name overridden against a stale version fails the deployment with an unhelpful
+// "model not found". Both are parameters for the same reason - quota for a given family is
+// per subscription, so the models a clone can actually deploy are not knowable here.
 @description('Model behind the high-volume deployment: extraction and candidacy assessment.')
 param aiBulkModelName string = 'gpt-5.6-luna'
 
+@description('Version of the bulk model. Must match the model name.')
+param aiBulkModelVersion string = '2026-07-09'
+
 @description('Model behind the writing deployment: tailored CV and cover letter.')
 param aiWritingModelName string = 'gpt-5.6-sol'
+
+@description('Version of the writing model. Must match the model name.')
+param aiWritingModelVersion string = '2026-07-09'
 
 // Separate from `location` for the same reason `sqlLocation` is, and with the same trap:
 // Static Web Apps is offered in a handful of regions, and a region can additionally stop
@@ -233,7 +243,9 @@ module openAi 'modules/openai.bicep' = if (aiProvider == 'azureopenai') {
     callerPrincipalId: identity.outputs.principalId
     administratorObjectId: administratorObjectId
     bulkModelName: aiBulkModelName
+    bulkModelVersion: aiBulkModelVersion
     writingModelName: aiWritingModelName
+    writingModelVersion: aiWritingModelVersion
   }
 }
 
