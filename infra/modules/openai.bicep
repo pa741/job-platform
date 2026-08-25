@@ -88,11 +88,16 @@ resource account 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
 // clear error.
 // ---------------------------------------------------------------------------
 
+// The deployment is named for the job it does, never for the model behind it. Naming it after
+// the model looked tidier and was wrong twice over: pointing both deployments at one model -
+// which is exactly what a subscription without frontier quota has to do - produced two
+// resources with the same name and failed validation outright; and changing model would have
+// renamed the resource, replacing it and churning the application configuration with it.
+// A role name is stable, unique by construction, and is what AzureOpenAiOptions already says
+// these are.
 resource bulk 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
   parent: account
-  // Dots are not valid in a deployment name, so the model id is hyphenated. This name is what
-  // the application configuration points at, not the model id.
-  name: replace(bulkModelName, '.', '-')
+  name: 'bulk'
   sku: {
     // Global Standard, not Global Batch. The batch matrix does not yet carry the GPT-5.6
     // family - it tops out at gpt-5.4 - so the 24-hour batch discount is not available for
@@ -115,7 +120,7 @@ resource bulk 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
 
 resource writing 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
   parent: account
-  name: replace(writingModelName, '.', '-')
+  name: 'writing'
   sku: {
     name: 'GlobalStandard'
     capacity: writingCapacity
@@ -172,7 +177,7 @@ output accountName string = account.name
 @description('What the application configures as Ai:AzureOpenAi:Endpoint. Not a secret - there is no key behind it.')
 output endpoint string = account.properties.endpoint
 
-@description('Deployment name for the high-volume pass. A name, not a model id.')
+@description('Deployment name for the high-volume pass. A role, not a model id - see the resource.')
 output bulkDeployment string = bulk.name
 
 @description('Deployment name for the writing pass.')
