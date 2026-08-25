@@ -42,19 +42,6 @@ public sealed class KernelDocumentExtractor(
 {
     private readonly AzureOpenAiOptions _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
 
-    /// <summary>
-    /// How much of a document to send.
-    /// </summary>
-    /// <remarks>
-    /// Descriptions run to several KB and the useful content is front-loaded - requirements
-    /// come before the boilerplate about equal opportunities and the company's values. A
-    /// ceiling keeps a pathological posting from dominating a batch's cost, and losing the tail
-    /// of one costs less than truncating every posting to fit the worst.
-    /// </remarks>
-    private const int MaxDocumentChars = 12_000;
-
-    private static readonly Lazy<string> Vocabulary = new(BuildVocabulary, LazyThreadSafetyMode.ExecutionAndPublication);
-
     private const string PromptTemplate =
         """
         You are extracting structured data from documents in the UK software job market.
@@ -181,7 +168,7 @@ public sealed class KernelDocumentExtractor(
                 .AppendLine(")")
                 .Append("Title: ").AppendLine(request.Title ?? "(none)")
                 .AppendLine("Text:")
-                .AppendLine(Truncate(request.Text, MaxDocumentChars))
+                .AppendLine(ExtractionPrompt.Truncate(request.Text, ExtractionPrompt.MaxDocumentChars))
                 .AppendLine();
         }
 
@@ -192,7 +179,7 @@ public sealed class KernelDocumentExtractor(
 
         var arguments = new KernelArguments(AiPrompt.Bulk(_options))
         {
-            ["vocabulary"] = Vocabulary.Value,
+            ["vocabulary"] = ExtractionPrompt.Vocabulary,
             ["documents"] = documents.ToString(),
         };
 
@@ -267,7 +254,7 @@ public sealed class KernelDocumentExtractor(
 
         foreach (var item in array.EnumerateArray())
         {
-            if (Int(item, "index") is not { } index || index < 0 || index >= batch.Length)
+            if (ExtractionPrompt.Int(item, "index") is not { } index || index < 0 || index >= batch.Length)
             {
                 logger?.LogWarning("Extraction returned an out-of-range document index.");
                 continue;
@@ -279,7 +266,7 @@ public sealed class KernelDocumentExtractor(
                 continue;
             }
 
-            results[index] = Parse(item);
+            results[index] = ExtractionPrompt.Parse(item, _options.BulkDeployment);
             placed++;
         }
 
@@ -293,161 +280,4 @@ public sealed class KernelDocumentExtractor(
         }
     }
 
-    private DocumentExtraction Parse(JsonElement root)
-    {
-        var graph = ConceptGraph.Default;
-        var concepts = new List<ConceptAssertion>();
-        var mentions = new List<UnresolvedMention>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-
-        if (root.TryGetProperty("concepts", out var conceptArray)
-            && conceptArray.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in conceptArray.EnumerateArray())
-            {
-                var key = String(item, "key");
-
-                if (key is null)
-                {
-                    continue;
-                }
-
-                // The prompt says never to invent a key. This is what makes that true: a key
-                // the graph does not know is recorded as a mention, so a hallucinated concept
-                // cannot enter the data wearing the same shape as a real one.
-                if (!graph.TryGet(key, out _))
-                {
-                    mentions.Add(new UnresolvedMention(
-                        Truncate(key, 120)!, MentionReason.UnknownModelSkill));
-                    continue;
-                }
-
-                if (!seen.Add(key))
-                {
-                    continue;
-                }
-
-                concepts.Add(new ConceptAssertion(
-                    key,
-                    AssertionSource.Model,
-                    ParsePolarity(String(item, "polarity")),
-                    Int(item, "yearsMin"),
-                    Int(item, "yearsMax"),
-                    Truncate(String(item, "evidence"), 120),
-                    Double(item, "confidence")));
-            }
-        }
-
-        if (root.TryGetProperty("unknownSkills", out var unknown)
-            && unknown.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in unknown.EnumerateArray())
-            {
-                if (item.ValueKind == JsonValueKind.String
-                    && item.GetString() is { Length: > 0 } surfaceForm)
-                {
-                    mentions.Add(new UnresolvedMention(
-                        Truncate(surfaceForm, 120)!, MentionReason.UnknownModelSkill));
-                }
-            }
-        }
-
-        var salary = root.TryGetProperty("salary", out var s) && s.ValueKind == JsonValueKind.Object
-            ? s
-            : (JsonElement?)null;
-
-        return new DocumentExtraction
-        {
-            Concepts = concepts,
-            Mentions = mentions,
-            Seniority = ParseSeniority(String(root, "seniority")),
-            WorkArrangement = ParseArrangement(String(root, "workArrangement")),
-            HybridDaysInOffice = Int(root, "hybridDaysInOffice") is { } days and >= 1 and <= 5 ? days : null,
-            AnnualSalaryMin = salary is null ? null : Decimal(salary.Value, "min"),
-            AnnualSalaryMax = salary is null ? null : Decimal(salary.Value, "max"),
-            SalaryCurrency = salary is null ? null : String(salary.Value, "currency"),
-            SalaryConfidence = salary is null ? null : Double(salary.Value, "confidence"),
-            Model = _options.BulkDeployment,
-
-            // This document's own object, not the whole batch response. Storing the batch
-            // against every row would multiply the largest column in the schema by the batch
-            // size and leak one posting's extraction into another's audit trail.
-            PayloadJson = root.GetRawText(),
-        };
-    }
-
-    /// <summary>
-    /// The skills and qualifications, as keys and labels. Domains are omitted: they are
-    /// reached by rolling a concrete concept up the closure, not by being asserted directly.
-    /// </summary>
-    private static string BuildVocabulary()
-    {
-        var builder = new StringBuilder(16_000);
-
-        foreach (var concept in ConceptGraph.Default.Concepts)
-        {
-            if (concept.Kind == ConceptKind.Domain)
-            {
-                continue;
-            }
-
-            builder.Append(concept.Key).Append(" = ").AppendLine(concept.Label);
-        }
-
-        return builder.ToString();
-    }
-
-    private static AssertionPolarity ParsePolarity(string? value) => value?.ToLowerInvariant() switch
-    {
-        "required" => AssertionPolarity.Required,
-        "preferred" => AssertionPolarity.Preferred,
-        "mentioned" => AssertionPolarity.Mentioned,
-        _ => AssertionPolarity.Unspecified,
-    };
-
-    private static Seniority? ParseSeniority(string? value) => value?.ToLowerInvariant() switch
-    {
-        "intern" => Seniority.Intern,
-        "junior" => Seniority.Junior,
-        "mid" => Seniority.Mid,
-        "senior" => Seniority.Senior,
-        "lead" => Seniority.Lead,
-        "principal" => Seniority.Principal,
-        "executive" => Seniority.Executive,
-        _ => null,
-    };
-
-    private static WorkArrangement? ParseArrangement(string? value) => value?.ToLowerInvariant() switch
-    {
-        "onsite" => WorkArrangement.OnSite,
-        "hybrid" => WorkArrangement.Hybrid,
-        "remote" => WorkArrangement.Remote,
-        _ => null,
-    };
-
-    private static string? String(JsonElement element, string name)
-        => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
-
-    private static int? Int(JsonElement element, string name)
-        => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number
-            && value.TryGetInt32(out var parsed)
-                ? parsed
-                : null;
-
-    private static double? Double(JsonElement element, string name)
-        => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number
-            && value.TryGetDouble(out var parsed)
-                ? parsed
-                : null;
-
-    private static decimal? Decimal(JsonElement element, string name)
-        => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number
-            && value.TryGetDecimal(out var parsed)
-                ? parsed
-                : null;
-
-    private static string? Truncate(string? value, int max)
-        => value is null || value.Length <= max ? value : value[..max];
 }

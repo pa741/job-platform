@@ -67,6 +67,11 @@
          GA - which is what let the hand-composed Anthropic transport, and the API key it
          needed, be deleted outright rather than abstracted over. -->
     <PackageVersion Include="Microsoft.SemanticKernel" Version="1.80.0" />
+    <!-- The official OpenAI library, for the batch extraction path only. Azure OpenAI is
+         reached through Semantic Kernel's connector above and needs nothing from here; this is
+         for api.openai.com, where the gpt-5.6 family is batch-capable and Azure's batch matrix
+         does not yet carry it. -->
+    <PackageVersion Include="OpenAI" Version="2.13.0" />
   </ItemGroup>
 
   <ItemGroup Label="Documents">

@@ -1,3 +1,4 @@
+using System.ClientModel;
 using Azure.Core;
 using Azure.Identity;
 using JobPlatform.Ai.Applications;
@@ -9,6 +10,7 @@ using JobPlatform.Core.Matching;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.SemanticKernel;
+using OpenAI;
 
 namespace JobPlatform.Ai;
 
@@ -62,6 +64,52 @@ public static class AiRegistration
         services.AddSingleton<IDocumentExtractor, KernelDocumentExtractor>();
         services.AddSingleton<ICandidacyAssessor, KernelCandidacyAssessor>();
         services.AddSingleton<IApplicationWriter, KernelApplicationWriter>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the OpenAI batch extraction path, when a key is configured.
+    /// </summary>
+    /// <remarks>
+    /// <b>Separate from <see cref="AddAiProvider"/> on purpose, and independent of it.</b> The
+    /// two answer different questions: that one is "which provider serves interactive work",
+    /// this one is "is there somewhere to send a corpus overnight". A deployment can have
+    /// either, both, or neither, and the combination that matters most is both - Azure for
+    /// profiles, where a person is waiting and personal data should not leave the tenant, and
+    /// OpenAI's batch endpoint for job adverts, where nobody is waiting and the rate pool is
+    /// separate from the interactive deployment's.
+    ///
+    /// <b>This is the one credential in the system.</b> Everything else authenticates with
+    /// Entra; reaching api.openai.com cannot. Absent the key nothing here registers, the
+    /// backfill falls back to the queue, and the property that a fresh clone deploys with
+    /// nothing to leak is preserved.
+    /// </remarks>
+    public static IServiceCollection AddOpenAiBatchProvider(
+        this IServiceCollection services, IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        services.Configure<OpenAiBatchOptions>(
+            configuration.GetSection(OpenAiBatchOptions.SectionName));
+
+        var apiKey = configuration[$"{OpenAiBatchOptions.SectionName}:ApiKey"];
+
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            return services;
+        }
+
+        // One client, shared. It owns the connection pool, the same reason CosmosClient is a
+        // singleton and the chat client above is.
+        var client = new OpenAIClient(new ApiKeyCredential(apiKey));
+
+#pragma warning disable OPENAI001
+        services.AddSingleton(client.GetBatchClient());
+#pragma warning restore OPENAI001
+        services.AddSingleton(client.GetOpenAIFileClient());
+        services.AddSingleton<IBatchDocumentExtractor, OpenAiBatchExtractor>();
 
         return services;
     }

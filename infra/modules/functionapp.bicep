@@ -43,6 +43,9 @@ param openAiBulkDeployment string = ''
 @description('Deployment name for the writing pass. Nothing here uses it today; it is set so that a function which needs it is a code change and not a deploy.')
 param openAiWritingDeployment string = ''
 
+@description('Key Vault secret URI holding the OpenAI API key. Empty leaves the batch extraction path unregistered.')
+param openAiApiKeySecretUri string = ''
+
 var deploymentContainerName = 'deployment-package'
 
 // A storage account of its own, separate from the landing zone. The Functions host keeps
@@ -123,6 +126,11 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
     }
   }
   properties: {
+    // Key Vault references resolve against the system-assigned identity unless told otherwise,
+    // and this app deliberately has only a user-assigned one. Without this line the reference
+    // fails at startup with the setting left as its literal @Microsoft.KeyVault(...) text -
+    // which the application then treats as an API key and sends to OpenAI.
+    keyVaultReferenceIdentity: identityResourceId
     serverFarmId: plan.id
     httpsOnly: true
     functionAppConfig: {
@@ -237,6 +245,13 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
           // it: the identity above is what the token is issued for.
           name: 'Ai__Provider'
           value: aiProvider
+        }
+      ], empty(openAiApiKeySecretUri) ? [] : [
+        {
+          // A Key Vault reference, not a value. The template never sees the key: it is set out
+          // of band with `az keyvault secret set` and resolved at runtime by the identity above.
+          name: 'Ai__OpenAi__ApiKey'
+          value: '@Microsoft.KeyVault(SecretUri=${openAiApiKeySecretUri})'
         }
       ], aiProvider == 'azureopenai' && !empty(openAiEndpoint) ? [
         {

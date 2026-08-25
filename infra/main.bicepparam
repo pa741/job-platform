@@ -58,6 +58,11 @@ param aiBulkModelVersion = empty(readEnvironmentVariable('JP_AI_BULK_MODEL_VERSI
 param aiWritingModelVersion = empty(readEnvironmentVariable('JP_AI_WRITING_MODEL_VERSION', ''))
   ? '2026-07-09'
   : readEnvironmentVariable('JP_AI_WRITING_MODEL_VERSION', '')
+// Provisions the one vault, for the one secret. Off unless explicitly set, so a clone still
+// deploys with nothing to leak.
+param aiOpenAiBatchEnabled = empty(readEnvironmentVariable('JP_AI_OPENAI_BATCH', ''))
+  ? false
+  : bool(readEnvironmentVariable('JP_AI_OPENAI_BATCH', 'false'))
 // Comma-separated in the environment, e.g. "https://app.example.net,https://localhost:5173".
 param apiAllowedOrigins = empty(readEnvironmentVariable('JP_API_ALLOWED_ORIGINS', ''))
   ? []

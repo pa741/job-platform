@@ -42,6 +42,7 @@ env:
   JP_AI_WRITING_MODEL: ${{ vars.JP_AI_WRITING_MODEL }}
   JP_AI_BULK_MODEL_VERSION: ${{ vars.JP_AI_BULK_MODEL_VERSION }}
   JP_AI_WRITING_MODEL_VERSION: ${{ vars.JP_AI_WRITING_MODEL_VERSION }}
+  JP_AI_OPENAI_BATCH: ${{ vars.JP_AI_OPENAI_BATCH }}
   # Load-bearing. Unset, the template parameter falls back to the free serverless offer and
   # the deployment tries to downgrade a paid database, which Azure rejects outright with
   # "Cannot update paid database to free database" - a failed pipeline, every push.

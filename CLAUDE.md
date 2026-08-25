@@ -61,12 +61,20 @@ Apps API needs the same grants, and a shared identity means granting once. That 
 off twice - the API required no new role assignment and no new database user, and the AI
 provider needed one role assignment covering both hosts.
 
-**There used to be exactly one exception**, and it is gone. The Anthropic API key needed a Key
-Vault, a Container Apps secret reference, an `az keyvault secret set` run out of band, and a
-paragraph in every document explaining why the exception was acceptable. Azure OpenAI
-authenticates with Microsoft Entra, so `infra/modules/keyvault.bicep` was deleted rather than
-maintained. If a change seems to need a password, key or connection secret, that is a signal the
-design is being worked around - there is now no precedent to point at.
+**There is exactly one secret, and it is optional.** The Anthropic key that used to be the
+exception was deleted outright when the provider moved to Azure OpenAI, and every Azure-side
+connection is Entra-authenticated. What brought a vault back is narrower: OpenAI's Batch API
+carries the `gpt-5.6` family, which Azure's batch matrix does not, and gives corpus-wide
+extraction a rate pool separate from the interactive deployment's - which is what stalled the
+first real backfill. `api.openai.com` has no identity-based path.
+
+It is fenced as tightly as the design allows. It is off unless `aiOpenAiBatchEnabled` is set, so
+a clone still deploys with no vault. It reaches **job adverts only** - candidate profiles stay on
+the Azure path, so personal data never leaves the tenant, and that split is enforced by which
+function calls which extractor rather than by a setting. Its value is set out of band with
+`az keyvault secret set` and appears in no template, parameter file, output or deployment
+history. Anything else that seems to need a credential is still a signal the design is being
+worked around.
 
 ## Key files
 
@@ -331,6 +339,25 @@ Each of these cost a red CI run; none of them fail locally.
   backfill spent its calls collecting HTTP 429s and quietly extracted almost nothing - the
   function swallows a provider failure by design, so the symptom was a stalled count rather
   than a red anything. Change either number and check the other.
+- **There are two extraction paths and the split is along the data, not preference.**
+  `IDocumentExtractor` is synchronous, packs documents, and serves anything a person is waiting
+  for - profiles especially, where the alternative is telling somebody to come back tomorrow.
+  `IBatchDocumentExtractor` submits to OpenAI's Batch API and is collected within 24h by
+  `CollectExtractionBatchesFunction`; it serves job adverts, which are public text nobody is
+  waiting for. Keeping profiles off it is what keeps personal data inside the tenant.
+- **The batch path sends one document per request and must not be made to pack.** Packing is
+  what forces the synchronous extractor to police returned indices, because a misaligned answer
+  is wrong, self-consistent and undetectable. A batch API echoes a `custom_id` per request, so
+  correlation is the platform's problem - packing would trade that guarantee away to save
+  roughly a pound across the whole corpus.
+- **`ExtractionBatchItems.InputHash` is captured at submission, never recomputed.** A batch is
+  answered up to a day later and the scraper may have re-listed the posting with edited text in
+  between. The extraction row has to be keyed on what was actually read, or the idempotency key
+  lies and the next backfill does the wrong thing in either direction.
+- **`keyVaultReferenceIdentity` must name the user-assigned identity.** Key Vault references
+  resolve against the *system-assigned* identity by default and this app has only a user-assigned
+  one; without it the setting is left as its literal `@Microsoft.KeyVault(...)` text, which the
+  application then sends to OpenAI as an API key.
 - **Extraction sends many documents per call, and the index is checked rather than trusted.**
   The concept vocabulary is several thousand tokens and has to precede every extraction, so
   sent per posting it dwarfs the adverts themselves; ten to a call amortises it tenfold. The
