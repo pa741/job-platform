@@ -57,22 +57,38 @@ public sealed class PostingExtractionWriter(JobsDbContext db)
         // and then collides: "Violation of PRIMARY KEY constraint 'PK_PostingMentions' ...
         // duplicate key value is (2123, SharePoint)". Both passes failing to resolve SharePoint
         // is one fact, not two, so the surviving row stands and the model's is dropped.
-        var alreadyRecorded = await db.PostingMentions
+        var survivingForms = await db.PostingMentions
             .Where(m => m.PostingId == postingId)
             .Select(m => m.SurfaceForm)
             .ToListAsync(ct);
 
-        var taken = alreadyRecorded.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var taken = survivingForms.ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        db.PostingExtractions.Add(new PostingExtractionEntity
+        // (PostingId, ExtractorVersion, InputHash) is unique, and it is the idempotency key
+        // this whole design leans on: a posting re-listed with unchanged text is extracted once,
+        // and a replayed message converges rather than duplicating. The queue consumer checks
+        // for this before it calls the model, but the collector cannot - by then the money is
+        // already spent - and a batch left open by a failure between SaveChanges and its status
+        // write is collected again on the next tick. So the guard belongs here, where both
+        // callers get it.
+        var alreadyRecorded = await db.PostingExtractions.AnyAsync(
+            e => e.PostingId == postingId
+                && e.ExtractorVersion == extraction.Version
+                && e.InputHash == inputHash,
+            ct);
+
+        if (!alreadyRecorded)
         {
-            PostingId = postingId,
-            ExtractorVersion = extraction.Version,
-            InputHash = inputHash,
-            Model = extraction.Model,
-            ExtractedAtUtc = now,
-            PayloadJson = extraction.PayloadJson,
-        });
+            db.PostingExtractions.Add(new PostingExtractionEntity
+            {
+                PostingId = postingId,
+                ExtractorVersion = extraction.Version,
+                InputHash = inputHash,
+                Model = extraction.Model,
+                ExtractedAtUtc = now,
+                PayloadJson = extraction.PayloadJson,
+            });
+        }
 
         foreach (var assertion in extraction.Concepts)
         {
