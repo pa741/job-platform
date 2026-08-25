@@ -94,11 +94,27 @@ if (builder.Services.Any(d => d.ServiceType == typeof(IDocumentExtractor)))
 {
     builder.Services.AddSingleton(provider =>
     {
+        // Identity-based host connections come in two shapes and the Functions host accepts
+        // both: an explicit `__queueServiceUri`, or an `__accountName` the host expands per
+        // service. infra/modules/functionapp.bicep sets the account name, so reading only the
+        // URI form meant this factory threw the moment an AI provider was configured - which
+        // is the first time it had ever run, because the queue is registered only alongside an
+        // extractor and there had never been one. The backfill endpoint answered 500 rather
+        // than the "no provider configured" it was written to answer.
         var serviceUri = configuration["AzureWebJobsStorage:queueServiceUri"]
-            ?? configuration["AzureWebJobsStorage__queueServiceUri"]
-            ?? throw new InvalidOperationException(
-                "AzureWebJobsStorage:queueServiceUri is not configured, but an AI provider is. "
-                + "The extraction queue lives on the host storage account.");
+            ?? configuration["AzureWebJobsStorage__queueServiceUri"];
+
+        if (string.IsNullOrWhiteSpace(serviceUri))
+        {
+            var accountName = configuration["AzureWebJobsStorage:accountName"]
+                ?? configuration["AzureWebJobsStorage__accountName"];
+
+            serviceUri = string.IsNullOrWhiteSpace(accountName)
+                ? throw new InvalidOperationException(
+                    "AzureWebJobsStorage is configured with neither queueServiceUri nor accountName, "
+                    + "but an AI provider is. The extraction queue lives on the host storage account.")
+                : $"https://{accountName}.queue.core.windows.net";
+        }
 
         var credential = string.IsNullOrWhiteSpace(managedIdentityClientId)
             ? new DefaultAzureCredential()
