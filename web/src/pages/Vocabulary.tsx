@@ -294,8 +294,12 @@ function Explorer({ api, searchTerm }: { api: JobPlatformApi; searchTerm: string
 
               {detail.kind === 'Domain' && (
                 <p className="muted" style={{ fontSize: 12 }}>
-                  A grouping, never matched in text. Adverts do not describe themselves as
-                  “{detail.label.toLowerCase()}” — this is reached by walking up from something concrete.
+                  A grouping. It is never matched against advert text — adverts do not describe
+                  themselves as “{detail.label.toLowerCase()}” — so it is normally reached by
+                  walking up from something concrete rather than asserted directly.
+                  {detail.demand > 0
+                    ? ' The count above is real all the same: a board that publishes its own structured tags can name a domain outright, and some do.'
+                    : ' A count of zero here is expected, and does not mean nobody wants this — see what sits under it below.'}
                 </p>
               )}
 
