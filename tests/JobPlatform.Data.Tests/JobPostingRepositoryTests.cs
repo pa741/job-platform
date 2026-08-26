@@ -1,5 +1,7 @@
+using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Model;
 using JobPlatform.Data.Sql;
+using JobPlatform.Data.Sql.Entities;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -70,6 +72,112 @@ public sealed class JobPostingRepositoryTests : IDisposable
             IsRemote = remote,
             Description = description,
         };
+
+    /// <summary>
+    /// Forces the staleness branch by ageing the stored enrichment version, which is what a
+    /// vocabulary change does to the whole corpus at once.
+    /// </summary>
+    private async Task MakeStaleAsync(string sourceKey)
+    {
+        await using var db = CreateContext();
+        var entity = await db.JobPostings.SingleAsync(p => p.SourceKey == sourceKey);
+        entity.EnrichmentVersion = 0;
+        await db.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task A_stale_rebuild_keeps_the_assertions_the_model_wrote()
+    {
+        // The failure this prevents is silent and unrecoverable. Bumping the enrichment version
+        // marks every stored posting stale; the rebuild used to clear all of a posting's
+        // concepts, and the re-extraction it queues is keyed on a hash of the description, so a
+        // posting whose text never changed converges on the extraction row already there and
+        // skips. The model's reading would be deleted, the audit table would still say it had
+        // been done, and the graded share would fall back toward zero with nothing to show why.
+        var posting = Posting("freehire", "1", description: "Backend work with Python and SQL.");
+
+        await using (var db = CreateContext())
+        {
+            await CreateRepository(db).IngestAsync(Context("a.csv"), [posting], 1, 0);
+        }
+
+        int conceptId;
+        await using (var db = CreateContext())
+        {
+            var entity = await db.JobPostings.SingleAsync();
+            conceptId = await db.Concepts.Where(c => c.ConceptKey == "skill.kubernetes")
+                .Select(c => c.Id).SingleAsync();
+
+            db.PostingConcepts.Add(new PostingConceptEntity
+            {
+                PostingId = entity.Id,
+                ConceptId = conceptId,
+                Source = AssertionSource.Model,
+                Polarity = AssertionPolarity.Required,
+                ResolverVersion = 1,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await MakeStaleAsync(posting.SourceKey);
+
+        await using (var db = CreateContext())
+        {
+            await CreateRepository(db).IngestAsync(Context("b.csv"), [posting], 1, 0);
+        }
+
+        await using (var db = CreateContext())
+        {
+            var concepts = await db.PostingConcepts.ToListAsync();
+
+            Assert.Contains(
+                concepts,
+                c => c.ConceptId == conceptId && c.Source == AssertionSource.Model);
+
+            // And the pass still did its own job: the taxonomy rows were rebuilt, not skipped.
+            Assert.Contains(concepts, c => c.Source == AssertionSource.Taxonomy);
+        }
+    }
+
+    [Fact]
+    public async Task A_rebuilt_mention_does_not_collide_with_one_the_model_owns()
+    {
+        // PostingMentions is keyed on (PostingId, SurfaceForm) and both producers write to it.
+        // Leaving the model's rows in place means the taxonomy pass can now re-add a form that
+        // is still there - the same primary key collision that has already been hit twice on
+        // this table, arriving from the opposite direction.
+        var posting = Posting("freehire", "1", description: "We use Go and Python here.");
+
+        await using (var db = CreateContext())
+        {
+            await CreateRepository(db).IngestAsync(Context("a.csv"), [posting], 1, 0);
+        }
+
+        await using (var db = CreateContext())
+        {
+            // Exactly the form the taxonomy pass records as ambiguous, so the rebuild will try
+            // to write it again.
+            var ambiguous = await db.PostingMentions.SingleAsync(m => m.SurfaceForm == "Go");
+
+            ambiguous.Reason = MentionReason.UnknownModelSkill;
+            await db.SaveChangesAsync();
+        }
+
+        await MakeStaleAsync(posting.SourceKey);
+
+        await using (var db = CreateContext())
+        {
+            await CreateRepository(db).IngestAsync(Context("b.csv"), [posting], 1, 0);
+        }
+
+        await using (var db = CreateContext())
+        {
+            var mention = await db.PostingMentions.SingleAsync(m => m.SurfaceForm == "Go");
+
+            // The model's claim is the more specific one, so it is what survives.
+            Assert.Equal(MentionReason.UnknownModelSkill, mention.Reason);
+        }
+    }
 
     [Fact]
     public async Task Ingest_records_every_posting_as_new_on_a_first_run()

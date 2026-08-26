@@ -80,6 +80,21 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
             .Where(l => l.SearchTerm == context.SearchTerm && existingIds.Contains(l.PostingId))
             .ToDictionaryAsync(l => l.PostingId, ct);
 
+        // Surface forms already held by a mention the model wrote. The rebuild below leaves the
+        // model's rows in place, and PostingMentions is keyed on (PostingId, SurfaceForm), so a
+        // taxonomy mention of a form the model also failed to resolve would collide with a row
+        // that is deliberately staying put. Loaded once for the batch, like everything else here.
+        var reservedForms = (await db.PostingMentions
+            .Where(m => existingIds.Contains(m.PostingId)
+                && m.Reason == MentionReason.UnknownModelSkill)
+            .Select(m => new { m.PostingId, m.SurfaceForm })
+            .ToListAsync(ct))
+            .GroupBy(m => m.PostingId)
+            .ToDictionary(
+                g => g.Key,
+                g => (IReadOnlySet<string>)g.Select(m => m.SurfaceForm)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase));
+
         // Enrichment is in-memory CPU work, so it runs here rather than in its own pass:
         // it adds no round trip and does not lengthen the connection.
         var graph = ConceptGraph.Default;
@@ -129,7 +144,12 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
                 if (changed || stale)
                 {
                     rebuild.Add(entity.Id);
-                    AttachDerivedRows(entity, enriched, conceptIds, missingConcepts);
+                    AttachDerivedRows(
+                        entity,
+                        enriched,
+                        conceptIds,
+                        missingConcepts,
+                        reservedForms.GetValueOrDefault(entity.Id, EmptyForms));
                     needExtraction.Add(entity.SourceKey);
                 }
 
@@ -174,7 +194,7 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
 
                 Apply(entity, posting, contentHash, location);
                 ApplyEnrichment(entity, enriched, companies);
-                AttachDerivedRows(entity, enriched, conceptIds, missingConcepts);
+                AttachDerivedRows(entity, enriched, conceptIds, missingConcepts, EmptyForms);
 
                 // Through the navigation, not the DbSet: the posting has no Id until
                 // SaveChanges, and EF fills the foreign key from the relationship.
@@ -488,11 +508,15 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
     /// was never loaded, so everything added here is treated as new - which is correct only
     /// because <see cref="ClearDerivedRowsAsync"/> removes the previous generation first.
     /// </remarks>
+    private static readonly IReadOnlySet<string> EmptyForms =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
     private static void AttachDerivedRows(
         JobPostingEntity entity,
         EnrichedPosting enriched,
         Dictionary<string, int> conceptIds,
-        HashSet<string> missingConcepts)
+        HashSet<string> missingConcepts,
+        IReadOnlySet<string> reservedForms)
     {
         foreach (var assertion in enriched.Concepts)
         {
@@ -521,7 +545,12 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
         // is the more specific claim - the vocabulary knows that form and distrusts it.
         var mentions = enriched.Mentions
             .GroupBy(m => m.SurfaceForm, StringComparer.OrdinalIgnoreCase)
-            .Select(g => g.OrderBy(m => m.Reason).First());
+            .Select(g => g.OrderBy(m => m.Reason).First())
+            // The same key can also be held by a mention the model wrote, which this rebuild
+            // does not clear. The model saw the whole document and said the form names a
+            // technology; the taxonomy pass only knows it did not resolve. The stronger claim
+            // stays.
+            .Where(m => !reservedForms.Contains(m.SurfaceForm));
 
         foreach (var mention in mentions)
         {
@@ -556,6 +585,25 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
     /// Extractions are deliberately not touched: a model response is expensive and is keyed on
     /// the input hash, so it survives a re-enrichment of the same text.
     /// </remarks>
+    /// <summary>
+    /// Removes the rows this pass is about to rewrite, and only those.
+    /// </summary>
+    /// <remarks>
+    /// Each producer owns its own rows. Enrichment writes what the board published and what a
+    /// string match found; extraction writes what the model read. Clearing the lot would mean
+    /// enrichment silently discarding the other producer's work, and the loss is not
+    /// recoverable by retrying: the re-extraction this queues is keyed on a hash of the
+    /// description, so for a posting marked stale by a vocabulary change - unchanged text, same
+    /// hash - it converges on the extraction row that is already there and skips. The
+    /// assertions would be gone, the audit table would say the work had been done, and the only
+    /// visible symptom would be a graded share quietly falling back toward zero.
+    ///
+    /// Where the text genuinely changed the model's rows are stale too, and they are still
+    /// replaced - just by their owner. <c>PostingExtractionWriter</c> deletes its own rows
+    /// before writing new ones, and the changed hash means it runs. Between the two passes the
+    /// posting carries the previous reading, which is a few minutes of slightly stale evidence
+    /// rather than a permanent hole.
+    /// </remarks>
     private async Task ClearDerivedRowsAsync(List<long> postingIds, CancellationToken ct)
     {
         if (postingIds.Count == 0)
@@ -563,8 +611,13 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
             return;
         }
 
-        await db.PostingConcepts.Where(x => postingIds.Contains(x.PostingId)).ExecuteDeleteAsync(ct);
-        await db.PostingMentions.Where(x => postingIds.Contains(x.PostingId)).ExecuteDeleteAsync(ct);
+        await db.PostingConcepts
+            .Where(x => postingIds.Contains(x.PostingId) && x.Source != AssertionSource.Model)
+            .ExecuteDeleteAsync(ct);
+        await db.PostingMentions
+            .Where(x => postingIds.Contains(x.PostingId)
+                && x.Reason != MentionReason.UnknownModelSkill)
+            .ExecuteDeleteAsync(ct);
         await db.JobPostingJobTypes.Where(x => postingIds.Contains(x.PostingId)).ExecuteDeleteAsync(ct);
         await db.PostingTags.Where(x => postingIds.Contains(x.PostingId)).ExecuteDeleteAsync(ct);
     }
