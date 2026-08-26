@@ -160,6 +160,14 @@ worked around.
 - **`broader` is a DAG, not a tree**, and the data needs it: Python is a language *and* is
   used in backend, data and ML. The flat `category` field this replaced could record only one
   of those and was wrong three ways.
+- **A change to `concepts.json` needs `EnrichedPosting.CurrentVersion` bumped with it.** The
+  vocabulary carries its own version and nothing reads it when deciding staleness:
+  `JobPostingRepository` compares `EnrichedPosting.CurrentVersion` against
+  `JobPostings.EnrichmentVersion`, so a vocabulary edit that leaves the constant alone is an
+  edit no stored posting will ever pick up. Bumping it marks the corpus stale, and a reprocess
+  or the next re-scrape rebuilds the assertions. It also needs `seed-concepts` re-run, because
+  the SQL label tables are a projection of the file - resolution reads the embedded copy, so
+  matching is right either way, but the projection would drift.
 - **Run `dbadmin seed-concepts` after any migration.** The concept tables are a projection of
   the vocabulary shipped in the build; a schema that has moved without them silently stops
   recording assertions for anything new. `deploy.yml` runs it in the same job as `migrate`,

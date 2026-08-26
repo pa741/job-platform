@@ -24,8 +24,17 @@ public sealed record EnrichedPosting
     /// <remarks>
     /// 2: board tags may name a domain, ten concepts added from the mention log, and
     /// ambiguous names resolve where their context settles it.
+    /// 3: "containers" is ambiguous rather than a plain alias of Containerisation.
+    ///
+    /// <b>A change to <c>concepts.json</c> is a change to what the classifiers produce, so it
+    /// belongs here too.</b> The vocabulary carries its own version, but nothing reads that when
+    /// deciding whether a stored posting is stale - <c>JobPostingRepository</c> compares this
+    /// constant against <c>JobPostings.EnrichmentVersion</c>, and a vocabulary edit that leaves
+    /// this alone is an edit no existing row will ever pick up. Bumping it marks the corpus
+    /// stale so a reprocess, or simply the next day the posting is re-scraped, rebuilds its
+    /// assertions.
     /// </remarks>
-    public const int CurrentVersion = 2;
+    public const int CurrentVersion = 3;
 
     public required JobPosting Posting { get; init; }
 
