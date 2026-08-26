@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "notes": [
     "The concept key is the identity; the label is an attribute. Renaming a label is an",
     "edit, renaming a key is a data migration.",
@@ -2265,7 +2265,9 @@
       "label": "Containerisation",
       "aliases": [
         "containerisation",
-        "containerization",
+        "containerization"
+      ],
+      "ambiguous": [
         "containers"
       ],
       "broader": [

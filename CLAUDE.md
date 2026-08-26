@@ -160,6 +160,14 @@ worked around.
 - **`broader` is a DAG, not a tree**, and the data needs it: Python is a language *and* is
   used in backend, data and ML. The flat `category` field this replaced could record only one
   of those and was wrong three ways.
+- **A change to `concepts.json` needs `EnrichedPosting.CurrentVersion` bumped with it.** The
+  vocabulary carries its own version and nothing reads it when deciding staleness:
+  `JobPostingRepository` compares `EnrichedPosting.CurrentVersion` against
+  `JobPostings.EnrichmentVersion`, so a vocabulary edit that leaves the constant alone is an
+  edit no stored posting will ever pick up. Bumping it marks the corpus stale, and a reprocess
+  or the next re-scrape rebuilds the assertions. It also needs `seed-concepts` re-run, because
+  the SQL label tables are a projection of the file - resolution reads the embedded copy, so
+  matching is right either way, but the projection would drift.
 - **Run `dbadmin seed-concepts` after any migration.** The concept tables are a projection of
   the vocabulary shipped in the build; a schema that has moved without them silently stops
   recording assertions for anything new. `deploy.yml` runs it in the same job as `migrate`,
@@ -406,6 +414,15 @@ Each of these cost a red CI run; none of them fail locally.
   reported, never multiplied into the score**: a terse posting whose stated skills are all met
   is a genuine 100. Coverage is recomputed from the components on read rather than stored - it
   is a pure function of them, so a column would be a second copy that could drift.
+- **A lone string-matched concept is not evidence a posting wants anything.** The floor above
+  was still too weak once the corpus was fully extracted: "Home Delivery Driver" scored 94 on
+  one Taxonomy hit - the word "containers", in an advert about delivering physical ones - which
+  the candidate's Kubernetes implied. The model had read that advert and correctly extracted
+  nothing. A Board tag or a Model assertion is a deliberate claim and counts on its own; a
+  Taxonomy hit needs `MinimumTaxonomyOnlyConcepts` of them, because that resolver's own remarks
+  admit it finds things mentioned in passing as readily as things required. **Run the vocabulary
+  fix and the scorer fix together**: the alias that caused it is now `ambiguous`, so the same
+  advert would record a mention rather than an assertion either way.
 - **`AssertionPolarity.Unspecified` is weighted as preferred, not as required.** It is by far the
   most common polarity - only the model pass can tell essential from desirable and it has not
   necessarily run - so treating it as a hard requirement would score most of the corpus at zero.
@@ -415,6 +432,12 @@ Each of these cost a red CI run; none of them fail locally.
   precisely the posting worth surfacing. A re-score that moves the number clears the assessment,
   because the judgement was made against different arithmetic; a re-score that does not move it
   leaves the assessment alone, because paying for it again buys nothing.
+- **The HTTP sweep and the timer sweep cannot share an assessment budget.** A trigger gets
+  roughly 230 seconds and the timer gets minutes; forty pairs at raised reasoning effort does not
+  fit the first. The sweep that followed full extraction was cut off before the model ran at all,
+  leaving every verdict null with nothing saying why. Scoring is deliberately *not* bounded the
+  same way - it is arithmetic over rows already in memory, and stopping half way would rank a
+  profile against an arbitrary subset, which is worse than not ranking it.
 - **The sweep is a timer, not a page load.** `MatchSweepFunction` runs at 03:30 UTC, after the
   ingest and extraction queues have drained. A shortlist that costs model calls to look at is one
   nobody can afford to browse. `run-match-sweep` exists for the case the timer cannot serve -

@@ -68,13 +68,29 @@ public sealed class MatchSweepFunction(
     /// <summary>Ceiling on how many pairs one sweep sends to the model, per profile.</summary>
     private const int MaxAssessments = 40;
 
+    /// <summary>
+    /// How many pairs one HTTP invocation may send to the model.
+    /// </summary>
+    /// <remarks>
+    /// The platform gives an HTTP trigger roughly 230 seconds and the timer minutes, so the
+    /// two cannot share a budget. Assessing forty pairs at raised reasoning effort does not
+    /// fit in the shorter one - the first real sweep after the corpus was extracted was cut
+    /// off before the model ran at all, leaving every verdict null and nothing saying why.
+    ///
+    /// The scoring pass is not bounded the same way. It is arithmetic over rows already in
+    /// memory, it finishes in seconds for the whole corpus, and stopping it half way would
+    /// leave a profile ranked against an arbitrary subset - which is worse than not ranking
+    /// it at all.
+    /// </remarks>
+    private const int MaxAssessmentsPerRequest = 10;
+
     [Function(nameof(MatchSweepFunction))]
     public async Task RunAsync(
         // 03:30 UTC: after the NAS scrape has uploaded and the ingest and extraction queues
         // have drained, and before anybody in the UK opens the dashboard.
         [TimerTrigger("0 30 3 * * *")] TimerInfo timer,
         CancellationToken ct)
-        => await SweepAsync(profileId: null, ct);
+        => await SweepAsync(profileId: null, MaxAssessments, ct);
 
     /// <summary>
     /// The same sweep, on demand.
@@ -96,7 +112,7 @@ public sealed class MatchSweepFunction(
         CancellationToken ct)
     {
         var body = await RequestBody.ReadAsync<SweepRequest>(request, ct);
-        var summary = await SweepAsync(body?.ProfileId, ct);
+        var summary = await SweepAsync(body?.ProfileId, MaxAssessmentsPerRequest, ct);
 
         return new OkObjectResult(summary);
     }
@@ -104,7 +120,7 @@ public sealed class MatchSweepFunction(
     /// <param name="ProfileId">Restrict to one profile. Null sweeps every profile.</param>
     public sealed record SweepRequest(long? ProfileId);
 
-    private async Task<SweepSummary> SweepAsync(long? profileId, CancellationToken ct)
+    private async Task<SweepSummary> SweepAsync(long? profileId, int assessmentLimit, CancellationToken ct)
     {
         var now = time.GetUtcNow();
         var since = now.AddDays(-LookbackDays);
@@ -134,7 +150,7 @@ public sealed class MatchSweepFunction(
         foreach (var id in profileIds)
         {
             scored += await ScoreAsync(id, postings, now, ct);
-            assessed += await AssessAsync(id, ct);
+            assessed += await AssessAsync(id, assessmentLimit, ct);
         }
 
         logger.LogInformation(
@@ -221,15 +237,18 @@ public sealed class MatchSweepFunction(
         };
     }
 
-    private async Task<int> AssessAsync(long profileId, CancellationToken ct)
+    private async Task<int> AssessAsync(long profileId, int assessmentLimit, CancellationToken ct)
     {
         if (assessor is null)
         {
             return 0;
         }
 
+        // Bounded by the caller's budget rather than by the nightly ceiling. Anything left
+        // over stays unassessed and is picked up next time - the shortlist query selects on
+        // exactly that, so a partial pass resumes rather than restarting.
         var shortlist = await matches.GetUnassessedAsync(
-            profileId, AssessmentThreshold, MaxAssessments, ct);
+            profileId, AssessmentThreshold, assessmentLimit, ct);
 
         if (shortlist.Count == 0)
         {
