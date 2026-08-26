@@ -103,6 +103,39 @@ public sealed class ExtractionBatchRepository(JobsDbContext db)
             StringComparer.Ordinal));
     }
 
+    /// <summary>
+    /// The items in a batch that have not yet been written back.
+    /// </summary>
+    /// <remarks>
+    /// <b>What makes collection resumable.</b> Applying a corpus-sized batch takes longer than
+    /// an HTTP gateway allows - 2,459 results timed out three attempts at roughly 230 seconds
+    /// before one completed - so a collection has to be able to stop half way and continue,
+    /// rather than starting over and re-doing work that is already durable.
+    ///
+    /// "Already written" is asked of <c>PostingExtractions</c> rather than tracked on the item,
+    /// because that table is the thing that actually has to be true: its unique key is
+    /// (PostingId, ExtractorVersion, InputHash), and a row there is the definition of applied.
+    /// A separate flag would be a second copy of that fact, free to disagree with it.
+    /// </remarks>
+    public async Task<IReadOnlyDictionary<string, PendingBatchItem>> GetUnappliedAsync(
+        long batchId, int extractorVersion, CancellationToken ct = default)
+    {
+        var items = await db.ExtractionBatchItems
+            .AsNoTracking()
+            .Where(i => i.BatchId == batchId)
+            .Where(i => !db.PostingExtractions.Any(e =>
+                e.PostingId == i.PostingId
+                && e.ExtractorVersion == extractorVersion
+                && e.InputHash == i.InputHash))
+            .Select(i => new PendingBatchItem(i.PostingId, i.InputHash))
+            .ToListAsync(ct);
+
+        return items.ToDictionary(
+            i => i.PostingId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            i => i,
+            StringComparer.Ordinal);
+    }
+
     /// <summary>Closes a batch out with what actually came back.</summary>
     public Task CompleteAsync(
         long batchId,
