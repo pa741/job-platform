@@ -132,7 +132,7 @@ public sealed record MatchResult
     /// 2: a posting answering neither concept axis scores zero instead of inheriting a perfect
     /// score from location alone, and <see cref="Coverage"/> is reported.
     /// </remarks>
-    public const int CurrentVersion = 2;
+    public const int CurrentVersion = 3;
 
     /// <summary>0-100. Rounded once, here, so every consumer shows the same number.</summary>
     public required int Score { get; init; }

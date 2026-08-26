@@ -457,6 +457,8 @@ public sealed class MatchScorerTests
         var unspecified = MatchScorer.Score(
             Candidate(Holds("skill.python")),
             Posting(
+                // A model assertion, so the posting clears the evidence floor on its own; the
+                // taxonomy row beside it is what carries the unstated polarity being tested.
                 Wants("skill.python"),
                 new ConceptAssertion("skill.rust", AssertionSource.Taxonomy)));
 
@@ -588,14 +590,80 @@ public sealed class MatchScorerTests
         // case - only the model pass can tell essential from desirable and it has not
         // necessarily run. Requiring the *required* axis specifically would zero most of the
         // corpus, which would be the same bug pointing the other way.
+        // Model-sourced with no polarity, rather than a bare taxonomy hit: that would trip the
+        // evidence floor and test two rules at once. What is under test here is the polarity,
+        // so the evidence is put beyond question.
         var result = MatchScorer.Score(
             Candidate(Holds("skill.python")),
-            Posting(new ConceptAssertion("skill.python", AssertionSource.Taxonomy)));
+            Posting(new ConceptAssertion("skill.python", AssertionSource.Model)));
 
         Assert.True(result.Score > 0);
         Assert.Equal(
             0,
             result.Components.Single(c => c.Name == MatchComponent.RequiredSkills).Weight);
+    }
+
+    [Fact]
+    public void One_string_matched_concept_cannot_carry_a_score_on_its_own()
+    {
+        // The production shape, exactly: "Home Delivery Driver" scored 94 because a string
+        // search found the word "containers" in an advert about delivering physical ones, the
+        // candidate holds Kubernetes, and Kubernetes implies containerisation. The model pass
+        // had read that advert and correctly extracted nothing.
+        var result = Score(
+            new CandidateFacts
+            {
+                Concepts = [Holds("skill.kubernetes")],
+                LocationCity = "London",
+            },
+            new PostingFacts
+            {
+                PostingId = 1,
+                Concepts = [new ConceptAssertion("skill.containers", AssertionSource.Taxonomy)],
+                LocationCity = "London",
+            });
+
+        Assert.Equal(0, result.Score);
+    }
+
+    [Fact]
+    public void Several_string_matched_concepts_are_evidence_of_technical_work()
+    {
+        // An advert naming three distinct technologies is describing technical work, whatever
+        // any other pass concluded about it.
+        var result = MatchScorer.Score(
+            Candidate(Holds("skill.python"), Holds("skill.sql"), Holds("skill.docker")),
+            Posting(
+                new ConceptAssertion("skill.python", AssertionSource.Taxonomy),
+                new ConceptAssertion("skill.sql", AssertionSource.Taxonomy),
+                new ConceptAssertion("skill.docker", AssertionSource.Taxonomy)));
+
+        Assert.True(result.Score > 0);
+    }
+
+    [Fact]
+    public void One_concept_the_employer_published_is_evidence_on_its_own()
+    {
+        // A board tag is an employer deliberately stating a skill, not a word appearing in
+        // prose. One is enough.
+        var result = MatchScorer.Score(
+            Candidate(Holds("skill.kubernetes")),
+            Posting(new ConceptAssertion("skill.kubernetes", AssertionSource.Board)));
+
+        Assert.True(result.Score > 0);
+    }
+
+    [Fact]
+    public void One_concept_the_model_read_is_evidence_on_its_own()
+    {
+        // A model assertion is a deliberate reading of the advert, and the only source that can
+        // say a requirement is essential at all.
+        var result = MatchScorer.Score(
+            Candidate(Holds("skill.kubernetes")),
+            Posting(new ConceptAssertion(
+                "skill.kubernetes", AssertionSource.Model, AssertionPolarity.Required)));
+
+        Assert.Equal(100, result.Score);
     }
 
     [Fact]
