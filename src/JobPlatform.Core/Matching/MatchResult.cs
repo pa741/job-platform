@@ -131,8 +131,14 @@ public sealed record MatchResult
     /// <remarks>
     /// 2: a posting answering neither concept axis scores zero instead of inheriting a perfect
     /// score from location alone, and <see cref="Coverage"/> is reported.
+    /// 3: briefly required three string-matched concepts before they could carry a score alone.
+    /// 4: withdrawn - counting them was the wrong axis. Measured against the corpus it removed
+    /// one bad match and four good ones, because ".NET Developer" and "Home Delivery Driver"
+    /// both rest on exactly one string match and no threshold separates them. What separated
+    /// them was the vocabulary: "containers" is now ambiguous, so the delivery advert resolves
+    /// to nothing and fails the version 2 floor on its own.
     /// </remarks>
-    public const int CurrentVersion = 3;
+    public const int CurrentVersion = 4;
 
     /// <summary>0-100. Rounded once, here, so every consumer shows the same number.</summary>
     public required int Score { get; init; }

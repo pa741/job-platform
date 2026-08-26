@@ -457,8 +457,6 @@ public sealed class MatchScorerTests
         var unspecified = MatchScorer.Score(
             Candidate(Holds("skill.python")),
             Posting(
-                // A model assertion, so the posting clears the evidence floor on its own; the
-                // taxonomy row beside it is what carries the unstated polarity being tested.
                 Wants("skill.python"),
                 new ConceptAssertion("skill.rust", AssertionSource.Taxonomy)));
 
@@ -601,44 +599,6 @@ public sealed class MatchScorerTests
         Assert.Equal(
             0,
             result.Components.Single(c => c.Name == MatchComponent.RequiredSkills).Weight);
-    }
-
-    [Fact]
-    public void One_string_matched_concept_cannot_carry_a_score_on_its_own()
-    {
-        // The production shape, exactly: "Home Delivery Driver" scored 94 because a string
-        // search found the word "containers" in an advert about delivering physical ones, the
-        // candidate holds Kubernetes, and Kubernetes implies containerisation. The model pass
-        // had read that advert and correctly extracted nothing.
-        var result = Score(
-            new CandidateFacts
-            {
-                Concepts = [Holds("skill.kubernetes")],
-                LocationCity = "London",
-            },
-            new PostingFacts
-            {
-                PostingId = 1,
-                Concepts = [new ConceptAssertion("skill.containers", AssertionSource.Taxonomy)],
-                LocationCity = "London",
-            });
-
-        Assert.Equal(0, result.Score);
-    }
-
-    [Fact]
-    public void Several_string_matched_concepts_are_evidence_of_technical_work()
-    {
-        // An advert naming three distinct technologies is describing technical work, whatever
-        // any other pass concluded about it.
-        var result = MatchScorer.Score(
-            Candidate(Holds("skill.python"), Holds("skill.sql"), Holds("skill.docker")),
-            Posting(
-                new ConceptAssertion("skill.python", AssertionSource.Taxonomy),
-                new ConceptAssertion("skill.sql", AssertionSource.Taxonomy),
-                new ConceptAssertion("skill.docker", AssertionSource.Taxonomy)));
-
-        Assert.True(result.Score > 0);
     }
 
     [Fact]

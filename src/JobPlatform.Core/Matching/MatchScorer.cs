@@ -57,14 +57,6 @@ public static class MatchScorer
     /// <summary>Lost per level of distance when the candidate holds something broader.</summary>
     private const double GeneralisationDecay = 0.15;
 
-    /// <summary>
-    /// How many string-matched concepts a posting needs before they can carry a score alone.
-    /// </summary>
-    /// <remarks>
-    /// See <see cref="HasSubstantiveEvidence"/>. One is a word appearing in an advert; three
-    /// is an advert about technical work.
-    /// </remarks>
-    private const int MinimumTaxonomyOnlyConcepts = 3;
 
     public static MatchResult Score(CandidateFacts candidate, PostingFacts posting, ConceptGraph? graph = null)
     {
@@ -139,7 +131,9 @@ public static class MatchScorer
         // sort below every posting something can be said about, which is the same reason
         // Seniority.Unknown is zero. Coverage is what distinguishes "scored badly" from
         // "could not be scored", so the distinction survives rather than being collapsed.
-        var hasConceptEvidence = HasSubstantiveEvidence(posting.Concepts);
+        var hasConceptEvidence = components.Any(c =>
+            c.Weight > 0
+            && (c.Name == MatchComponent.RequiredSkills || c.Name == MatchComponent.PreferredSkills));
 
         var total = !hasConceptEvidence || totalWeight <= 0
             ? 0
@@ -153,48 +147,6 @@ public static class MatchScorer
             Matched = matches,
             Gaps = gaps,
         };
-    }
-
-    /// <summary>
-    /// Whether a posting says enough about what it wants to be scored on it at all.
-    /// </summary>
-    /// <remarks>
-    /// Requiring merely that <i>some</i> concept axis answered was too weak, and the corpus said
-    /// so as soon as it was fully extracted: "Home Delivery Driver" scored 94. Its entire
-    /// technical footprint was one concept - Containerisation - matched by a string search
-    /// finding the word "containers" in an advert about delivering physical ones. The candidate
-    /// holds Kubernetes, which implies containerisation, so the only axis that answered scored
-    /// full marks and carried the result.
-    ///
-    /// The model pass had read that advert and correctly extracted nothing, which is the signal
-    /// this rule is built on. A <see cref="AssertionSource.Board"/> tag is an employer
-    /// deliberately publishing a skill, and a <see cref="AssertionSource.Model"/> assertion is a
-    /// deliberate reading of the prose; either is evidence that the posting wants something. A
-    /// lone <see cref="AssertionSource.Taxonomy"/> hit is a string appearing somewhere in the
-    /// text, and that resolver's own remarks admit it "finds concepts mentioned in passing as
-    /// readily as ones the role requires".
-    ///
-    /// So one string match cannot carry a score, but several can: an advert containing three
-    /// distinct technologies is describing technical work whatever any other pass concluded.
-    /// The threshold is a judgement rather than a measurement, and it is deliberately low -
-    /// the failure being prevented is a single incidental word deciding a ranking, not honest
-    /// thin evidence being counted.
-    /// </remarks>
-    private static bool HasSubstantiveEvidence(IReadOnlyList<ConceptAssertion> concepts)
-    {
-        var taxonomy = 0;
-
-        foreach (var assertion in concepts)
-        {
-            if (assertion.Source != AssertionSource.Taxonomy)
-            {
-                return true;
-            }
-
-            taxonomy++;
-        }
-
-        return taxonomy >= MinimumTaxonomyOnlyConcepts;
     }
 
     private static void Add(List<MatchComponent> components, string name, double? score, double weight)

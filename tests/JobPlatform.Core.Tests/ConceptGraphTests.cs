@@ -8,6 +8,44 @@ public sealed class ConceptGraphTests
     private static readonly ConceptGraph Graph = ConceptGraph.Default;
 
     [Fact]
+    public void A_delivery_advert_moving_containers_resolves_no_technology()
+    {
+        // Verbatim from posting 2046, "Home Delivery Driver" at Sainsbury's, which scored 94
+        // against a backend profile and ranked sixth in the whole corpus. Its entire technical
+        // footprint was this sentence: the vocabulary held "containers" as a plain alias of
+        // Containerisation, the candidate holds Kubernetes, and Kubernetes implies
+        // containerisation - so the only axis that answered scored full marks.
+        var result = ConceptGraph.Default.Resolve(
+            AssertionSource.Taxonomy,
+            "Home Delivery Driver",
+            "You will have the tools and technology to do your job brilliantly, and moving "
+                + "shopping containers up to 15KG.");
+
+        Assert.DoesNotContain(
+            result.Assertions, a => a.ConceptKey == "skill.containers");
+
+        // Not silently discarded either. Recording the mention is what separates "nobody asked
+        // for this" from "we could not tell", and it is where the next vocabulary fix comes from.
+        Assert.Contains(
+            result.Mentions,
+            m => m.SurfaceForm.Equals("containers", StringComparison.OrdinalIgnoreCase)
+                && m.Reason == MentionReason.Ambiguous);
+    }
+
+    [Fact]
+    public void An_advert_that_names_the_technology_still_resolves_it()
+    {
+        // The other half: making "containers" ambiguous must not cost us the adverts that mean
+        // it. These are the forms a technical posting actually uses.
+        var result = ConceptGraph.Default.Resolve(
+            AssertionSource.Taxonomy,
+            "Platform Engineer",
+            "Experience with containerisation and orchestration.");
+
+        Assert.Contains(result.Assertions, a => a.ConceptKey == "skill.containers");
+    }
+
+    [Fact]
     public void Vocabulary_loads_from_the_embedded_resource()
     {
         // Guards the csproj entry as much as the loader: without an <EmbeddedResource> for

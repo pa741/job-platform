@@ -55,6 +55,17 @@ public sealed class ReprocessBlobFunction(
     /// </remarks>
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(150);
 
+    /// <summary>Blobs per listing page, independent of what the caller asked for.</summary>
+    /// <remarks>
+    /// The budget is only checked where the continuation token is accurate, which is a page
+    /// boundary - so the page size is what decides how often it can be checked at all. Sizing
+    /// pages to the caller's limit, as this first did, put exactly one boundary in a call and
+    /// left the budget unable to interrupt anything: fifty slow blobs ran to completion or to a
+    /// gateway timeout, which is the failure the budget was added to prevent. Small pages cost
+    /// an extra listing round trip each and buy a check every few blobs.
+    /// </remarks>
+    private const int PageSize = 5;
+
     [Function(nameof(ReprocessBlobFunction))]
     public async Task<IActionResult> RunAsync(
         [HttpTrigger(AuthorizationLevel.Function, "post", Route = "reprocess")]
@@ -79,12 +90,13 @@ public sealed class ReprocessBlobFunction(
         var truncated = false;
 
         // Paged rather than a flat enumeration, because the page's continuation token is what
-        // makes a partial pass resumable - and it is only accurate at a page boundary. Sizing
-        // the page to the limit is what lets the loop stop on one: the caller's bound and the
-        // page boundary become the same place, so nothing is skipped when work is handed back.
+        // makes a partial pass resumable - and it is only accurate at a page boundary, so the
+        // loop only ever stops on one and nothing is skipped when work is handed back. The page
+        // is deliberately smaller than the limit: boundaries are the only place the bounds can
+        // be applied, so a call needs several of them.
         var pages = landingContainer
             .GetBlobsAsync(prefix: prefix, cancellationToken: ct)
-            .AsPages(body?.ContinuationToken, pageSizeHint: limit);
+            .AsPages(body?.ContinuationToken, pageSizeHint: Math.Min(limit, PageSize));
 
         // Null once the listing is exhausted, which is how the caller knows it is done.
         string? continuation = null;
