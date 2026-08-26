@@ -350,6 +350,13 @@ Each of these cost a red CI run; none of them fail locally.
   is wrong, self-consistent and undetectable. A batch API echoes a `custom_id` per request, so
   correlation is the platform's problem - packing would trade that guarantee away to save
   roughly a pound across the whole corpus.
+- **Collection is bounded and resumable, because a corpus-sized batch outlasts an HTTP
+  request.** Applying 2,459 results returned 504 three times at the gateway's ~230s before one
+  got through; the work survived only because the writer is idempotent. The timer owns this
+  path and gets a generous budget; the HTTP route is a nudge and applies at most a few hundred,
+  leaving the batch open. What is "already applied" is asked of `PostingExtractions` rather than
+  flagged on the item - that table's unique key is the definition of applied, and a flag would
+  be a second copy of the fact, free to disagree.
 - **`ExtractionBatchItems.InputHash` is captured at submission, never recomputed.** A batch is
   answered up to a day later and the scraper may have re-listed the posting with edited text in
   between. The extraction row has to be keyed on what was actually read, or the idempotency key

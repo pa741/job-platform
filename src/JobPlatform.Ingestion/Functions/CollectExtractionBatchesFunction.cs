@@ -38,11 +38,32 @@ public sealed class CollectExtractionBatchesFunction(
     /// <summary>How many open batches one tick will poll. Small; there is rarely more than one.</summary>
     private const int MaxBatchesPerTick = 5;
 
+    /// <summary>
+    /// How many results one timer invocation writes back.
+    /// </summary>
+    /// <remarks>
+    /// Generous, because the timer has minutes rather than seconds. A batch bigger than this
+    /// is not lost - it stays open and the next tick continues where this one stopped.
+    /// </remarks>
+    private const int TimerApplyLimit = 5_000;
+
+    /// <summary>
+    /// How many results one HTTP invocation writes back.
+    /// </summary>
+    /// <remarks>
+    /// Small, because the platform gives an HTTP trigger roughly 230 seconds and a
+    /// corpus-sized collection takes longer than that. Three attempts at 2,459 results
+    /// returned 504 before one got through, and the work survived only because the writer is
+    /// idempotent - which is luck to lean on rather than design. This route is a nudge for
+    /// something the timer would do anyway, so it does a bounded amount and says what is left.
+    /// </remarks>
+    private const int HttpApplyLimit = 400;
+
     [Function(nameof(CollectExtractionBatchesFunction))]
     public async Task RunAsync(
         [TimerTrigger("0 20 * * * *")] TimerInfo timer,
         CancellationToken ct)
-        => await CollectAsync(ct);
+        => await CollectAsync(TimerApplyLimit, ct);
 
     /// <summary>
     /// The same collection, on demand.
@@ -58,9 +79,9 @@ public sealed class CollectExtractionBatchesFunction(
         [HttpTrigger(AuthorizationLevel.Function, "post", Route = "collect-extraction-batches")]
         HttpRequest request,
         CancellationToken ct)
-        => new OkObjectResult(await CollectAsync(ct));
+        => new OkObjectResult(await CollectAsync(HttpApplyLimit, ct));
 
-    private async Task<object> CollectAsync(CancellationToken ct)
+    private async Task<object> CollectAsync(int applyLimit, CancellationToken ct)
     {
         if (extractor is null)
         {
@@ -76,9 +97,18 @@ public sealed class CollectExtractionBatchesFunction(
 
         var applied = 0;
         var stillRunning = 0;
+        var remaining = 0;
 
         foreach (var providerBatchId in open)
         {
+            if (applied >= applyLimit)
+            {
+                // This invocation has spent its budget. The batch stays open, so the next
+                // one picks it up rather than this one running past its deadline.
+                stillRunning++;
+                continue;
+            }
+
             var outcome = await extractor.CollectAsync(providerBatchId, ct);
 
             if (outcome is null)
@@ -96,14 +126,23 @@ public sealed class CollectExtractionBatchesFunction(
                 continue;
             }
 
-            applied += await ApplyAsync(providerBatchId, outcome, ct);
+            var (written, left) = await ApplyAsync(providerBatchId, outcome, applyLimit - applied, ct);
+
+            applied += written;
+            remaining += left;
+
+            if (left > 0)
+            {
+                stillRunning++;
+            }
         }
 
         logger.LogInformation(
-            "Batch collection: {Applied} extraction(s) applied, {Running} batch(es) still open.",
-            applied, stillRunning);
+            "Batch collection: {Applied} applied, {Remaining} left to write, "
+            + "{Running} batch(es) still open.",
+            applied, remaining, stillRunning);
 
-        return new { collected = applied, stillRunning };
+        return new { collected = applied, stillRunning, remaining };
     }
 
     /// <summary>
@@ -116,14 +155,15 @@ public sealed class CollectExtractionBatchesFunction(
     /// reason: an extraction applied to the wrong posting is wrong, self-consistent and
     /// undetectable afterwards.
     /// </remarks>
-    private async Task<int> ApplyAsync(string providerBatchId, BatchOutcome outcome, CancellationToken ct)
+    private async Task<(int Written, int Remaining)> ApplyAsync(
+        string providerBatchId, BatchOutcome outcome, int applyLimit, CancellationToken ct)
     {
         var record = await batches.GetItemsAsync(providerBatchId, ct);
 
         if (record is null)
         {
             logger.LogWarning("Collected batch {BatchId} has no local record; ignoring.", providerBatchId);
-            return 0;
+            return (0, 0);
         }
 
         var (batchId, items) = record.Value;
@@ -138,20 +178,32 @@ public sealed class CollectExtractionBatchesFunction(
                 providerBatchId, outcome.State, outcome.Error);
 
             await batches.CompleteAsync(batchId, outcome.State, 0, items.Count, outcome.Error, now, ct);
-            return 0;
+            return (0, 0);
         }
+
+        // Only what is not already durable. A previous invocation may have been cut off part
+        // way through - by the gateway, or by its own budget - and rewriting what it managed
+        // would spend the whole allowance redoing settled work.
+        var pending = await batches.GetUnappliedAsync(batchId, DocumentExtraction.CurrentVersion, ct);
 
         var conceptIds = await writer.GetConceptIdsAsync(ct);
 
         var succeeded = 0;
         var failed = 0;
+        var deferred = 0;
 
         foreach (var result in outcome.Results)
         {
-            if (!items.TryGetValue(result.CorrelationId, out var item))
+            if (!items.ContainsKey(result.CorrelationId))
             {
                 logger.LogWarning(
                     "Batch {BatchId} returned an id that was never submitted; dropping it.", providerBatchId);
+                continue;
+            }
+
+            // Written by an earlier invocation, so nothing to do.
+            if (!pending.TryGetValue(result.CorrelationId, out var item))
+            {
                 continue;
             }
 
@@ -161,17 +213,35 @@ public sealed class CollectExtractionBatchesFunction(
                 continue;
             }
 
+            if (succeeded >= applyLimit)
+            {
+                deferred++;
+                continue;
+            }
+
             await writer.ApplyAsync(item.PostingId, item.InputHash, extraction, conceptIds, now, ct);
             succeeded++;
         }
 
         await db.SaveChangesAsync(ct);
+
+        if (deferred > 0)
+        {
+            // Deliberately not closed out. The batch stays Running so the next invocation
+            // resumes it, and the provider keeps the results available meanwhile.
+            logger.LogInformation(
+                "Batch {BatchId}: wrote {Succeeded}, {Deferred} left for the next pass.",
+                providerBatchId, succeeded, deferred);
+
+            return (succeeded, deferred);
+        }
+
         await batches.CompleteAsync(batchId, outcome.State, succeeded, failed, null, now, ct);
 
         logger.LogInformation(
             "Batch {BatchId}: {Succeeded} extracted, {Failed} failed, of {Requested} submitted.",
             providerBatchId, succeeded, failed, items.Count);
 
-        return succeeded;
+        return (succeeded, 0);
     }
 }
