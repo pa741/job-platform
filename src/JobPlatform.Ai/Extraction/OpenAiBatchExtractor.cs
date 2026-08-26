@@ -81,7 +81,7 @@ public sealed class OpenAiBatchExtractor(
 
         try
         {
-            var jsonl = BuildRequestFile(usable);
+            var jsonl = OpenAiBatchFormat.BuildRequestFile(usable, _options);
 
             // Uploaded as a file rather than posted inline: the API takes a file id, and a
             // corpus-sized submission is tens of megabytes of JSONL.
@@ -144,7 +144,7 @@ public sealed class OpenAiBatchExtractor(
             var root = document.RootElement;
 
             var status = ExtractionPrompt.String(root, "status");
-            var state = ParseState(status);
+            var state = OpenAiBatchFormat.ParseState(status);
 
             if (state == BatchState.Running)
             {
@@ -180,98 +180,22 @@ public sealed class OpenAiBatchExtractor(
         }
     }
 
-    /// <summary>
-    /// One JSON object per line, each a complete chat completion request.
-    /// </summary>
-    /// <remarks>
-    /// The <c>custom_id</c> is what makes the whole path safe: the provider echoes it beside the
-    /// answer, so a caller never has to infer which document a result belongs to. The
-    /// documentation is explicit that output order does not match input order, which is exactly
-    /// the situation the synchronous packer has to defend against by hand.
-    /// </remarks>
-    private string BuildRequestFile(IReadOnlyList<BatchExtractionItem> items)
-    {
-        var builder = new StringBuilder(items.Count * 8_000);
-
-        foreach (var item in items)
-        {
-            var body = new Dictionary<string, object?>
-            {
-                ["model"] = _options.Model,
-                ["messages"] = new[]
-                {
-                    new { role = "user", content = ExtractionPrompt.ForSingleDocument(item.Request) },
-                },
-                // JSON mode, so a response is guaranteed to parse. The schema itself is carried
-                // by the prompt, so this guarantees valid JSON rather than the right shape -
-                // which is why the parsing downstream stays defensive.
-                ["response_format"] = new { type = "json_object" },
-                ["max_completion_tokens"] = _options.MaxOutputTokens,
-                ["reasoning_effort"] = _options.ReasoningEffort,
-            };
-
-            builder.AppendLine(JsonSerializer.Serialize(new
-            {
-                custom_id = item.CorrelationId,
-                method = "POST",
-                url = "/v1/chat/completions",
-                body,
-            }));
-        }
-
-        return builder.ToString();
-    }
-
     private async Task<List<BatchResult>> ReadResultsAsync(string fileId, CancellationToken ct)
     {
         var results = new List<BatchResult>();
         var content = await files.DownloadFileAsync(fileId, ct);
 
-        foreach (var line in Lines(content.Value.ToString()))
+        foreach (var line in OpenAiBatchFormat.Lines(content.Value.ToString()))
         {
-            using var document = JsonDocument.Parse(line);
-            var root = document.RootElement;
-
-            var correlationId = ExtractionPrompt.String(root, "custom_id");
-
-            if (correlationId is null)
+            if (OpenAiBatchFormat.ReadOutputLine(line, _options.Model) is { } result)
             {
-                continue;
+                results.Add(result);
             }
-
-            var body = root.TryGetProperty("response", out var response)
-                && response.TryGetProperty("body", out var b)
-                    ? b
-                    : (JsonElement?)null;
-
-            var content_ = body is null ? null : ReadMessageContent(body.Value);
-
-            if (content_ is null)
+            else
             {
-                results.Add(new BatchResult(correlationId, null, "The response carried no message content."));
-                continue;
-            }
-
-            // The same net the synchronous path keeps: JSON mode is a request to a provider
-            // rather than a property of the transport, so a fenced or prose-wrapped body is
-            // absorbed rather than treated as a failure.
-            var json = AiJson.ExtractJsonObject(content_);
-
-            if (json is null)
-            {
-                results.Add(new BatchResult(correlationId, null, "The response carried no JSON object."));
-                continue;
-            }
-
-            try
-            {
-                using var parsed = JsonDocument.Parse(json);
-                results.Add(new BatchResult(
-                    correlationId, ExtractionPrompt.Parse(parsed.RootElement, _options.Model), null));
-            }
-            catch (JsonException ex)
-            {
-                results.Add(new BatchResult(correlationId, null, $"Malformed JSON: {ex.Message}"));
+                // No correlation id, so there is nothing to attach the answer to. Guessing is
+                // the failure this whole design exists to avoid.
+                logger?.LogWarning("A batch result line carried no custom_id; dropping it.");
             }
         }
 
@@ -283,54 +207,16 @@ public sealed class OpenAiBatchExtractor(
         var results = new List<BatchResult>();
         var content = await files.DownloadFileAsync(fileId, ct);
 
-        foreach (var line in Lines(content.Value.ToString()))
+        foreach (var line in OpenAiBatchFormat.Lines(content.Value.ToString()))
         {
-            using var document = JsonDocument.Parse(line);
-            var root = document.RootElement;
-
-            if (ExtractionPrompt.String(root, "custom_id") is not { } correlationId)
+            if (OpenAiBatchFormat.ReadErrorLine(line) is { } result)
             {
-                continue;
+                results.Add(result);
             }
-
-            var message = root.TryGetProperty("error", out var error)
-                ? ExtractionPrompt.String(error, "message") ?? error.GetRawText()
-                : "The provider reported an unspecified error.";
-
-            results.Add(new BatchResult(correlationId, null, ExtractionPrompt.Truncate(message, 500)));
         }
 
         return results;
     }
-
-    /// <summary>The assistant's text, from a chat completion body.</summary>
-    private static string? ReadMessageContent(JsonElement body)
-        => body.TryGetProperty("choices", out var choices)
-            && choices.ValueKind == JsonValueKind.Array
-            && choices.GetArrayLength() > 0
-            && choices[0].TryGetProperty("message", out var message)
-                ? ExtractionPrompt.String(message, "content")
-                : null;
-
-    private static IEnumerable<string> Lines(string content)
-        => content.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-    /// <summary>
-    /// The provider's status vocabulary, reduced to what a caller can act on.
-    /// </summary>
-    /// <remarks>
-    /// <c>validating</c> and <c>in_progress</c> both mean wait, so both are Running. An unknown
-    /// status is treated as Running rather than as a failure: a provider adding a state should
-    /// make the collector poll again, not make it discard a batch that is still working.
-    /// </remarks>
-    private static BatchState ParseState(string? status) => status switch
-    {
-        "completed" => BatchState.Completed,
-        "failed" => BatchState.Failed,
-        "expired" => BatchState.Expired,
-        "cancelled" or "cancelling" => BatchState.Cancelled,
-        _ => BatchState.Running,
-    };
 
     private static string? ReadId(PipelineResponse response)
     {

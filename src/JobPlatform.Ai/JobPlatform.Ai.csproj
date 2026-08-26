@@ -22,4 +22,11 @@
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The wire format of a batch is an internal detail and stays one; the tests that pin it
+         are the two things most worth pinning - that a request carries the correlation id the
+         collector looks for, and that a result is matched to it rather than to its position. -->
+    <InternalsVisibleTo Include="JobPlatform.Api.Tests" />
+  </ItemGroup>
+
 </Project>
