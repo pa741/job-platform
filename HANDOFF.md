@@ -9,8 +9,9 @@ withdrawn evidence-count rule, and the bounded admin endpoints — is described 
 and in the `CurrentVersion` remarks on `EnrichedPosting` and `MatchResult`.
 
 **Deployed and verified.** `main` is at the commit the container app runs, the corpus has been
-re-enriched, and the working tree is clean. No sweep has run because no profiles exist. See §3
-for what deploying this involved, including a real defect it surfaced.
+re-enriched, and the working tree is clean. No sweep has run because no profiles exist. §3 is
+what deploying §1.1 involved — and it is where §1.3 came from, because driving the
+re-enrichment is what exposed the bound that could not act.
 
 ---
 
@@ -90,6 +91,42 @@ and the newer run still lands last.
 
 ---
 
+### 1.3 The reprocess endpoint's bound can act, and is tested
+
+Found by driving §3's re-enrichment: `POST /api/reprocess` returned **504 for `limit=50` and
+again for `limit=25`** — the same gateway timeout 1.5 was written to prevent.
+
+The reasoning behind the original bound was right. The continuation token is only accurate at
+a page boundary, so that is the only place it can be applied. What was missed is that **a page
+can cost more than the whole budget**: measured across the run, pages of five blobs took 4s,
+11s, 12s, 47s and **151s** against a 150s budget. A check passing at 149s committed the call to
+a whole further page with nothing able to interrupt it, and the gateway gave up at ~240s.
+Worse, a 504 carries no token, so the caller lost its place and restarted the listing —
+survivable only because the writes are idempotent, the second time that property has covered
+for a bound that could not act.
+
+The fix is not a smaller budget; no budget survives a page that costs more than all of it. The
+loop is now `BoundedWalk`, which stops **between items** and hands back the token for the start
+of the page it was in. The resume point is still a real boundary, so nothing is skipped, and
+the cost is redoing that page's finished items — free here, because a blob whose content has
+not changed converges in about a second. Overshoot past the budget falls from one page to one
+item.
+
+It will not stop before a page has completed, deliberately: bailing out of the first page would
+hand back the token the call arrived with, and the next call — with a fresh clock — would stop
+in the same place forever.
+
+`BoundedWalk` is generic over the item and takes a clock, so **it needs no Azure types to
+test**, which is what unblocked the test that had been open since the endpoint was written.
+That is the lesson worth carrying: the previous handoff called this untestable because faking a
+`BlobContainerClient` is hard, and the answer was to stop trying — the bound was never about
+blobs. `tests/JobPlatform.Ingestion.Tests` is new and holds seven tests, each a shape that
+actually happened, including the residual limit: a single item slower than the whole budget
+still overshoots by its own duration, and the margin to the gateway's ~230s absorbs it. The
+production-shape test was checked against the pre-fix code and fails there.
+
+---
+
 ## 2. How the measurement was done
 
 Worth repeating rather than reinventing, because it is what caught 1.4 and what changed the
@@ -121,7 +158,7 @@ Two environment notes, since neither is obvious:
 
 ## 3. What deploying this involved
 
-Done, in this order. Recorded because step 2 surfaced a defect.
+Done, in this order. Recorded because step 2 surfaced the defect §1.3 fixes.
 
 1. **Push.** `.github/workflows/deploy.yml` is in the workflow's own `paths:` filter, so the
    concurrency change deployed itself. The group is read from each run's own copy of the file,
@@ -133,9 +170,10 @@ Done, in this order. Recorded because step 2 surfaced a defect.
 
    Verified through `GET /api/v1/postings/facets`: `skill.agile` fell from 1,388 assertions to
    625. The 749 `Taxonomy` ones are gone, because the description matcher no longer produces
-   them; the 554 `Model` readings and 85 `Board` tags survived, which is 1.3 doing exactly what
-   it should — enrichment clears what enrichment writes. The floor is keyed on the concept, so
-   the survivors still cannot carry a match alone.
+   them; the 554 `Model` readings and 85 `Board` tags survived, which is the *previous* round's
+   "each producer clears only its own rows" doing exactly what it should — enrichment clears what
+   enrichment writes. The floor is keyed on the concept, so the survivors still cannot carry a
+   match alone.
 3. **`seed-concepts` was not required.** `ConceptSeeder` projects labels, relations and the
    closure; `tagOnly` is not among them, so the SQL projection had not drifted. It is idempotent,
    and `deploy.yml` runs it beside `migrate` on a dispatch anyway.
@@ -215,43 +253,7 @@ Developer` `Unknown`. It matches on title words and has no rule for the language
 shape that names half the corpus. That is worth fixing on its own merits — the API exposes
 `roleFamily` as a browse filter, so the miss is user-visible today, quite apart from matching.
 
-### 4.3 `limit` is not a bound on the reprocess endpoint, and it 504s
-
-Found by driving the re-enrichment in §3, and it is the same gateway timeout 1.5 was written to
-prevent. `POST /api/reprocess` returned **504 for `limit=50` and again for `limit=25`**.
-
-The bound logic is correct and the reasoning behind it is correct — the continuation token is
-only accurate at a page boundary, so that is the only place the budget can be applied. The gap
-is that **`Budget` is 150s and a single page can take longer than the whole budget**. Measured
-across the run: pages of 5 blobs took 4s, 11s, 12s, 47s and **151s**. Once the check at the end
-of a page passes at, say, 149s, the call is committed to a whole further page with no way to
-interrupt, and the gateway gives up at ~240s.
-
-Two consequences, and the second is worse:
-
-- `limit` above one page is not honoured. Only `PageSize` really bounds a call.
-- **A 504 returns no continuation token**, so the caller loses its place and restarts from the
-  beginning of the listing. That is survivable only because the writes are idempotent — the
-  same property that saved the batch collector, relied on twice now.
-
-Driving it one page per call (`limit: 5`) makes the gateway irrelevant and is what completed the
-run: 25 blobs, 0 failures, 5 calls. That is the workaround, not the fix. The fix is for the
-budget to bound what a page may start rather than only what follows one — check the remaining
-budget *before* entering a page and stop if what is left cannot plausibly cover it, or shrink
-`PageSize` toward 1 as the budget runs down. Either way the token stays accurate, because both
-still act at a boundary.
-
-Worth pairing with the test below, since this is precisely the untested bound.
-
-### 4.4 The reprocess endpoint has no test
-
-Unchanged from the previous handoff, and 4.3 is the argument for it. There is no ingestion test
-project and nothing in the suite fakes a `BlobContainerClient`, so standing one up is a larger
-change than the fix was. What is untested is a loop bound — the category that has caused real
-incidents here more than once, including the gateway timeout that bounded collection in the
-first place, and now this one.
-
-### 4.5 Extraction coverage
+### 4.3 Extraction coverage
 
 The previous handoff recorded a graded share of 0.490 and called this the highest-leverage work
 available. Measured directly this round, **92.6% of the corpus (3,775 of 4,078 postings) carries

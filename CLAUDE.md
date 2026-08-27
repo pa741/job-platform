@@ -375,6 +375,24 @@ Each of these cost a red CI run; none of them fail locally.
   leaving the batch open. What is "already applied" is asked of `PostingExtractions` rather than
   flagged on the item - that table's unique key is the definition of applied, and a flag would
   be a second copy of the fact, free to disagree.
+- **A bound that can only act between pages is not a bound.** `BoundedWalk` is the reprocess
+  endpoint's loop, kept apart from the function and free of Azure types so it can be asserted
+  exactly - the same reason `MatchScorer` takes records rather than a database. Its first
+  version read the clock only at a page boundary, because that is the only place the
+  continuation token is accurate, and was therefore committed to a whole further page every time
+  the check passed. Measured while re-enriching the corpus, pages of five blobs took 4s, 11s,
+  12s, 47s and **151s** - one page outlasting the entire 150s budget - so a call that checked at
+  149s ran to ~225s and the gateway gave up. **A 504 carries no continuation token**, so the
+  caller loses its place and restarts the listing; that was survivable only because the writes
+  are idempotent, which is the second time that property has covered for a bound that could not
+  act.
+  It now stops *between items* and hands back the token for the start of the page it was in, so
+  the resume point is still a real boundary and nothing is skipped - at the cost of redoing that
+  page's finished items, which idempotency makes free. It will not stop before one page has
+  completed: bailing out of the first page hands back the token the call arrived with, and the
+  next call would stop in the same place forever. The residual limit is pinned in a test - a
+  single item slower than the whole budget still overshoots by its own duration, and the margin
+  to the gateway's ~230s is what absorbs it.
 - **`ExtractionBatchItems.InputHash` is captured at submission, never recomputed.** A batch is
   answered up to a day later and the scraper may have re-listed the posting with edited text in
   between. The extraction row has to be keyed on what was actually read, or the idempotency key
