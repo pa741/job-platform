@@ -8,8 +8,9 @@ vocabulary bug, the enrichment version coupling, each producer clearing only its
 withdrawn evidence-count rule, and the bounded admin endpoints — is described in `CLAUDE.md`
 and in the `CurrentVersion` remarks on `EnrichedPosting` and `MatchResult`.
 
-**Not yet deployed.** The changes below are committed but the corpus has not been re-enriched
-and no sweep has run against the new scorer. See §3.
+**Deployed and verified.** `main` is at the commit the container app runs, the corpus has been
+re-enriched, and the working tree is clean. No sweep has run because no profiles exist. See §3
+for what deploying this involved, including a real defect it surfaced.
 
 ---
 
@@ -118,30 +119,41 @@ Two environment notes, since neither is obvious:
 
 ---
 
-## 3. Deploying this
+## 3. What deploying this involved
 
-Ordered, because the steps depend on each other.
+Done, in this order. Recorded because step 2 surfaced a defect.
 
 1. **Push.** `.github/workflows/deploy.yml` is in the workflow's own `paths:` filter, so the
-   concurrency change deploys itself. Note the group is read from each run's own copy of the
-   file — it takes effect from this run onward and cannot rescue anything already queued.
-2. **Re-enrich the corpus.** `EnrichedPosting.CurrentVersion` went to 4, which marks every
-   stored posting stale; until a reprocess runs, stored rows keep the `skill.agile` Taxonomy
-   assertions the vocabulary no longer produces. The floor does not depend on this — it is keyed
-   on the concept, not on the assertion's source, and was measured against the corpus as it
-   stands today — so this is cleanup rather than a prerequisite. Drive `ReprocessBlobFunction`
-   until it reports `done`.
-3. **`seed-concepts` is not strictly required this time.** `ConceptSeeder` projects labels,
-   relations and the closure; `tagOnly` is not among them, so the SQL projection has not drifted.
-   It is idempotent, and `deploy.yml` runs it beside `migrate` on a dispatch anyway.
-4. **Re-sweep.** `MatchResult.CurrentVersion` went to 5, so every stored match is stale. There
-   are currently **no profiles**, so nothing needs re-scoring until one is created —
-   `GET /api/v1/matches` returns 404 until then.
+   concurrency change deployed itself. The group is read from each run's own copy of the file,
+   so it takes effect from that run onward and cannot rescue anything already queued.
+2. **Re-enrich the corpus.** `EnrichedPosting.CurrentVersion` went to 4, marking every stored
+   posting stale. 25 blobs, 0 failures. The floor never depended on this — it keys on the
+   concept, not on the assertion's source, and was measured against the corpus before the
+   reprocess — so this was cleanup rather than a prerequisite.
+
+   Verified through `GET /api/v1/postings/facets`: `skill.agile` fell from 1,388 assertions to
+   625. The 749 `Taxonomy` ones are gone, because the description matcher no longer produces
+   them; the 554 `Model` readings and 85 `Board` tags survived, which is 1.3 doing exactly what
+   it should — enrichment clears what enrichment writes. The floor is keyed on the concept, so
+   the survivors still cannot carry a match alone.
+3. **`seed-concepts` was not required.** `ConceptSeeder` projects labels, relations and the
+   closure; `tagOnly` is not among them, so the SQL projection had not drifted. It is idempotent,
+   and `deploy.yml` runs it beside `migrate` on a dispatch anyway.
+4. **No re-sweep.** `MatchResult.CurrentVersion` went to 5, so every stored match is stale, but
+   there are **no profiles** — `GET /api/v1/matches` returns 404 until one is created.
 
 Verify the deployed image is the commit you expect:
 
 ```bash
 az containerapp list --query "[0].properties.template.containers[0].image" -o tsv
+```
+
+A token for the API, which is how the facet check above was done without touching SQL:
+
+```bash
+CLIENT=$(az containerapp show -n <app> -g <rg> \
+  --query "properties.template.containers[0].env[?name=='AzureAd__ClientId'].value | [0]" -o tsv)
+az account get-access-token --resource "api://$CLIENT" --query accessToken -o tsv
 ```
 
 ---
@@ -203,14 +215,43 @@ Developer` `Unknown`. It matches on title words and has no rule for the language
 shape that names half the corpus. That is worth fixing on its own merits — the API exposes
 `roleFamily` as a browse filter, so the miss is user-visible today, quite apart from matching.
 
-### 4.3 The reprocess endpoint has no test
+### 4.3 `limit` is not a bound on the reprocess endpoint, and it 504s
 
-Unchanged from the previous handoff. There is no ingestion test project and nothing in the
-suite fakes a `BlobContainerClient`, so standing one up is a larger change than the fix was.
-What is untested is a loop bound — the category that has caused real incidents here more than
-once, including the gateway timeout that bounded collection in the first place.
+Found by driving the re-enrichment in §3, and it is the same gateway timeout 1.5 was written to
+prevent. `POST /api/reprocess` returned **504 for `limit=50` and again for `limit=25`**.
 
-### 4.4 Extraction coverage
+The bound logic is correct and the reasoning behind it is correct — the continuation token is
+only accurate at a page boundary, so that is the only place the budget can be applied. The gap
+is that **`Budget` is 150s and a single page can take longer than the whole budget**. Measured
+across the run: pages of 5 blobs took 4s, 11s, 12s, 47s and **151s**. Once the check at the end
+of a page passes at, say, 149s, the call is committed to a whole further page with no way to
+interrupt, and the gateway gives up at ~240s.
+
+Two consequences, and the second is worse:
+
+- `limit` above one page is not honoured. Only `PageSize` really bounds a call.
+- **A 504 returns no continuation token**, so the caller loses its place and restarts from the
+  beginning of the listing. That is survivable only because the writes are idempotent — the
+  same property that saved the batch collector, relied on twice now.
+
+Driving it one page per call (`limit: 5`) makes the gateway irrelevant and is what completed the
+run: 25 blobs, 0 failures, 5 calls. That is the workaround, not the fix. The fix is for the
+budget to bound what a page may start rather than only what follows one — check the remaining
+budget *before* entering a page and stop if what is left cannot plausibly cover it, or shrink
+`PageSize` toward 1 as the budget runs down. Either way the token stays accurate, because both
+still act at a boundary.
+
+Worth pairing with the test below, since this is precisely the untested bound.
+
+### 4.4 The reprocess endpoint has no test
+
+Unchanged from the previous handoff, and 4.3 is the argument for it. There is no ingestion test
+project and nothing in the suite fakes a `BlobContainerClient`, so standing one up is a larger
+change than the fix was. What is untested is a loop bound — the category that has caused real
+incidents here more than once, including the gateway timeout that bounded collection in the
+first place, and now this one.
+
+### 4.5 Extraction coverage
 
 The previous handoff recorded a graded share of 0.490 and called this the highest-leverage work
 available. Measured directly this round, **92.6% of the corpus (3,775 of 4,078 postings) carries
