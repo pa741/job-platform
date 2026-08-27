@@ -27,6 +27,8 @@ public sealed record EnrichedPosting
     /// 3: "containers" is ambiguous rather than a plain alias of Containerisation.
     /// 4: "agile" is tagOnly, so the description matcher stops asserting it. A board that names
     /// it in its own skills field still does, which is the whole point of the flag.
+    /// 5: ".NET", "ASP.NET" and "Node.js" survive tokenisation, so RoleFamily reads the titles
+    /// that name them instead of answering Unknown.
     ///
     /// <b>A change to <c>concepts.json</c> is a change to what the classifiers produce, so it
     /// belongs here too.</b> The vocabulary carries its own version, but nothing reads that when
@@ -36,7 +38,7 @@ public sealed record EnrichedPosting
     /// stale so a reprocess, or simply the next day the posting is re-scraped, rebuilds its
     /// assertions.
     /// </remarks>
-    public const int CurrentVersion = 4;
+    public const int CurrentVersion = 5;
 
     public required JobPosting Posting { get; init; }
 

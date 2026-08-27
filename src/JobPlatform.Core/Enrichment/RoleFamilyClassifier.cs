@@ -34,7 +34,7 @@ public static class RoleFamilyClassifier
              ("delivery", "manager"), ("head", "technology"), ("engineering", "lead")]),
 
         new(RoleFamily.Design,
-            ["designer", "ux", "ui/ux", "design"],
+            ["designer", "ux", "design"],
             [("product", "designer"), ("user", "experience")]),
 
         new(RoleFamily.Product,
@@ -91,8 +91,11 @@ public static class RoleFamilyClassifier
         // says nothing about the work, so classifying it as Backend would inflate that
         // family with every generic listing. Unknown is the honest answer for both.
         new(RoleFamily.Backend,
+            // Spelled as they survive TitleTokenizer, not as they appear in a title:
+            // ".NET" and "Node.js" reach here as "dotnet" and "nodejs". Writing the dotted
+            // forms here is what made three entries dead for as long as this file existed.
             ["backend", "java", "python", "golang", "ruby", "php", "scala", "kotlin",
-             "rust", "elixir", "c#", ".net", "dotnet", "node.js", "nodejs", "api",
+             "rust", "elixir", "c#", "dotnet", "aspnet", "nodejs", "api",
              "microservices"],
             [("back", "end"), ("server", "side")]),
     ];
