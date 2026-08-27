@@ -9,9 +9,12 @@ withdrawn evidence-count rule, and the bounded admin endpoints — is described 
 and in the `CurrentVersion` remarks on `EnrichedPosting` and `MatchResult`.
 
 **Deployed and verified.** `main` is at the commit the container app runs, the corpus has been
-re-enriched, and the working tree is clean. No sweep has run because no profiles exist. §3 is
-what deploying §1.1 involved — and it is where §1.3 came from, because driving the
-re-enrichment is what exposed the bound that could not act.
+re-enriched at `EnrichedPosting` version 5, and the working tree is clean. No sweep has run
+because no profiles exist.
+
+§3 is what deploying §1.1 involved, and it is where §1.3 came from: driving the re-enrichment
+is what exposed the bound that could not act. The last re-enrichment, after §1.3 shipped, ran
+35 blobs in 4 calls at `limit=50` — the request shape that returned 504 twice before it.
 
 ---
 
