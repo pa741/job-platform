@@ -87,6 +87,39 @@ public sealed class RoleFamilyClassifierTests
     [InlineData("Machine Learning Data Engineer", RoleFamily.MachineLearning)]
     public void Precedence_decides_titles_that_carry_two_signals(string title, RoleFamily expected)
         => Assert.Equal(expected, RoleFamilyClassifier.Classify(title));
+
+    [Theory]
+    [InlineData(".NET Developer", RoleFamily.Backend)]
+    [InlineData("Senior .NET Engineer", RoleFamily.Backend)]
+    [InlineData(".Net / Azure Developer", RoleFamily.Backend)]
+    [InlineData("C#.NET Front Office Developer", RoleFamily.Backend)]
+    [InlineData("VB.NET Developer", RoleFamily.Backend)]
+    [InlineData("ASP.NET Core Developer", RoleFamily.Backend)]
+    [InlineData("Node.js Engineer", RoleFamily.Backend)]
+    [InlineData("Full Stack .NET Developer", RoleFamily.FullStack)]
+    public void A_name_spelled_with_a_dot_is_still_read(string title, RoleFamily expected)
+    {
+        // Every one of these was Unknown, because the rules named ".net" and "node.js" while
+        // the tokeniser had already cut them into "net" and "node" + "js". 24 corpus titles
+        // reading ".NET Developer" fell through to Unknown, which the dashboard's roleFamily
+        // filter shows as much as matching does.
+        //
+        // C#.NET and VB.NET are here because the names are written glued to what precedes them
+        // and the first fix broke exactly those two.
+        Assert.Equal(expected, RoleFamilyClassifier.Classify(title));
+    }
+
+    [Theory]
+    [InlineData("Sr.Product Manager - Threat Intelligence", RoleFamily.Product)]
+    [InlineData("React.js Developer - Contract", RoleFamily.Frontend)]
+    public void A_dot_used_as_punctuation_still_separates_words(string title, RoleFamily expected)
+    {
+        // The other half, and the reason the dot is folded for three known names rather than
+        // treated as a word character. Treating it as one fixed .NET and broke both of these:
+        // any Word.Word spelling became a single token. Measured against the corpus, that
+        // traded thirteen fixes for two regressions - the shape of a change worth rejecting.
+        Assert.Equal(expected, RoleFamilyClassifier.Classify(title));
+    }
 }
 
 public sealed class WorkArrangementClassifierTests
