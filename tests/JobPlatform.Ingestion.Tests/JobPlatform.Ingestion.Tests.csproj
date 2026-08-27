@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- The project under test is pinned to linux-x64 because Flex Consumption runs Linux only.
+         The tests run wherever the developer is, so the reference is taken without the RID;
+         nothing under test here is platform-specific. -->
+    <RuntimeIdentifier />
+    <SelfContained>false</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="coverlet.collector" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\JobPlatform.Ingestion\JobPlatform.Ingestion.csproj" />
+  </ItemGroup>
+
+</Project>
