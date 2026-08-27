@@ -278,6 +278,16 @@ Each of these cost a red CI run; none of them fail locally.
 - **The GHCR package must stay public** for the credential-free pull to work. It inherits the
   repository's visibility; if that ever changes, the app needs a registry credential and the
   no-secrets property is gone.
+- **`deploy.yml` has a `concurrency:` group, and it is load-bearing.** Without it runs are
+  concurrent and land in whatever order the runners free up. During a GitHub Actions outage a
+  Deploy for a superseded commit sat queued for hours while a newer commit deployed; had it
+  started it would have rolled the container app back to the older image with nothing failing.
+  The group serialises runs and cancels the *pending* one when a newer commit queues behind it.
+  `cancel-in-progress` is false deliberately - a run already executing may be part way through
+  a Bicep deployment or `dbadmin migrate`. Note the group is read from each run's own copy of
+  the file, so adding or changing it cannot rescue runs already queued. The image tag is the
+  full commit SHA, which is what makes a rollback detectable after the fact:
+  `az containerapp list --query "[0].properties.template.containers[0].image" -o tsv`.
 
 ### API-specific
 
@@ -427,6 +437,33 @@ Each of these cost a red CI run; none of them fail locally.
   unresolved-mention log is how the next one is found.
   `MatchResult.CurrentVersion` remarks carry the same history, and `HANDOFF.md` has the
   measured before/after.
+- **The concept floor asks what the demands are, not how many.** A concept that cannot
+  discriminate cannot carry a match by itself: `tagOnly` concepts and every domain. "Agile",
+  "cloud", "api" and a board's `area.*` tags appear on adverts for every kind of job, so a
+  posting whose stated requirements are all of that kind has not said what the job is, and
+  meeting them says nothing about whether this candidate fits. The scorer reads
+  `Concept.IsDiscriminating`, which is the vocabulary's own `tagOnly` flag plus domains - the
+  same judgement already made for resolution, read one layer later, so the two cannot drift
+  apart. `skill.agile` joined `tagOnly` with this change.
+  Measured against the corpus: eight matches left the top 60 and every one was correct - two
+  Transformation Managers and a Senior Product Manager scoring 92 to 100 on the single word
+  agile, a Space Data Engineer at 100 on one board tag reading "Data Engineering" - and no good
+  match went with them. That ledger is the point, against 1.4's one bad and four good.
+- **Two other ranking rules were measured against the corpus and rejected. Do not reach for
+  either.** Damping the score by `Coverage` is the one that looks obvious, and it punishes the
+  employer's terseness rather than the thin evidence: it dropped a `.NET Developer` with twelve
+  concepts read out of the top 60 for stating no salary, while keeping a Product Manager that
+  answered every peripheral axis on one word. Damping by the number of demands, `n/(n+k)`,
+  repeats 1.4 exactly - it removes "Yardi Implementation Consultant" (100, one concept) and
+  "Senior Software Engineer - C#" (100, two concepts) together - and it ranks by how long an
+  advert is, which is a fact about the recruiter. **Neither how much a posting said nor how
+  much of it you can answer is the signal; which concept carried the match is.**
+- **A widely-held skill on a role from another field still scores 100, and is the open one.**
+  "Yardi Residential Implementation Consultant" requires SQL, genuinely, and a SQL-holding
+  candidate genuinely meets it. `skill.sql` discriminates - most postings naming it do mean an
+  engineering role - so the floor above correctly leaves it alone, and no rule over the concept
+  axes separates it from a real match. What separates them is what the *role* is, which is a
+  judgement, and `ICandidacyAssessor` is the half of the design that makes judgements.
 - **`AssertionPolarity.Unspecified` is weighted as preferred, not as required.** It is by far the
   most common polarity - only the model pass can tell essential from desirable and it has not
   necessarily run - so treating it as a hard requirement would score most of the corpus at zero.

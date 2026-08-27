@@ -2,224 +2,247 @@
 
 State of the matching work as of 2026-08-27, for whoever picks this up next.
 
-Everything described here is merged, deployed and verified against the live corpus. `main`
-is at `edeb0fd`, the container app runs the image tagged with that same commit, and the
-working tree is clean.
-
 Conventions, architecture and the standing rules live in [`CLAUDE.md`](CLAUDE.md). This file
-is only the delta and the open work.
+is only the delta and the open work. The previous round of fixes — the `containers`
+vocabulary bug, the enrichment version coupling, each producer clearing only its own rows, the
+withdrawn evidence-count rule, and the bounded admin endpoints — is described in `CLAUDE.md`
+and in the `CurrentVersion` remarks on `EnrichedPosting` and `MatchResult`.
+
+**Not yet deployed.** The changes below are committed but the corpus has not been re-enriched
+and no sweep has run against the new scorer. See §3.
 
 ---
 
 ## 1. What changed
 
-Five fixes, all in the matching and enrichment path. Four of the five were found by running
-against the real corpus rather than by review, which is the pattern worth carrying forward:
-the test suite was green for every one of them.
+### 1.1 The concept floor asks what the demands are, not how many
 
-### 1.1 `containers` is ambiguous, not an alias (`concepts.json` v4)
+This is the open item the previous handoff left as §3.1: thin but genuine evidence scoring 100.
+It was left undone deliberately, because two scoring rules had been changed on judgement alone
+and one of them was wrong. It has now been measured before shipping, and the measurement
+changed the answer.
 
-A job advert reading *"moving shopping containers up to 15KG"* resolved to the
-Containerisation concept. The candidate held Kubernetes, Kubernetes implies containerisation,
-so the only axis that answered scored full marks and a supermarket delivery driver role ranked
-sixth in the whole corpus at 94/100.
+**The two directions the previous handoff suggested were both measured and both rejected.**
 
-The word now sits in `ambiguous` rather than `aliases`, so it records an unresolved mention
-instead of an assertion. Two tests in `ConceptGraphTests` pin this: one carries that sentence
-verbatim, the other checks a genuine containerisation advert still resolves, so the fix cannot
-quietly cost us the postings that do mean it.
+Damping the score by `Coverage` — the one that looked obvious, and the reason `Coverage`
+already existed — punishes the employer's terseness rather than the thin evidence:
 
-### 1.2 A vocabulary change now reaches stored postings
+| posting | concepts read | coverage | outcome |
+| --- | --- | --- | --- |
+| `.NET Developer - St Albans` | 12 | 0.83 | wrongly dropped from the top 60 |
+| `Senior Platform Engineer` | 12 | 0.40 | wrongly dropped |
+| `Full Stack .NET Developer - C#, Azure, REST API` | 4 | 0.25 | wrongly dropped, scored 96 |
+| `Product Manager at Aries` | 2 | 0.85 | wrongly **kept** |
 
-`concepts.json` carries its own version, and **nothing reads it** when deciding whether a
-stored posting is stale. `JobPostingRepository` compares `EnrichedPosting.CurrentVersion`
-against `JobPostings.EnrichmentVersion`. A vocabulary edit that leaves that constant alone is
-an edit no existing row will ever pick up — it would have applied only to postings scraped for
-the first time after the deploy.
+Damping by the number of demands, `n/(n+k)`, reproduces 1.4's ledger exactly. At k=1 it removes
+`Yardi Implementation Consultant` (100, one concept) and `Senior Software Engineer - C#` (100,
+two concepts) together — no threshold separates them, which is the same sentence the previous
+handoff wrote about `.NET Developer` and `Home Delivery Driver`. It also ranks by how long an
+advert is, which is a fact about the recruiter and not about the fit.
 
-`EnrichedPosting.CurrentVersion` is now 3, and the coupling is written down in `CLAUDE.md`
-beside the `seed-concepts` rule, because it is invisible from either file alone.
+**What separates them is which concept carried the match.** Reading the actual evidence behind
+the corpus top 60 makes it plain: every wrongly-ranked thin match rested on `skill.agile` or on
+an `area.*` tag a board had applied, and every rightly-ranked thin one rested on a concrete
+technology.
 
-### 1.3 Each producer clears only its own rows (the important one)
+The vocabulary already records that distinction as `tagOnly` — *"in prose they mean nothing;
+almost every advert contains them"* — and every domain is `tagOnly` implicitly. So the version 2
+floor now asks whether anything **discriminating** was demanded, rather than whether anything
+was. `Concept.IsDiscriminating` is that flag plus domains, and `skill.agile` joined the flag:
+nearly every advert says agile, which is precisely what it describes.
 
-Bumping the enrichment version armed a trap that had existed for as long as extraction had.
+Measured against the corpus, 117 of 3,908 scoring postings fall to zero. Eight leave the top 60:
 
-The staleness rebuild called `ClearDerivedRowsAsync`, which deleted **all** of a posting's
-concepts and mentions — including the ones the model wrote. Those do not come back. The
-re-extraction the rebuild queues is keyed on a hash of the description, so a posting marked
-stale by a *vocabulary* change has the same hash as before, converges on the
-`PostingExtractions` row already in the table, and skips:
-
-> corpus marked stale → every model assertion deleted → re-extraction skips as already-done →
-> graded share falls toward zero, audit table says the work was done, nothing logged
-
-Enrichment now clears what enrichment writes and leaves `AssertionSource.Model` alone. This
-mirrors `PostingExtractionWriter`, which already deleted only its own rows before rewriting
-them — and `CandidateProfileRepository`, which had the correct pattern on the other half of
-the same schema all along.
-
-Preserving the model's mentions re-opens the `(PostingId, SurfaceForm)` collision from the
-opposite side, so surviving forms are loaded set-based with the other preloads and the rebuild
-yields those keys to the model, whose claim is the more specific one.
-
-Two regression tests in `JobPostingRepositoryTests`. Both fail against the old clear, and the
-collision test also fails against the new clear without the yield — so it pins the collision,
-not merely the end state.
-
-### 1.4 The evidence floor: shipped, then withdrawn
-
-**This one was wrong and was reverted. Do not reintroduce it.**
-
-The first attempt required three string-matched (`Taxonomy`) concepts before they could carry
-a score alone. Measured against the corpus it removed one bad match and four good ones:
-
-| posting | evidence | verdict |
+| posting | was | evidence |
 | --- | --- | --- |
-| Home Delivery Driver | 1 × Containerisation | correctly removed |
-| .NET Developer | 1 × .NET | wrongly removed |
-| Software Engineer (AutoRek / SQL) | 1 × SQL | wrongly removed |
-| Software Engineer — C# & .NET | 2 × .NET, C# | wrongly removed |
-| Software Developer C# .Net | 2 × .NET, C# | wrongly removed |
+| Space Data Engineer | 100 | 1 × board tag `area.data` |
+| Real-Time Data Engineer | 100 | 1 × board tag `area.data` |
+| Senior Product Manager — Partner Algorithms | 100 | `skill.agile` |
+| Senior Platform Engineer — Energy Data | 100 | `skill.agile` |
+| Senior Engineer @ Xero | 98 | `skill.agile` |
+| Senior Manager, Regional Data Center Development | 94 | `area.cloud`, `area.ml` |
+| Transformation Manager (×2) | 92 | `skill.agile` |
 
-`.NET Developer` and `Home Delivery Driver` both rest on exactly one string match. No
-threshold separates them — counting was never the right axis. What separates them is the
-vocabulary (1.1), which removes the bad assertion outright and lets the delivery advert fail
-the **version 2** floor on its own, with no counting involved.
+**No good match went with them**, which is the whole point — 1.4 removed one bad match and four
+good ones. Eight genuine C#/.NET roles took their place. `Senior Software Engineer - C#` (100,
+two concepts) and `Senior Full-Stack Engineer | C#, .NET & Azure` (100, four) both survive: what
+they rest on is as thin as the Transformation Manager and it is a real requirement.
 
-The version 2 floor stays: a posting that answers neither concept axis scores zero rather than
-inheriting a perfect score from location alone. That one was measured too, against 44 of 60
-top matches having no skills axis at all.
+Five tests in `MatchScorerTests` pin both directions, including the one 1.4 got wrong — one
+concrete skill still carries a match alone — and that an unknown key counts as discriminating,
+so removing a concept from the vocabulary cannot silently zero the postings still referencing
+it. Two in `ConceptGraphTests` pin agile in prose against agile in a board's skills field.
 
-`MatchResult.CurrentVersion` is 4, and its remarks carry this history so the idea is not
-retried from scratch.
+`MatchResult.CurrentVersion` is 5 and `EnrichedPosting.CurrentVersion` is 4. The remarks on
+both carry this history, including the two rejected rules, so neither is retried from scratch.
 
-### 1.5 Bounded, resumable admin endpoints
+### 1.2 `deploy.yml` has a concurrency group
 
-`MatchSweepFunction` splits its assessment ceiling: 40 for the nightly timer, 10 per HTTP
-request. Scoring is deliberately left unbounded — it is arithmetic over rows already in
-memory, and stopping half way would rank a profile against an arbitrary subset, which is worse
-than not ranking it.
+Previously §3.2. Runs were concurrent and landed in whatever order the runners freed up; a
+stale queued run could deploy over a newer commit, which nearly happened during an Actions
+outage. The group serialises them and cancels the pending run when a newer one queues behind it.
 
-`ReprocessBlobFunction` was an unbounded loop over the whole landing container inside one HTTP
-request, with a default prefix of `jobs/`. It is now bounded by blob count and wall clock, and
-resumable through the blob listing's own continuation token, so no server state is needed.
-Callers keep calling until the response reports `done`.
-
-One subtlety, learned the hard way: the continuation token is only accurate at a page
-boundary, so that is the only place the bounds can be applied. The first version sized the
-page to the caller's limit, which put exactly one boundary in a call and placed it *after* all
-the work — the budget could not interrupt anything, and a 50-blob call ran straight past the
-gateway and returned a Server Error page. Pages are now a fixed small size independent of the
-limit.
+`cancel-in-progress` is **false** deliberately: a run already executing may be part way through
+a Bicep deployment or `dbadmin migrate`, and killing the runner there trades a recoverable delay
+for a half-applied change. Waiting costs at worst a few minutes of the older image being live,
+and the newer run still lands last.
 
 ---
 
-## 2. Verified production state
+## 2. How the measurement was done
 
-Measured after the corpus was re-enriched (21 blobs, 0 failures) and the sweep re-run.
+Worth repeating rather than reinventing, because it is what caught 1.4 and what changed the
+answer here.
 
-| | value |
-| --- | --- |
-| Postings scored per sweep | 3,392 |
-| Total assertions | 50,522 |
-| Graded share (model-read) | 0.490 |
-| Board / Taxonomy / Model assertions | 3,418 / 22,323 / 24,673 |
+The corpus was read **once** into a local JSON cache (4,078 postings — the enriched columns and
+the concept assertions, which is exactly what `GetPostingFactsAsync` selects), and every
+candidate rule was then evaluated offline against that cache. Nothing was written to the
+database, and no profile row was created: `MatchScorer` is pure, so a `CandidateFacts` built in
+memory scores the whole corpus without a profile existing anywhere.
 
-The re-enrichment removed 53 Taxonomy assertions across 8 postings and **zero** model
-assertions, which is 1.3 doing exactly what it should. The delivery-driver posting now holds
-no assertions at all and is absent from the rankings; the four legitimate C#/.NET/SQL roles
-are back at ranks 6–9.
+The synthetic profile used was a senior C#/.NET engineer in London. It reproduced the previous
+handoff's reported numbers exactly — `Space Data Engineer` and `Yardi` both at 100 with one
+concept each — which is what made the diff trustworthy.
 
-A validation profile used during this work has been deleted (`DELETE /api/v1/profile`,
-confirmed 404 on re-read). No profiles currently exist, so `GET /api/v1/matches` returns 404
-until one is created.
+Two environment notes, since neither is obvious:
+
+- **The SQL firewall holds only `AllowAllWindowsAzureIps`.** Reading the database from a
+  laptop needs a temporary rule for the client IP:
+  `az sql server firewall-rule create -g <rg> -s <server> -n <name> --start-ip-address <ip> --end-ip-address <ip>`,
+  and `... delete` immediately afterwards. The database is `azureADOnlyAuthentication`, so the
+  rule grants nobody access without a token for a database user — but leaving it behind on a
+  public portfolio project is exactly the kind of thing to avoid. Cache the corpus on the first
+  read and close the hole rather than keeping it open across an afternoon of iteration.
+- The API's `Api__AllowAnonymousReads` is `False` in the deployed container app, and there is no
+  bulk endpoint for posting concepts, so the API is not a route to the corpus.
 
 ---
 
-## 3. Open work
+## 3. Deploying this
 
-Ordered by how much it matters.
+Ordered, because the steps depend on each other.
 
-### 3.1 Thin but genuine evidence still scores 100
+1. **Push.** `.github/workflows/deploy.yml` is in the workflow's own `paths:` filter, so the
+   concurrency change deploys itself. Note the group is read from each run's own copy of the
+   file — it takes effect from this run onward and cannot rescue anything already queued.
+2. **Re-enrich the corpus.** `EnrichedPosting.CurrentVersion` went to 4, which marks every
+   stored posting stale; until a reprocess runs, stored rows keep the `skill.agile` Taxonomy
+   assertions the vocabulary no longer produces. The floor does not depend on this — it is keyed
+   on the concept, not on the assertion's source, and was measured against the corpus as it
+   stands today — so this is cleanup rather than a prerequisite. Drive `ReprocessBlobFunction`
+   until it reports `done`.
+3. **`seed-concepts` is not strictly required this time.** `ConceptSeeder` projects labels,
+   relations and the closure; `tagOnly` is not among them, so the SQL projection has not drifted.
+   It is idempotent, and `deploy.yml` runs it beside `migrate` on a dispatch anyway.
+4. **Re-sweep.** `MatchResult.CurrentVersion` went to 5, so every stored match is stale. There
+   are currently **no profiles**, so nothing needs re-scoring until one is created —
+   `GET /api/v1/matches` returns 404 until then.
 
-The clearest remaining ranking defect. It is **not** the bug fixed in 1.1 — the assertions here
-are correct readings.
-
-| posting | score | evidence |
-| --- | --- | --- |
-| Yardi Residential Implementation Consultant | 100 | 3 × SQL (Model + Board + Taxonomy) |
-| Risk Strategy Program Manager | 95 | 2 × SQL |
-| Space Data Engineer | 100 | 1 × Board: Data Engineering |
-
-The model genuinely read "SQL" in the Yardi advert and it is genuinely there. The problem is
-that a posting whose only stated requirement is one widely-held skill scores 100, because the
-single axis that answered answered perfectly. Any SQL-only posting is a perfect match for
-anyone who knows SQL.
-
-`MatchResult.Coverage` already exists for exactly this — it distinguishes "scored badly" from
-"could not be scored" — and is currently computed and reported but **not used in ranking**.
-Damping the score by coverage, or ranking on a coverage-aware key, is the obvious direction.
-
-Deliberately left undone. Two scoring rules have now been changed on judgement alone and one
-of them was wrong (1.4); this one deserves a decision and a measurement against the corpus
-before it ships. Take a top-60 snapshot first and diff it after, the way 1.4 was caught.
-
-### 3.2 `deploy.yml` has no `concurrency:` group
-
-An hour-old queued run for a superseded commit can still deploy over a newer one. This nearly
-happened during a GitHub Actions outage: a stale Deploy for the previous commit sat queued for
-hours while a newer commit deployed, and it would have silently rolled the container back.
-
-With a concurrency group, a newly queued run cancels the previously pending one. Note it is
-read from each run's own copy of the workflow file, so adding it does not retroactively rescue
-already-queued runs.
-
-The image tag is the full commit SHA, which makes a rollback detectable:
+Verify the deployed image is the commit you expect:
 
 ```bash
 az containerapp list --query "[0].properties.template.containers[0].image" -o tsv
 ```
 
-### 3.3 The reprocess endpoint has no test
+---
 
-There is no ingestion test project and nothing in the suite fakes a `BlobContainerClient`, so
-standing one up is a larger change than the fix was. What is untested is a loop bound — the
-category that has caused real incidents here more than once, including the gateway timeout in
-1.5.
+## 4. Open work
 
-### 3.4 Extraction coverage is about half the corpus
+### 4.1 A widely-held skill on a role from another field still scores 100
 
-The graded share is 0.490. Everything above degrades gracefully as that rises, because a model
-assertion is worth more than any number of string matches: it is a deliberate reading, and it
-is the only source that can state a requirement is *essential*. Raising coverage is the
-highest-leverage work available on ranking quality.
+The honest residue of §1.1, and the clearest remaining ranking defect.
 
-The unresolved-mention log is where the next vocabulary fix comes from — the most frequent
-ambiguous and unknown surface forms are, by construction, the concepts worth adding next. That
-is what surfaced `containers`.
+| posting | score | evidence |
+| --- | --- | --- |
+| Yardi Residential Implementation Consultant | 100 | `skill.sql` |
+| Risk Strategy Program Manager | 92 | `skill.sql` |
+| NetSuite Developer/Technical Consultant | 95 | `skill.rest` |
+| Product Analyst | 94 | `skill.csharp`, `skill.sql`, `skill.python` |
+
+These are correct readings of real requirements, and `skill.sql` genuinely discriminates — most
+postings naming it do mean an engineering role — so the floor correctly leaves it alone. **No
+rule over the concept axes separates these from a real match**, which is now measured three
+ways rather than argued: not by count, not by coverage, and not by how specific the concept is
+(the vocabulary is two levels deep, so `skill.sql` and `skill.csharp` are structurally
+identical — neither is broader than the other).
+
+What separates them is what the *role* is, which is a judgement rather than an arithmetic fact.
+`ICandidacyAssessor` is the half of the design that makes judgements, and it already reads the
+advert. Two directions worth considering, in order:
+
+- The sweep spends its model budget on the highest-scoring unassessed pairs. It is currently
+  spending it on these. That is the defect doing damage, and also the mechanism that could fix
+  it — a verdict on Yardi is exactly the thing that would sink it.
+- Nothing in ranking reads `Verdict`. A posting the model has already called a poor match still
+  sits at rank 2. Surfacing that in `ListAsync`'s ordering is cheap and needs no new signal.
+
+Take a top-60 snapshot before and diff it after, the way this round was done.
+
+### 4.2 `RoleFamily` looks like the answer to 4.1 and is not — measured
+
+`EnrichedPosting` carries a `RoleFamily`, classified from the title, and `MatchScorer` never
+reads it — it is not even on `PostingFacts`. Since the residue in 4.1 is "this is a job from
+another field", reaching for it is the obvious next move. It was checked first, because the
+classifier is pure and runs on a title alone:
+
+| posting | `RoleFamily` |
+| --- | --- |
+| Yardi Residential Implementation Consultant | `Unknown` |
+| Risk Strategy Program Manager | `Unknown` |
+| Transformation Manager | `Unknown` — not `Management` |
+| `.NET Developer @ Noir` | `Unknown` — a core backend role |
+| Senior Software Engineer - C# | `Backend` |
+
+`Unknown` is 38.6% of the corpus and holds the residue and the best matches alike, so weighting
+or filtering on it removes good with bad — 1.4's ledger for a third time. **Do not use it for
+matching without fixing the classifier first**, and fixing it is a separate piece of work with
+its own measurement.
+
+There is a real, small finding in the table though: `RoleFamilyClassifier` calls `.NET
+Developer` `Unknown`. It matches on title words and has no rule for the language-plus-role
+shape that names half the corpus. That is worth fixing on its own merits — the API exposes
+`roleFamily` as a browse filter, so the miss is user-visible today, quite apart from matching.
+
+### 4.3 The reprocess endpoint has no test
+
+Unchanged from the previous handoff. There is no ingestion test project and nothing in the
+suite fakes a `BlobContainerClient`, so standing one up is a larger change than the fix was.
+What is untested is a loop bound — the category that has caused real incidents here more than
+once, including the gateway timeout that bounded collection in the first place.
+
+### 4.4 Extraction coverage
+
+The previous handoff recorded a graded share of 0.490 and called this the highest-leverage work
+available. Measured directly this round, **92.6% of the corpus (3,775 of 4,078 postings) carries
+at least one model assertion** — so 0.490 is the share of *assertions* that are model-sourced,
+not the share of postings the model has read. The two are easy to confuse and they justify very
+different work.
+
+What is left is thinner than it looked: 168 postings carry no concepts at all, and 303 have
+never been read by the model. The unresolved-mention log remains where the next vocabulary fix
+comes from — it is what surfaced `containers`, and `agile` came from reading the ranking rather
+than the log, which suggests the log is not the only place worth looking.
 
 ---
 
-## 4. Environment notes
+## 5. Environment notes
 
-Things that cost time this session and are not obvious.
+Carried forward; all still true.
 
 - **`jq` is not installed.** `gh --jq` works (built in); a standalone `jq` in a pipe silently
-  produces nothing. A background monitor built on it emits no events, and silence is
-  indistinguishable from "still running". Use `python -c` for JSON in shell loops.
-- **Two shells, two syntaxes.** PowerShell is primary; a Bash tool is also available. Bash
-  line continuations (`\`) pasted into PowerShell fail with
-  `Falta una expresión después del operador unario '--'`. Use backticks or single lines there.
-- **MSYS mangles Azure resource paths.** `az ... --scope /subscriptions/...` fails with
-  `MissingSubscription` under Git Bash. Prefix with `MSYS_NO_PATHCONV=1`.
-- **Blob listing needs a data-plane role.** Subscription Owner is not enough to list the
-  landing container; that needs `Storage Blob Data Reader` or better. The functions hold it
-  via managed identity, so the reprocess endpoint works even when `az storage blob list` does
-  not. `GET /api/v1/runs` is a usable proxy for what is in the container — one row per
-  ingested blob.
-- **Heredocs and Python don't mix well here.** Multi-line edit scripts containing triple-quoted
-  strings break Bash heredoc quoting. Write the script to a file first.
+  produces nothing. Use `python -c` for JSON in shell loops.
+- **Two shells, two syntaxes.** PowerShell is primary; a Bash tool is also available. Bash line
+  continuations (`\`) pasted into PowerShell fail with
+  `Falta una expresión después del operador unario '--'`.
+- **MSYS mangles Azure resource paths.** `az ... --ids /subscriptions/...` fails with
+  `invalid resource ID: C:/Program Files/Git/subscriptions/...` under Git Bash. Prefix with
+  `MSYS_NO_PATHCONV=1`, or pass `--resource-group` and `--server` instead of `--ids`.
+- **Heredocs and Python don't mix well here.** Multi-line edit scripts break Bash heredoc
+  quoting. Write the script to a file first.
+- **Blob listing needs a data-plane role.** Subscription Owner is not enough; that needs
+  `Storage Blob Data Reader` or better. `GET /api/v1/runs` is a usable proxy for what is in the
+  container — one row per ingested blob.
 
 Resource names are deliberately absent from this file — the repo is public. Discover them with
-`az containerapp list`, `az functionapp list`, and see `CLAUDE.md` for the placeholder
-convention used in commands.
+`az containerapp list`, `az functionapp list` and `az sql server list`, and see `CLAUDE.md` for
+the placeholder convention used in commands.
