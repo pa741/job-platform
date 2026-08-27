@@ -179,6 +179,19 @@ worked around.
 - **Never let the model invent a concept key.** `KernelDocumentExtractor` re-checks every key
   against the graph and demotes anything unknown to a mention. A hallucinated key is
   indistinguishable from a real one in SQL and would quietly split a concept in two.
+- **A rule list has to be written in the tokeniser's spelling, not the reader's.**
+  `RoleFamilyClassifier` named `.net`, `node.js` and `ui/ux` for as long as it existed, and
+  `TitleTokenizer` splits on `.` and `/` — so all three had already been cut into `net`,
+  `node` + `js` and `ui` + `ux` by the time a rule saw them. The rules read as though they
+  worked and 24 corpus titles saying ".NET Developer" came out `Unknown`, which the dashboard's
+  `roleFamily` filter shows as much as matching does. `TitleTokenizer.DottedNames` folds the
+  three technology names whose spelling contains a separator; the rules now name the folded
+  form. **A test that asserts the classifier is not enough — assert the tokenisation too**, or
+  the next dead entry looks exactly like a working one.
+  Folding a short list rather than making `.` a word character, and that was measured: treating
+  it as part of a token fixed .NET and broke "Sr.Product Manager" and "React.js Developer",
+  because any `Word.Word` spelling then becomes a single token. Thirteen fixes for two
+  regressions is the shape of a change to reject, so it was.
 - **Do not add a column to `TrackedColumns` before the scraper emits it.**
   `JobDigestFunction` warns on every column at 0% fill, and "not shipped yet" is not the
   regression that warning exists to catch. The parser reads by name, so mapping a column

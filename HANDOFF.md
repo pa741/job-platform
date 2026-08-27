@@ -75,8 +75,9 @@ concrete skill still carries a match alone — and that an unknown key counts as
 so removing a concept from the vocabulary cannot silently zero the postings still referencing
 it. Two in `ConceptGraphTests` pin agile in prose against agile in a board's skills field.
 
-`MatchResult.CurrentVersion` is 5 and `EnrichedPosting.CurrentVersion` is 4. The remarks on
-both carry this history, including the two rejected rules, so neither is retried from scratch.
+`MatchResult.CurrentVersion` is 5, and `EnrichedPosting.CurrentVersion` went to 4 here (5 by
+the end of §1.4). The remarks on both carry this history, including the two rejected rules, so
+neither is retried from scratch.
 
 ### 1.2 `deploy.yml` has a concurrency group
 
@@ -88,8 +89,6 @@ outage. The group serialises them and cancels the pending run when a newer one q
 a Bicep deployment or `dbadmin migrate`, and killing the runner there trades a recoverable delay
 for a half-applied change. Waiting costs at worst a few minutes of the older image being live,
 and the newer run still lands last.
-
----
 
 ### 1.3 The reprocess endpoint's bound can act, and is tested
 
@@ -124,6 +123,38 @@ blobs. `tests/JobPlatform.Ingestion.Tests` is new and holds seven tests, each a 
 actually happened, including the residual limit: a single item slower than the whole budget
 still overshoots by its own duration, and the margin to the gateway's ~230s absorbs it. The
 production-shape test was checked against the pre-fix code and fails there.
+
+### 1.4 A rule list written in a spelling the tokeniser destroys
+
+`RoleFamilyClassifier` called `.NET Developer` `Unknown`. The previous revision of this file
+guessed it had "no rule for the language-plus-role shape". That was wrong, and the real cause
+is worth more than the fix: the rule **was** there. `.net`, `node.js` and `ui/ux` had been in
+the lists since the file was written, and `TitleTokenizer` splits on `.` and `/`, so by the
+time a rule saw the text those were already `net`, `node` + `js` and `ui` + `ux`. Three dead
+entries that read exactly like working ones.
+
+`TitleTokenizer.DottedNames` now folds the three names whose spelling contains a separator,
+and the rules name the folded form. `ui/ux` was deleted outright — the bare `ux` beside it
+already covered every title it aimed at.
+
+Measured over 2,709 distinct corpus titles: **13 moved out of `Unknown`, all of them
+unambiguously .NET backend roles, and nothing moved between families or into `Unknown`.**
+
+Two intermediate attempts are worth not repeating. Making `.` a word character — the obvious
+fix, and what `ConceptGraph.NameChar` does for the vocabulary — fixed .NET and broke
+"Sr.Product Manager" and "React.js Developer", because any `Word.Word` spelling then becomes
+one token. Thirteen fixes for two regressions is the shape of a change to reject. Folding
+without a leading space then broke `C#.NET` and `VB.NET`, which are written glued to what
+precedes them. Both regressions were caught by diffing the whole corpus rather than by the
+examples in hand, which is the third time that has paid this session.
+
+Ten tests, and the pairing matters: the ones that assert `.NET Developer` is Backend fail
+without the fold, and the ones that assert `Sr.Product Manager` is still Product fail under
+the word-character version. **Asserting the classifier alone would not have caught this** —
+a dead entry and a working one look identical from there.
+
+`EnrichedPosting.CurrentVersion` is 5: the classifier produces a different answer for the
+same input, so stored rows are stale.
 
 ---
 
@@ -228,32 +259,7 @@ advert. Two directions worth considering, in order:
 
 Take a top-60 snapshot before and diff it after, the way this round was done.
 
-### 4.2 `RoleFamily` looks like the answer to 4.1 and is not — measured
-
-`EnrichedPosting` carries a `RoleFamily`, classified from the title, and `MatchScorer` never
-reads it — it is not even on `PostingFacts`. Since the residue in 4.1 is "this is a job from
-another field", reaching for it is the obvious next move. It was checked first, because the
-classifier is pure and runs on a title alone:
-
-| posting | `RoleFamily` |
-| --- | --- |
-| Yardi Residential Implementation Consultant | `Unknown` |
-| Risk Strategy Program Manager | `Unknown` |
-| Transformation Manager | `Unknown` — not `Management` |
-| `.NET Developer @ Noir` | `Unknown` — a core backend role |
-| Senior Software Engineer - C# | `Backend` |
-
-`Unknown` is 38.6% of the corpus and holds the residue and the best matches alike, so weighting
-or filtering on it removes good with bad — 1.4's ledger for a third time. **Do not use it for
-matching without fixing the classifier first**, and fixing it is a separate piece of work with
-its own measurement.
-
-There is a real, small finding in the table though: `RoleFamilyClassifier` calls `.NET
-Developer` `Unknown`. It matches on title words and has no rule for the language-plus-role
-shape that names half the corpus. That is worth fixing on its own merits — the API exposes
-`roleFamily` as a browse filter, so the miss is user-visible today, quite apart from matching.
-
-### 4.3 Extraction coverage
+### 4.2 Extraction coverage
 
 The previous handoff recorded a graded share of 0.490 and called this the highest-leverage work
 available. Measured directly this round, **92.6% of the corpus (3,775 of 4,078 postings) carries
