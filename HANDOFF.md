@@ -8,9 +8,19 @@ vocabulary bug, the enrichment version coupling, each producer clearing only its
 withdrawn evidence-count rule, and the bounded admin endpoints — is described in `CLAUDE.md`
 and in the `CurrentVersion` remarks on `EnrichedPosting` and `MatchResult`.
 
+> [!IMPORTANT]
+> **`MatchSweepFunction.MaxAssessments` is temporarily 90 and must go back to 40.**
+> Raised for the 03:30 UTC run on 2026-08-28 only, to build an assessed set big enough to
+> measure §4.1 against. Every further night at 90 costs 2.25x what the design intends.
+> Revert it, commit, and let the deploy carry it — the constant is the only thing to change.
+
 **Deployed and verified.** `main` is at the commit the container app runs, the corpus has been
-re-enriched at `EnrichedPosting` version 5, and the working tree is clean. No sweep has run
-because no profiles exist.
+re-enriched at `EnrichedPosting` version 5, and the working tree is clean.
+
+**One profile now exists and has been swept**, so §4.1 has something to measure against for
+the first time: 4,078 pairs scored, 2,495 of them over the assessment threshold. Nothing
+about it belongs in this repository - it is somebody's employment history, and the rule in
+`CLAUDE.md` covers fixtures, examples and screenshots alike.
 
 §3 is what deploying §1.1 involved, and it is where §1.3 came from: driving the re-enrichment
 is what exposed the bound that could not act. The last re-enrichment, after §1.3 shipped, ran
