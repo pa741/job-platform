@@ -17,6 +17,28 @@ on:
         type: boolean
         default: false
 
+# One deploy at a time, and the newest commit is the one that wins.
+#
+# Without this, runs are concurrent and finish in whatever order the runners free up. During a
+# GitHub Actions outage a Deploy for a superseded commit sat queued for hours while a newer
+# commit deployed; had it started, it would have rolled the container app back to the older
+# image with nothing failing to say so. The image tag is the full commit SHA, so the rollback
+# would have been detectable afterwards - but only by someone who thought to look.
+#
+# A group serialises them and, more importantly, cancels the *pending* run when a newer one
+# queues behind it, so a stale commit never reaches the subscription at all.
+#
+# `cancel-in-progress` stays false on purpose. A run that is already executing may be part way
+# through a Bicep deployment or, on a dispatch, `dbadmin migrate`; killing the runner there
+# trades a recoverable delay for a half-applied change. Waiting costs at worst a few minutes of
+# the older image being live, and the newer run still lands last.
+#
+# Note the group is read from each run's own copy of this file, so adding it does not
+# retroactively rescue runs that are already queued.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   id-token: write # OIDC federated credential; no client secret is stored.
   contents: read
