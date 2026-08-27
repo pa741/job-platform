@@ -46,6 +46,41 @@ public sealed class ConceptGraphTests
     }
 
     [Fact]
+    public void Agile_in_prose_is_not_a_requirement_but_a_board_naming_it_is()
+    {
+        // Nearly every advert says agile, whatever the job is, so matching the word in a
+        // description asserts nothing. Two Transformation Managers reached the corpus top 25
+        // on it alone. The board's own skills field is the other case entirely: there somebody
+        // picked it from a list, and that is a deliberate act.
+        var prose = ConceptGraph.Default.Resolve(
+            AssertionSource.Taxonomy,
+            "Transformation Manager",
+            "You will lead delivery in a fast-paced agile environment.");
+
+        Assert.DoesNotContain(prose.Assertions, a => a.ConceptKey == "skill.agile");
+
+        Assert.True(
+            Graph.TryResolve("agile", out var tagged, fromStructuredField: true)
+                && tagged.Key == "skill.agile");
+    }
+
+    [Fact]
+    public void Tag_only_concepts_and_domains_cannot_discriminate_between_roles()
+    {
+        // What the matcher reads to decide a concept cannot carry a match on its own. The flag
+        // is the vocabulary's, so the two decisions stay on one list; see MatchScorer's
+        // concept-evidence floor and MatchResult.CurrentVersion for the measurement.
+        Assert.True(Graph.TryGet("skill.agile", out var agile));
+        Assert.False(agile.IsDiscriminating);
+
+        Assert.True(Graph.TryGet("area.data", out var domain));
+        Assert.False(domain.IsDiscriminating);
+
+        Assert.True(Graph.TryGet("skill.csharp", out var csharp));
+        Assert.True(csharp.IsDiscriminating);
+    }
+
+    [Fact]
     public void Vocabulary_loads_from_the_embedded_resource()
     {
         // Guards the csproj entry as much as the loader: without an <EmbeddedResource> for

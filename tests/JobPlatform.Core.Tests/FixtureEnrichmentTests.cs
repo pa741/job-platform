@@ -247,10 +247,16 @@ public sealed class FixtureEnrichmentTests
     {
         // A guard against the fixture regressing to placeholder text, which is what it was:
         // the same sentence four times, with nothing for any of this to find.
+        //
+        // 28 rather than the 30 this first held: "agile" became tagOnly, and two of the
+        // fixture's thinner Software Engineer adverts had it as their only readable concept.
+        // Losing them is the change working - a posting whose entire technical content is the
+        // word agile has not said what the job needs - so the number moved rather than the
+        // fixture gaining words invented to keep it up.
         var withConcepts = Enriched.Count(e => e.Concepts.Count > 0);
         var distinctConcepts = Enriched.SelectMany(e => e.Concepts.Select(c => c.ConceptKey)).Distinct().Count();
 
-        Assert.True(withConcepts >= 30, $"only {withConcepts} postings carry any concept");
+        Assert.True(withConcepts >= 28, $"only {withConcepts} postings carry any concept");
         Assert.True(distinctConcepts >= 40, $"only {distinctConcepts} distinct concepts across the corpus");
     }
 }

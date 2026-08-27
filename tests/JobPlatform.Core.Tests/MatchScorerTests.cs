@@ -514,6 +514,85 @@ public sealed class MatchScorerTests
     }
 
     [Fact]
+    public void A_posting_asking_only_for_agile_cannot_be_matched_on_it()
+    {
+        // Two Transformation Managers and a Product Manager reached the corpus top 25 on
+        // exactly this: the single word "agile", which the candidate does hold. The reading is
+        // correct and the arithmetic is correct - the concept simply does not discriminate,
+        // because adverts for every kind of job say it.
+        var result = Score(
+            new CandidateFacts { Concepts = [Holds("skill.agile")] },
+            new PostingFacts { PostingId = 1, Concepts = [Wants("skill.agile")] });
+
+        Assert.Equal(0, result.Score);
+
+        // The match is still recorded. The candidate does hold what was asked for, and hiding
+        // that would make the zero unexplainable to anyone reading the result.
+        Assert.Contains(result.Matched, m => m.RequiredKey == "skill.agile");
+    }
+
+    [Fact]
+    public void A_board_tag_naming_a_whole_field_is_a_category_rather_than_a_requirement()
+    {
+        // "Space Data Engineer" was the top match in the whole corpus at 100, on one board tag
+        // reading "Data Engineering". A domain says which shelf the job sits on, not what it
+        // needs, so it cannot carry a match by itself.
+        var result = Score(
+            new CandidateFacts { Concepts = [Holds("area.data")] },
+            new PostingFacts { PostingId = 1, Concepts = [Wants("area.data")] });
+
+        Assert.Equal(0, result.Score);
+    }
+
+    [Fact]
+    public void One_concrete_skill_still_carries_a_match_on_its_own()
+    {
+        // The other half of the rule, and the one 1.4 got wrong. "Senior Software Engineer -
+        // C#" rests on as little evidence as the Transformation Manager above, and is a real
+        // match. What separates them is which concept it is, never how many - a count removed
+        // both, which is exactly why counting was withdrawn.
+        var result = Score(
+            new CandidateFacts { Concepts = [Holds("skill.csharp")] },
+            new PostingFacts { PostingId = 1, Concepts = [Wants("skill.csharp")] });
+
+        Assert.Equal(100, result.Score);
+    }
+
+    [Fact]
+    public void One_discriminating_demand_among_generic_ones_clears_the_floor()
+    {
+        // Postings state "agile" alongside their real requirements constantly. The floor asks
+        // whether anything discriminating was asked for at all, so a single real skill next to
+        // any number of generic ones clears it.
+        var result = Score(
+            new CandidateFacts { Concepts = [Holds("skill.csharp"), Holds("skill.agile")] },
+            new PostingFacts
+            {
+                PostingId = 1,
+                Concepts = [Wants("skill.agile"), Wants("skill.csharp")],
+            });
+
+        Assert.Equal(100, result.Score);
+    }
+
+    [Fact]
+    public void A_key_the_vocabulary_does_not_know_is_treated_as_discriminating()
+    {
+        // Unknown is not the same as generic. A key the graph cannot resolve must not be read
+        // as a category, or dropping a concept from the vocabulary would silently zero every
+        // stored posting still referencing it.
+        var result = Score(
+            new CandidateFacts { Concepts = [Holds("skill.not-in-the-vocabulary")] },
+            new PostingFacts
+            {
+                PostingId = 1,
+                Concepts = [Wants("skill.not-in-the-vocabulary")],
+            });
+
+        Assert.Equal(100, result.Score);
+    }
+
+    [Fact]
     public void Coverage_says_how_much_of_a_full_assessment_the_posting_supported()
     {
         var thin = Score(
