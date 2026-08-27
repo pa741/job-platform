@@ -414,15 +414,19 @@ Each of these cost a red CI run; none of them fail locally.
   reported, never multiplied into the score**: a terse posting whose stated skills are all met
   is a genuine 100. Coverage is recomputed from the components on read rather than stored - it
   is a pure function of them, so a column would be a second copy that could drift.
-- **A lone string-matched concept is not evidence a posting wants anything.** The floor above
-  was still too weak once the corpus was fully extracted: "Home Delivery Driver" scored 94 on
-  one Taxonomy hit - the word "containers", in an advert about delivering physical ones - which
-  the candidate's Kubernetes implied. The model had read that advert and correctly extracted
-  nothing. A Board tag or a Model assertion is a deliberate claim and counts on its own; a
-  Taxonomy hit needs `MinimumTaxonomyOnlyConcepts` of them, because that resolver's own remarks
-  admit it finds things mentioned in passing as readily as things required. **Run the vocabulary
-  fix and the scorer fix together**: the alias that caused it is now `ambiguous`, so the same
-  advert would record a mention rather than an assertion either way.
+- **Counting string-matched concepts was tried as a floor and withdrawn. Do not reintroduce
+  it.** "Home Delivery Driver" scored 94 on one Taxonomy hit - the word "containers", in an
+  advert about delivering physical ones - which the candidate's Kubernetes implied. The
+  apparent fix was to require several such hits before they could carry a score. Measured
+  against the corpus it removed one bad match and four good ones: `.NET Developer` rests on
+  exactly one Taxonomy hit too, and no threshold separates the two. The count is not the
+  signal.
+  What fixed it was the vocabulary. `containers` is `ambiguous` rather than an alias, so that
+  advert now resolves to nothing, records a mention instead, and fails the version 2 floor on
+  its own. **A bad assertion is a vocabulary bug; fix it there, not in the scorer.** The
+  unresolved-mention log is how the next one is found.
+  `MatchResult.CurrentVersion` remarks carry the same history, and `HANDOFF.md` has the
+  measured before/after.
 - **`AssertionPolarity.Unspecified` is weighted as preferred, not as required.** It is by far the
   most common polarity - only the model pass can tell essential from desirable and it has not
   necessarily run - so treating it as a hard requirement would score most of the corpus at zero.
