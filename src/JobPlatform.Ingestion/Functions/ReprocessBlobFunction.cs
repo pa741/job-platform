@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Azure.Functions.Worker;
@@ -86,85 +87,33 @@ public sealed class ReprocessBlobFunction(
         var failures = new List<object>();
 
         var started = Stopwatch.StartNew();
-        var seen = 0;
-        var truncated = false;
 
         // Paged rather than a flat enumeration, because the page's continuation token is what
-        // makes a partial pass resumable - and it is only accurate at a page boundary, so the
-        // loop only ever stops on one and nothing is skipped when work is handed back. The page
-        // is deliberately smaller than the limit: boundaries are the only place the bounds can
-        // be applied, so a call needs several of them.
+        // makes a partial pass resumable. The page is deliberately smaller than the limit: the
+        // token is only accurate at a boundary, so a call needs several of them to have anywhere
+        // to stop.
         var pages = landingContainer
             .GetBlobsAsync(prefix: prefix, cancellationToken: ct)
-            .AsPages(body?.ContinuationToken, pageSizeHint: Math.Min(limit, PageSize));
+            .AsPages(body?.ContinuationToken, pageSizeHint: Math.Min(limit, PageSize))
+            .Select(page => new WalkPage<BlobItem>(page.Values, page.ContinuationToken));
 
-        // Null once the listing is exhausted, which is how the caller knows it is done.
-        string? continuation = null;
+        var outcome = await BoundedWalk.RunAsync(
+            pages,
+            body?.ContinuationToken,
+            limit,
+            Budget,
+            () => started.Elapsed,
+            (blob, token) => ReprocessAsync(blob, processed, failures, token),
+            ct);
 
-        await foreach (var page in pages)
-        {
-            foreach (var blob in page.Values)
-            {
-                seen++;
-
-                if (!blob.Name.EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                try
-                {
-                    var client = landingContainer.GetBlobClient(blob.Name);
-                    using var content = await client.OpenReadAsync(cancellationToken: ct);
-
-                    // A scope per blob, because that is what the blob trigger gets: one
-                    // invocation, one DbContext, one unit of work. Sharing a scope across the
-                    // loop shares a change tracker too, and a posting present in two blobs is
-                    // then attached twice - which is fine while ingest only mutates scalars
-                    // and fails the moment it starts adding child rows. This is what "the
-                    // trigger and the reprocess endpoint run the same path" has to mean.
-                    await using var scope = scopeFactory.CreateAsyncScope();
-
-                    await scope.ServiceProvider.GetRequiredService<IngestionPipeline>().ProcessAsync(
-                        content,
-                        blob.Name,
-                        blob.Properties.ETag?.ToString(),
-                        blob.Properties.ContentLength ?? 0,
-                        ct);
-
-                    processed.Add(blob.Name);
-                }
-                catch (Exception ex)
-                {
-                    // One bad blob must not abandon the rest of a backfill. The message is
-                    // returned as well as logged - this is an authenticated admin route, and
-                    // being able to see why a backfill failed is the point of it.
-                    logger.LogError(ex, "Failed to reprocess {BlobName}.", blob.Name);
-                    failures.Add(new { blob = blob.Name, error = ex.Message, type = ex.GetType().Name });
-                }
-            }
-
-            // Handed back at a page boundary, so the token resumes exactly where this stopped.
-            continuation = page.ContinuationToken;
-
-            if (string.IsNullOrEmpty(continuation))
-            {
-                continuation = null;
-                break;
-            }
-
-            if (seen >= limit || started.Elapsed >= Budget)
-            {
-                truncated = true;
-                break;
-            }
-        }
-
-        if (truncated)
+        if (!outcome.Exhausted)
         {
             logger.LogInformation(
-                "Stopped after {Seen} blobs in {Elapsed}; call again with the continuation token "
-                + "to resume.", seen, started.Elapsed);
+                "Stopped after {Processed} blobs in {Elapsed}{MidPage}; call again with the "
+                + "continuation token to resume.",
+                outcome.Processed,
+                started.Elapsed,
+                outcome.StoppedMidPage ? " (part way through a page, which will be redone)" : string.Empty);
         }
 
         var result = new
@@ -172,14 +121,60 @@ public sealed class ReprocessBlobFunction(
             processed = processed.Count,
             blobPaths = processed,
             failures,
-            // Present only while there is more to do, so "keep calling until this is absent" is
-            // the whole contract a caller needs.
-            continuationToken = continuation,
-            done = continuation is null,
+            // Present only while there is more to do, so "keep calling until done" is the whole
+            // contract a caller needs. It can legitimately be absent while done is false - a walk
+            // stopped inside the first page has no boundary behind it - so a caller must read
+            // done rather than infer it from the token being there.
+            continuationToken = outcome.ResumeToken,
+            done = outcome.Exhausted,
         };
 
         return failures.Count == 0
             ? new OkObjectResult(result)
             : new ObjectResult(result) { StatusCode = StatusCodes.Status207MultiStatus };
+    }
+
+    /// <summary>
+    /// One blob through the same pipeline the trigger runs.
+    /// </summary>
+    /// <remarks>
+    /// A scope per blob, because that is what the blob trigger gets: one invocation, one
+    /// DbContext, one unit of work. Sharing a scope across the walk shares a change tracker too,
+    /// and a posting present in two blobs is then attached twice - which is fine while ingest
+    /// only mutates scalars and fails the moment it starts adding child rows. This is what "the
+    /// trigger and the reprocess endpoint run the same path" has to mean.
+    /// </remarks>
+    private async Task ReprocessAsync(
+        BlobItem blob, List<string> processed, List<object> failures, CancellationToken ct)
+    {
+        if (!blob.Name.EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        try
+        {
+            var client = landingContainer.GetBlobClient(blob.Name);
+            using var content = await client.OpenReadAsync(cancellationToken: ct);
+
+            await using var scope = scopeFactory.CreateAsyncScope();
+
+            await scope.ServiceProvider.GetRequiredService<IngestionPipeline>().ProcessAsync(
+                content,
+                blob.Name,
+                blob.Properties.ETag?.ToString(),
+                blob.Properties.ContentLength ?? 0,
+                ct);
+
+            processed.Add(blob.Name);
+        }
+        catch (Exception ex)
+        {
+            // One bad blob must not abandon the rest of a backfill. The message is returned as
+            // well as logged - this is an authenticated admin route, and being able to see why a
+            // backfill failed is the point of it.
+            logger.LogError(ex, "Failed to reprocess {BlobName}.", blob.Name);
+            failures.Add(new { blob = blob.Name, error = ex.Message, type = ex.GetType().Name });
+        }
     }
 }
