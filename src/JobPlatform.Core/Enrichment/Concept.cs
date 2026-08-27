@@ -91,6 +91,9 @@ public enum ConceptRelationType
 /// <param name="Implies">Keys this one strongly suggests.</param>
 /// <param name="Related">Competing or substitutable keys.</param>
 /// <param name="SucceededBy">The key that replaced this one, if any.</param>
+/// <param name="TagOnly">
+/// This concept carries no information about what a job actually is.
+/// </param>
 public sealed record Concept(
     string Key,
     ConceptKind Kind,
@@ -98,4 +101,22 @@ public sealed record Concept(
     IReadOnlyList<string> Broader,
     IReadOnlyList<string> Implies,
     IReadOnlyList<string> Related,
-    string? SucceededBy);
+    string? SucceededBy,
+    bool TagOnly = false)
+{
+    /// <summary>
+    /// Whether meeting this concept says anything about whether a candidate fits the role.
+    /// </summary>
+    /// <remarks>
+    /// The same judgement <see cref="TagOnly"/> already records at resolution time - "api",
+    /// "cloud", "automation" and every domain appear in almost every advert and mean nothing
+    /// there - read one layer later, by the scorer. A posting whose only stated requirements
+    /// are of this kind has not said what the job is, so it cannot be matched against; see the
+    /// concept-evidence floor in <c>MatchScorer</c>.
+    ///
+    /// Domains are included without needing the flag, exactly as they are at resolution:
+    /// nothing writes "Backend Development" in an advert, and a board tag naming a whole field
+    /// is a category rather than a requirement.
+    /// </remarks>
+    public bool IsDiscriminating => !TagOnly && Kind != ConceptKind.Domain;
+}

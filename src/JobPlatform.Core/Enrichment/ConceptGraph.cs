@@ -140,7 +140,8 @@ public sealed class ConceptGraph
 
         _byKey = entries.ToFrozenDictionary(
             e => e.Key,
-            e => new Concept(e.Key, e.ParseKind(), e.Label, e.Broader, e.Implies, e.Related, e.SucceededBy),
+            e => new Concept(
+                e.Key, e.ParseKind(), e.Label, e.Broader, e.Implies, e.Related, e.SucceededBy, e.TagOnly),
             StringComparer.Ordinal);
 
         _entryByKey = entries.ToFrozenDictionary(e => e.Key, StringComparer.Ordinal);

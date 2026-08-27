@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "notes": [
     "The concept key is the identity; the label is an attribute. Renaming a label is an",
     "edit, renaming a key is a data migration.",
@@ -27,7 +27,14 @@
     "matched in a description. Every domain is tagOnly, and so are words like api, cloud",
     "and automation: in prose they mean nothing, while in a structured skills field the",
     "employer picked them deliberately. That difference is the whole reason Source is part",
-    "of an assertion's identity."
+    "of an assertion's identity.",
+    "",
+    "tagOnly is also what the matcher reads to decide a concept cannot carry a match on its",
+    "own. Measured against the corpus, every thin match that ranked wrongly rested on agile",
+    "or on an area.* tag a board had applied - a Transformation Manager and a Product",
+    "Manager scoring 92 and 100 on the single word agile - while every thin match that was",
+    "right rested on a concrete technology. So the flag decides two things now, and agile",
+    "joined it: nearly every advert says agile, which is precisely what the flag describes."
   ],
   "concepts": [
     {
@@ -2063,6 +2070,7 @@
       "key": "skill.agile",
       "kind": "skill",
       "label": "Agile",
+      "tagOnly": true,
       "broader": [
         "type.practice",
         "area.delivery"

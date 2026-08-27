@@ -131,7 +131,21 @@ public static class MatchScorer
         // sort below every posting something can be said about, which is the same reason
         // Seniority.Unknown is zero. Coverage is what distinguishes "scored badly" from
         // "could not be scored", so the distinction survives rather than being collapsed.
-        var hasConceptEvidence = components.Any(c =>
+        //
+        // A demand that cannot discriminate does not clear the floor either. "Agile", "cloud",
+        // "api" and a board's area.* tags appear on adverts for every kind of job, so a
+        // posting whose stated requirements are all of that kind has not said what the job is
+        // - and answering it says nothing about whether this candidate fits. The vocabulary
+        // already records exactly this judgement as tagOnly, for resolution; reading it here
+        // keeps the two decisions on one list instead of letting a second one drift.
+        //
+        // A key the graph does not know counts as discriminating. Unknown is not the same as
+        // generic, and the failure modes are not symmetric: treating it as generic would let a
+        // vocabulary edit silently zero every posting that still referenced the old key.
+        var hasDiscriminatingDemand = required.Concat(preferred).Any(d =>
+            !graph.TryGet(d.ConceptKey, out var concept) || concept.IsDiscriminating);
+
+        var hasConceptEvidence = hasDiscriminatingDemand && components.Any(c =>
             c.Weight > 0
             && (c.Name == MatchComponent.RequiredSkills || c.Name == MatchComponent.PreferredSkills));
 

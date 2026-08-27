@@ -137,8 +137,30 @@ public sealed record MatchResult
     /// both rest on exactly one string match and no threshold separates them. What separated
     /// them was the vocabulary: "containers" is now ambiguous, so the delivery advert resolves
     /// to nothing and fails the version 2 floor on its own.
+    /// 5: the version 2 floor now asks what the demands are, not how many. A posting whose
+    /// every stated requirement is non-discriminating - tagOnly or a domain - fails it, the
+    /// same way one with no requirements at all does.
+    ///
+    /// Two other rules were measured against the corpus first and both were rejected, so
+    /// neither is retried from scratch:
+    ///
+    /// Damping the score by <see cref="Coverage"/> - the direction that looked obvious - turns
+    /// out to penalise the employer's terseness rather than the thin evidence. It dropped
+    /// ".NET Developer - St Albans" (12 concepts read) and "Senior Platform Engineer" (12) out
+    /// of the top 60 for stating no salary, while keeping a Product Manager that answered
+    /// every peripheral axis on the strength of one word.
+    ///
+    /// Damping by the number of demands, n/(n+k), repeats 1.4's ledger exactly: at k=1 it
+    /// removed "Yardi Implementation Consultant" (100, one concept) and "Senior Software
+    /// Engineer - C#" (100, two concepts) together, and it ranks by how long an advert is,
+    /// which is a fact about the recruiter rather than about the fit.
+    ///
+    /// What separated the two was neither count nor coverage but which concept carried the
+    /// match: every wrongly-ranked thin match rested on "agile" or on an area.* board tag,
+    /// every rightly-ranked one on a concrete technology. Measured, that floor removed eight
+    /// matches from the top 60 and every one was correct, taking no good match with it.
     /// </remarks>
-    public const int CurrentVersion = 4;
+    public const int CurrentVersion = 5;
 
     /// <summary>0-100. Rounded once, here, so every consumer shows the same number.</summary>
     public required int Score { get; init; }
