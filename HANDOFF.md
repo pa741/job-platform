@@ -13,8 +13,8 @@ and has been swept: 4,078 pairs scored, 2,495 over the assessment threshold, 50 
 Nothing about that profile belongs in this repository. It is somebody's employment history, and
 the rule in `CLAUDE.md` covers fixtures, examples and screenshots alike.
 
-**In flight.** 1.1 has its write path, storage and read path deployed and verified; 1.2 has a
-candidate fix. Both are marked *Progress* below, with what remains.
+**In flight.** 1.1 is three call sites of four, with a dashboard page; 1.2 has a candidate fix.
+Both are marked *Progress* below, with what remains.
 
 **The next sweep at 03:30 UTC is the test for 1.2.** If the "unusable role index" warnings stop,
 the cause was the quoted index; if they continue, the warning now names which fault it is. Either
@@ -83,16 +83,26 @@ Constraints that are not obvious and will bite:
 - Verified live: the assessor wrote a record, the endpoint read it back -
   `candidacy-assessment / bulk / Succeeded / 10 of 10 / 35.4s`.
 
+**Also done since:** posting and profile extraction and application writing both report to the
+ledger, and the dashboard has a **Model calls** page - failures first, requested paired with
+returned everywhere, each failure naming the postings it lost and saying they are retried.
+
+Wiring extraction turned up a real find. `ExtractionPrompt.Int` had **exactly the bug the
+assessor had** - `JsonValueKind.Number` only - so a quoted index or confidence would have dropped
+a whole extraction batch just as silently, and had been able to since the file was written. Both
+now read through `AiJson.Int`: one reader, for the reason `TitleTokenizer` gives.
+
 **Remaining, in order:**
 
-1. **Wire the other three call sites.** `KernelDocumentExtractor`, `OpenAiBatchExtractor` /
-   `CollectExtractionBatchesFunction`, and `KernelApplicationWriter` all still report nothing.
-   The assessor is the pattern to copy: an optional `IAiCallLog`, a guarded record around the
-   call, and the `LedgerOperation` constant naming the pass.
-2. **A dashboard view.** The endpoint exists and nothing renders it, so today this is visible
-   only to somebody who knows the URL. `web/` conventions in `CLAUDE.md` apply - go through
-   `MetricsFeed`, never fetch in a component, and take the next categorical colour slot rather
-   than picking a hex.
+1. **The batch extraction path.** `OpenAiBatchExtractor` and `CollectExtractionBatchesFunction`
+   are the last unwired call site, and the awkward one: submission and collection are up to 24
+   hours apart, so "one call" is not one moment. Decide whether a record belongs at submission,
+   at collection, or both, before writing any of it.
+2. **Verify extraction records in production.** The three call sites are unit-tested and only
+   the assessor has been seen writing a real record. Extraction is skipped for unchanged content
+   by design - `PostingExtractions` is keyed on a hash of the text - so it will not be exercised
+   until the next scrape brings new postings. Check `GET /api/v1/ai-calls/summary?days=2` after
+   one, and expect `posting-extraction` to appear beside `candidacy-assessment`.
 3. **Consider the change feed.** The Realtime component in `../model.md` is still the one piece
    never built, and a failure appearing on the dashboard as it happens is a better reason to
    build it than building it for its own sake.
