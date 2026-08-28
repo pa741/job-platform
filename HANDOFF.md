@@ -13,6 +13,11 @@ and has been swept: 4,078 pairs scored, 2,495 over the assessment threshold, 50 
 Nothing about that profile belongs in this repository. It is somebody's employment history, and
 the rule in `CLAUDE.md` covers fixtures, examples and screenshots alike.
 
+**In flight.** 1.1 has shipped its first slice and 1.2 a candidate fix; both are marked
+*Progress* below. **The next sweep at 03:30 UTC is the test for 1.2** — if the "unusable role
+index" warnings stop, the cause was the quoted index; if they continue, the warning now names
+which fault it is. Check that before building anything further on top.
+
 ---
 
 ## 1. Open work, in the order worth doing it
@@ -62,9 +67,16 @@ Constraints that are not obvious and will bite:
   change-feed trigger pushing to clients. An AI failure feed is a natural first consumer, if you
   would rather build it for a reason than for its own sake.
 
-Start with the smallest useful piece: have the sweep log what it *asked for* against what it
-*wrote*, and warn when they diverge. That alone turns last night's 55% loss from invisible into
-obvious, it ships on its own, and it changes no behaviour.
+**Progress, 2026-08-28.** The smallest useful piece is done and deployed: `SweepSummary` now
+carries `Requested` and `Discarded` beside `Assessed`, and the sweep warns when they diverge,
+naming the postings it lost. A caller could not derive those - a sweep that assessed forty looks
+identical whether it asked for forty or ninety - so they are reported rather than inferred. No
+behaviour change.
+
+**Still to build: the ledger itself.** The sweep is one call site of four; extraction,
+batch collection and document generation all still fail silently, and none of it is visible
+anywhere but a log. That is the remaining work in this item, and the constraints above are what
+it has to respect.
 
 ### 1.2 The assessor correlates answers by position, and loses whole batches
 
@@ -80,15 +92,25 @@ usable, 5 discarded**.
 self-consistent and undetectable afterwards, which is exactly why
 `KernelDocumentExtractor.Distribute` drops rather than clamps. Do not "fix" this by clamping.
 
-The fix is to stop correlating by position: give each role an opaque id and require it echoed
-back. That is this codebase's own lesson from the other side of the same problem — *"A batch API
-echoes a `custom_id` per request, so correlation is the platform's problem."* The assessor is the
-last path still trusting ordering.
+**Progress, 2026-08-28.** Losing a whole batch at once is the signature of a response that is
+well formed and *typed* differently, not one that is wrong. `Int` demanded
+`JsonValueKind.Number` while the prompt asked for the index to be "copied exactly" from its
+heading — and copying it as text is a reasonable reading. `Int` now accepts a JSON string holding
+an integer, and the schema line says "integer, unquoted" to discourage it at the source. Six
+tests in `CandidacyAssessorTests`, the first of which fails against the old parser.
 
-Reducing the batch size is the tempting shortcut. It only makes each loss smaller.
+**This is a hypothesis, not a confirmation**, and the confirmation ships with it: the warning
+used to say only "unusable" and could not tell a wrong type from an out-of-range number from a
+repeat. It now names the `JsonValueKind` and the value. **Check the next run.** If the warnings
+stop, it was the type. If they continue, the log now says which of the three it is.
 
-Before changing anything, log one rejected **response** — never the prompt — and the
-misalignment will be obvious rather than guessed at.
+The range and duplicate checks are untouched and now pinned by tests. Accepting `"3"` as 3 is
+parsing; clamping an out-of-range index would be guessing, and is still refused.
+
+If it recurs, the durable fix is to stop correlating by position entirely: give each role an
+opaque id and require it echoed back — this codebase's own lesson from the other side of the same
+problem, *"A batch API echoes a `custom_id` per request, so correlation is the platform's
+problem."* Reducing the batch size is the tempting shortcut; it only makes each loss smaller.
 
 ### 1.3 A widely-held skill on a role from another field still scores 100
 
