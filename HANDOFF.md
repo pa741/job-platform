@@ -477,24 +477,45 @@ arithmetic is most hopeful. With one, taking the top of the band would reproduce
 restriction a level down (ask for 80-89, get forty 89s), so the order falls back to posting id,
 which is scrape order and uncorrelated with score.
 
-**The first ten band assessments already changed the picture:**
+**Done, and it reverses the headline finding.** 115 assessments were drawn across the four
+bands below 90, giving 195 assessed pairs spanning scores 45 to 100 instead of 90 to 100.
 
 | sample | n | score SD | Spearman vs the model |
 | --- | --- | --- | --- |
-| top band only | 70 | 2.98 | -0.198 |
-| with 60-69 added | 80 | 10.93 | **-0.014**, CI [-0.25, +0.22] |
+| top band only (what every earlier number used) | 70 | 2.98 | **-0.198** |
+| full range | 195 | 16.77 | **+0.315**, CI [+0.174, +0.443] |
 
-Widening the range 3.7x moved the correlation to essentially zero, as the range-restriction
-argument predicted. **The verdict split is the real evidence though:** 90-100 holds 18 Strong,
-30 Possible, 22 Weak; 60-69 holds **zero Strong**, 4 Possible, 6 Weak.
+**The deterministic score is positively and significantly correlated with the model's judgement.**
+The -0.198 was range restriction and nothing else. A Strong match averages a score of 85.4; a
+Weak one averages 71.5. Every conclusion drawn from the old number needs re-reading, and this
+file's earlier framing - that the score "carries no further signal" - was true only of the slice
+it was measured on.
 
-So the deterministic score is not anti-correlated with quality - **every Strong match lives in
-its top band.** It is doing its job as a first-stage filter, which is what the raw -0.198
-obscured and what a hundred more top-decile labels would never have shown. Ten labels in an
-unsampled band did.
+**But the sharper finding is where the score fails, and it is not where anyone would guess:**
 
-**And an assessment costs 716 tokens, measured** - so a 150-label stratified sample is about
-110k tokens. The sizing question is not a cost question.
+| band | Strong | Weak |
+| --- | --- | --- |
+| 90-100 | 25% | **31%** |
+| 80-89 | 25% | 20% |
+| 70-79 | 14% | 17% |
+| 60-69 | 6% | 41% |
+| 45-59 | 5% | 52% |
+
+**The top band carries a higher Weak share than the two below it.** 31% against 20% and 17%.
+The score orders the corpus well and then *inverts at the very top* - which is exactly 1.3,
+now quantified: the roles that reach 90-100 on one widely-held skill are concentrated in the
+band a candidate actually looks at.
+
+That is a different problem from "the ranking is wrong", and it wants a different fix. The
+score is a good filter and a bad final sort. Whatever goes on top - the verdict, the embedding,
+a role-family axis - only has to re-order the top two bands, not replace the score.
+
+**An assessment costs 716 tokens, measured**, so those 115 labels cost roughly 82k tokens. The
+sizing question was never a cost question.
+
+**Fifteen consecutive batches, 115 of 115 assessed, zero discarded.** Before the fix in 1.2, five
+of nine batches were discarded whole. That is the strongest evidence yet that the quoted index
+was the cause.
 
 #### Mean-centring: tested, and the mechanism worked without the ranking improving
 
