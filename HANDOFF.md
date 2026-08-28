@@ -16,11 +16,11 @@ the rule in `CLAUDE.md` covers fixtures, examples and screenshots alike.
 **In flight.** 1.1 has all four call sites, a dashboard page and a replay route; 1.2 has a
 candidate fix. Both are marked *Progress* below, with what remains.
 
-**1.6 is built and has not yet run.** The matches page is now ordered by `MatchRanker` rather
-than by the score, and until `run-embed-corpus` has been through the corpus that ordering is
-identical to the old one - correctly, and invisibly. `POST /api/run-embed-corpus` is the first
-thing to do after deploying, and `EmbedSummary.Embedded` against `.Corpus` is how to tell it
-worked.
+**1.6 is built, deployed and running on real data.** The corpus is at **4,668 of 4,668**
+embedded and the sweep has ranked every pair. Measured on production against the 195 assessed
+pairs, the top 30 went from 6 Strong / 14 Possible / **10 Weak** under the score to 8 / 19 /
+**3** under the shipped ranking, and the top 10 from 2 Strong / 6 / 2 to **5 / 5 / 0**. Read
+1.6's closing caveat before quoting those: they are in-sample.
 
 **The next sweep at 03:30 UTC is the test for 1.2.** If the "unusable role index" warnings stop,
 the cause was the quoted index; if they continue, the warning now names which fault it is. Either
@@ -323,12 +323,43 @@ around them.
 | ledger operation `posting-embedding` | `text-embedding` | one call site serves both sides, and naming it for the posting half would have been wrong on the other |
 | raw product of score and similarity | convex combination at α=0.6 | measured after this section was written; +0.045, CI [-0.006, +0.098] - not significant, but it is the form whose weight means something |
 
-**What is not done and is the first thing to check.** The pass has never run against the real
-corpus. `POST /api/run-embed-corpus` is bounded to ~150s and resumable, so a first pass over
-~4,000 adverts is several calls; the timer at 03:00 UTC will also chew through it. Until it has,
-every match ranks on its score alone - which is the old behaviour, correctly, and is
-indistinguishable from the new one without looking. **`EmbedSummary` reports `Embedded` against
-`Corpus`, and that ratio is the check.**
+#### It has run, and here is what it did
+
+**Coverage is 4,668 of 4,668.** Six calls to `run-embed-corpus`, each bounded to ~150s, then one
+`run-match-sweep`. Cost, from the ledger: **2.07M tokens across 85 calls for the first 2,592
+adverts**, roughly 800 tokens an advert - about four pence for the corpus. Embedding is not a
+cost decision at this scale.
+
+**Measured on production, over all 195 assessed pairs, spanning scores 45-100:**
+
+| ordering | top 10 (S/P/W) | top 20 | top 30 |
+| --- | --- | --- | --- |
+| deterministic score | 2/6/2 | 4/11/5 | **6/14/10** |
+| embedding only | 1/8/1 | 4/14/2 | 7/18/5 |
+| **shipped rank** | **5/5/0** | 6/11/3 | **8/19/3** |
+
+The score row reproduces the offline numbers exactly, which is the useful part: it says the
+measurement path - API, ordering, verdict join - agrees with the scratch analysis, so the other
+two rows are describing the same thing the research described.
+
+**Three caveats, and the first is the one that matters.**
+
+1. **This is in-sample.** α=0.6 was fitted on these 195 labels and is now being scored against
+   them. It confirms the implementation does what the analysis said; it does **not** establish
+   that the gain generalises. A held-out check needs labels drawn *after* the ranking shipped -
+   which the nightly sweep now produces for free, because it assesses whatever is unassessed.
+   **Re-run this table in a week against pairs assessed since 2026-08-28 and the number is
+   honest.**
+2. The shipped ranking normalises over the production pool (4,668 postings at score >= 45) where
+   the offline fusion normalised similarity over the assessed 195. Different bounds, slightly
+   different ordering - which is why the top-30 here is 8/19/3 against the 11/16/3 predicted.
+3. 195 rows. A difference of one or two is noise; 10 Weak to 3 is not.
+
+**A qualitative check that is worth more than it looks.** Before the ranking, the top of the list
+was five score-100 rows including "Senior Freelance Consultant, AI Safety" and "Senior Security
+Researcher - Agent Workflow". After it, both are out of the top 15, and a Kotlin/JVM role scoring
+84 and a games role scoring 70 have climbed in on similarity alone. That is 1.3 being fixed in
+the direction 1.3 predicted.
 
 #### The result
 
@@ -693,17 +724,24 @@ Done, on 2026-08-28:
 
 Left:
 
-4. **Run the pass and re-measure against the corpus** the way §3 describes - the top-60 diff, not
-   the six rows anybody already has in mind. The α=0.6 is fitted on 195 labels and the honest
-   summary of the bootstrap is that anything in [0.6, 0.7] is indistinguishable.
-5. **Then revisit 1.3.** The embedding is a signal with 100% coverage once the pass has run, so
-   the question is whether the top of the list still needs the verdict to be tolerable. The
-   verdict counts in the top 30 went 6/14/10 (S/P/W) on the score to 11/16/3 combined on the
-   assessed 195, which suggests it does not need it as badly - but that is 195 rows deep and
-   ranked within the assessed subset, not the corpus.
+4. **The out-of-sample check, and it is the only one that settles anything.** Everything measured
+   so far is scored against the labels α was fitted on. The nightly sweep assesses whatever is
+   unassessed, so pairs judged after 2026-08-28 are a clean holdout that costs nothing to
+   collect. Re-run the top-N table restricted to those and the +0.521 either survives or it does
+   not. **Until then, quote the ranking as implemented-as-designed, not as validated.**
+5. **Then revisit 1.3.** The embedding now has 100% coverage, so the question is whether the top
+   of the list still needs the verdict to be tolerable. On the evidence above it needs it less -
+   zero Weak in the top 10 - but "less" is not "not at all", and this is the in-sample number.
 6. **A second profile would break the ranker's assumptions in a useful way.** Everything measured
    here is one candidate against one corpus. `RankScore` is pool-normalised per profile, so it is
    correct by construction across candidates, but nothing has tested that.
+7. **The first sweep after a ranker change does not fit in an HTTP request.** `run-match-sweep`
+   returned 504 at 249s on the run that applied the ranking - every row's key moved off the
+   migration's seeded value, so all ~4,700 were rewritten. The work completed anyway, because the
+   504 is the gateway rather than the function and the writes are idempotent, and the check is to
+   read `/matches` rather than to retry blindly. Steady-state sweeps write only what moved, and
+   the timer has minutes rather than 230 seconds. Worth knowing before somebody bumps
+   `MatchRanker.CurrentVersion` and reads the 504 as a failure.
 
 ---
 
