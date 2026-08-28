@@ -367,7 +367,14 @@ Each of these cost a red CI run; none of them fail locally.
   bounded reason plus the ids affected - never the prompt, which carries the candidate's
   profile. It belongs in Cosmos with the other metrics, never in SQL, for the reasons in the
   API section. App Insights is not a substitute: traces are sampled here and these failures
-  throw nothing, so the record is incomplete exactly when it matters. See `HANDOFF.md` 1.1.
+  throw nothing, so the record is incomplete exactly when it matters.
+  **The mechanism is `IAiCallLog` and the `aiCalls` container**, read back through
+  `GET /api/v1/ai-calls`. A new model call site reports to it the way
+  `KernelCandidacyAssessor` does: an optional `IAiCallLog`, a `LedgerOperation` constant naming
+  the pass, and the record written inside a `try` even though the interface says implementations
+  must not throw - the cost of that comment being wrong is losing the work the call just paid
+  for. `AiCallRecord.Create` is the only constructor, so the bounds on the reason and the id
+  list cannot be skipped. See `HANDOFF.md` 1.1 for what is still unwired.
 - **`AiPrompt` carries two settings that fail obscurely when wrong.**
   `SetNewMaxCompletionTokensEnabled` must be true or SK serialises `max_tokens`, which every
   GPT-5 series model rejects with a 400 on the first real call. And `Temperature` is left

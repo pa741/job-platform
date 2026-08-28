@@ -13,10 +13,13 @@ and has been swept: 4,078 pairs scored, 2,495 over the assessment threshold, 50 
 Nothing about that profile belongs in this repository. It is somebody's employment history, and
 the rule in `CLAUDE.md` covers fixtures, examples and screenshots alike.
 
-**In flight.** 1.1 has shipped its first slice and 1.2 a candidate fix; both are marked
-*Progress* below. **The next sweep at 03:30 UTC is the test for 1.2** — if the "unusable role
-index" warnings stop, the cause was the quoted index; if they continue, the warning now names
-which fault it is. Check that before building anything further on top.
+**In flight.** 1.1 has its write path, storage and read path deployed and verified; 1.2 has a
+candidate fix. Both are marked *Progress* below, with what remains.
+
+**The next sweep at 03:30 UTC is the test for 1.2.** If the "unusable role index" warnings stop,
+the cause was the quoted index; if they continue, the warning now names which fault it is. Either
+way the ledger will have recorded it, so start at
+`GET /api/v1/ai-calls?days=2` rather than in App Insights.
 
 ---
 
@@ -67,16 +70,32 @@ Constraints that are not obvious and will bite:
   change-feed trigger pushing to clients. An AI failure feed is a natural first consumer, if you
   would rather build it for a reason than for its own sake.
 
-**Progress, 2026-08-28.** The smallest useful piece is done and deployed: `SweepSummary` now
-carries `Requested` and `Discarded` beside `Assessed`, and the sweep warns when they diverge,
-naming the postings it lost. A caller could not derive those - a sweep that assessed forty looks
-identical whether it asked for forty or ninety - so they are reported rather than inferred. No
-behaviour change.
+**Progress, 2026-08-28. Built and deployed, verified end to end in production.**
 
-**Still to build: the ledger itself.** The sweep is one call site of four; extraction,
-batch collection and document generation all still fail silently, and none of it is visible
-anywhere but a log. That is the remaining work in this item, and the constraints above are what
-it has to respect.
+- `SweepSummary` carries `Requested` and `Discarded` beside `Assessed`, and the sweep warns when
+  they diverge, naming the postings it lost. A caller could not derive those.
+- `AiCallRecord` / `IAiCallLog` in Core, `AiCallLogRepository` writing to a new Cosmos `aiCalls`
+  container - partitioned by UTC day, ninety-day TTL, shared database throughput so it costs
+  nothing against the free-tier ceiling. `AiCallRecord.Create` is the only constructor, so the
+  bounds on the reason and the id list cannot be forgotten at a call site.
+- `GET /api/v1/ai-calls` and `/ai-calls/summary`, reading through `IAiCallSource` the way the
+  metrics endpoints read through `IMetricsSource`. `failuresOnly` defaults to true.
+- Verified live: the assessor wrote a record, the endpoint read it back -
+  `candidacy-assessment / bulk / Succeeded / 10 of 10 / 35.4s`.
+
+**Remaining, in order:**
+
+1. **Wire the other three call sites.** `KernelDocumentExtractor`, `OpenAiBatchExtractor` /
+   `CollectExtractionBatchesFunction`, and `KernelApplicationWriter` all still report nothing.
+   The assessor is the pattern to copy: an optional `IAiCallLog`, a guarded record around the
+   call, and the `LedgerOperation` constant naming the pass.
+2. **A dashboard view.** The endpoint exists and nothing renders it, so today this is visible
+   only to somebody who knows the URL. `web/` conventions in `CLAUDE.md` apply - go through
+   `MetricsFeed`, never fetch in a component, and take the next categorical colour slot rather
+   than picking a hex.
+3. **Consider the change feed.** The Realtime component in `../model.md` is still the one piece
+   never built, and a failure appearing on the dashboard as it happens is a better reason to
+   build it than building it for its own sake.
 
 ### 1.2 The assessor correlates answers by position, and loses whole batches
 
