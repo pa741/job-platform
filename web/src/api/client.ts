@@ -3,6 +3,7 @@ import type {
   DailyRollup, FacetsResponse, MatchDetail, MatchSummary,
   MeResponse, MetricsSummary, PageResponse, PostingDetail, PostingInsight, PostingSummary, ProfileRequest,
   ProfileResponse, RunResponse, ScraperHealth, SearchTermResponse, SourceComposition,
+  AiCallResponse, AiCallTotalsResponse,
 } from './types';
 
 /** Thrown for any non-2xx response, carrying the RFC 9457 detail the API returns. */
@@ -115,6 +116,21 @@ export class JobPlatformApi {
     this.request<PageResponse<PostingSummary>>(`/api/v1/postings${JobPlatformApi.query({ ...params })}`);
 
   posting = (id: number) => this.request<PostingDetail>(`/api/v1/postings/${id}`);
+
+  /**
+   * The AI call ledger.
+   *
+   * Failures by default, because the losses are the part nobody could see: a sweep once
+   * discarded five batches of ten while reporting success. Served from Cosmos like every
+   * other dashboard read, so leaving this page open costs the SQL grant nothing.
+   */
+  aiCalls = (params: { days?: number; failuresOnly?: boolean; limit?: number } = {}) =>
+    this.request<{ items: AiCallResponse[] }>(
+      `/api/v1/ai-calls${JobPlatformApi.query({ ...params })}`);
+
+  aiCallSummary = (days = 7) =>
+    this.request<{ days: number; items: AiCallTotalsResponse[] }>(
+      `/api/v1/ai-calls/summary${JobPlatformApi.query({ days })}`);
 
   /**
    * Everything concluded about one posting, with the evidence behind each conclusion.

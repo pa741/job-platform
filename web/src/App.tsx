@@ -8,11 +8,12 @@ import { Postings } from './pages/Postings';
 import { Profile } from './pages/Profile';
 import { Matches } from './pages/Matches';
 import { Vocabulary } from './pages/Vocabulary';
+import { AiCalls } from './pages/AiCalls';
 import { ErrorNote } from './components/Primitives';
 import { useTheme, type Theme } from './theme/useTheme';
 import './theme/app.css';
 
-type Page = 'overview' | 'postings' | 'vocabulary' | 'matches' | 'profile';
+type Page = 'overview' | 'postings' | 'vocabulary' | 'matches' | 'profile' | 'ai';
 
 const PAGES: { id: Page; label: string }[] = [
   { id: 'overview', label: 'Overview' },
@@ -20,6 +21,7 @@ const PAGES: { id: Page; label: string }[] = [
   { id: 'vocabulary', label: 'Vocabulary' },
   { id: 'matches', label: 'Matches' },
   { id: 'profile', label: 'Profile' },
+  { id: 'ai', label: 'Model calls' },
 ];
 
 export function App() {
@@ -155,18 +157,23 @@ function Dashboard({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => 
         {/* The search-term bootstrap gates the corpus pages only. Profile and Matches are
             about the signed-in person, so neither an error nor a slow load here should stand
             between somebody and their own record. */}
-        {error && page !== 'profile' && page !== 'matches'
+        {error && page !== 'profile' && page !== 'matches' && page !== 'ai'
           ? <ErrorNote error={error} onRetry={loadTerms} />
           : null}
-        {!error && !terms && page !== 'profile' && page !== 'matches' && (
+        {!error && !terms && page !== 'profile' && page !== 'matches' && page !== 'ai' && (
           <div className="empty">Loading…</div>
         )}
-        {terms?.length === 0 && page !== 'profile' && page !== 'matches' && (
+        {terms?.length === 0 && page !== 'profile' && page !== 'matches' && page !== 'ai' && (
           <div className="empty">
             The platform has no ingested data yet. Run the scraper, or replay a blob through
             the ingest function.
           </div>
         )}
+
+        {/* Not scoped by search term, and deliberately not gated on the bootstrap: the
+            reason to open this page is that something is wrong, which is exactly when
+            waiting on another call is least welcome. */}
+        {page === 'ai' && <AiCalls api={api} />}
 
         {searchTerm && page === 'overview' && <Overview api={api} searchTerm={searchTerm} />}
         {searchTerm && page === 'postings' && <Postings api={api} searchTerm={searchTerm} />}

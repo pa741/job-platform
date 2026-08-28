@@ -633,3 +633,34 @@ export interface SourceComposition {
    */
   gradedShare: number;
 }
+
+/**
+ * One model call, as the ledger records it.
+ *
+ * There is deliberately no prompt or response field. The prompts carry the candidate's
+ * employment history, and the API has no field for them - this type reflects that rather
+ * than trimming it client-side.
+ */
+export interface AiCallResponse {
+  occurredAtUtc: string;
+  operation: string;
+  deployment: string | null;
+  /** `Succeeded`, `PartiallyDiscarded` or `Failed`. */
+  outcome: string;
+  requested: number;
+  returned: number;
+  /** Paid for and thrown away. The number that used to be invisible. */
+  discarded: number;
+  durationMs: number;
+  reason: string | null;
+  affectedIds: number[];
+}
+
+export interface AiCallTotalsResponse {
+  operation: string;
+  calls: number;
+  failedCalls: number;
+  requested: number;
+  returned: number;
+  discarded: number;
+}
