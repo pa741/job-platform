@@ -384,6 +384,40 @@ versioned data.
 - **Not in-database `AI_GENERATE_EMBEDDINGS`.** It would bypass the AI call ledger, and Basic
   tier caps external connections at three.
 
+#### Rejected: writing a virtual advert from the CV and comparing advert to advert
+
+A CV and a job advert are different genres - one says *"I built X at Y"*, the other *"you
+will build X, we offer Z"* - so comparing them mixes topical similarity with genre distance.
+The obvious fix is HyDE: ask the model to write the advert this candidate is the ideal
+applicant for, embed **that**, and compare advert to advert. It was tried on the same 70
+pairs. **It is materially worse.**
+
+| query side | Spearman vs the model | Weak in top 20 | Strong in top 20 | Strong buried |
+| --- | --- | --- | --- | --- |
+| the CV itself | **+0.501** | 3 | 8 | 2 |
+| a generated advert | +0.256 | 6 | 7 | 4 |
+| mean of both | +0.379 | - | - | - |
+
+**Genre matching worked exactly as predicted, and that is the problem.** Every similarity
+rose - the range moved from 0.34-0.58 to 0.50-0.76 - because the query now reads like the
+documents it is compared against. But the Strong-to-Weak gap *shrank*, from +0.045 to +0.030,
+and ranking lives entirely on that gap. **It raised the floor more than the ceiling.**
+
+The likely reading, from the movers: five of the ten biggest gainers were Weak matches. A
+generated advert is written in advert register - "what the role involves", "you will design
+and own" - and that register is precisely what every advert shares, including the management
+and consulting roles that were the residue in the first place. Closing the genre gap moved
+the query toward the generic middle of advert-space, which is where the confusion already
+was.
+
+So **the genre gap was carrying signal rather than noise.** The CV's distinctness is part of
+what separates a .NET role from a Legal Counsel one.
+
+Two honest limits on this result. It tests one prompt and one generated advert, so it rules
+out this formulation rather than the whole idea - though halving the correlation is not a
+marginal difference. And two runs of the *same* CV measurement gave +0.488 and +0.501, so
+treat anything under about 0.02 as run-to-run noise; the HyDE gap is far outside that.
+
 #### What building it looks like
 
 1. An embeddings deployment **in Bicep** - the experiment used a hand-made one, deleted
