@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using JobPlatform.Core.Ai;
 using JobPlatform.Core.Applications;
 using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Matching;
@@ -33,8 +34,14 @@ namespace JobPlatform.Ai.Applications;
 public sealed class KernelApplicationWriter(
     Kernel kernel,
     IOptions<AzureOpenAiOptions> options,
-    ILogger<KernelApplicationWriter>? logger = null) : IApplicationWriter
+    ILogger<KernelApplicationWriter>? logger = null,
+    IAiCallLog? callLog = null,
+    TimeProvider? time = null) : IApplicationWriter
 {
+    /// <summary>Names this pass in the AI call ledger.</summary>
+    public const string LedgerOperation = "application-writing";
+
+    private readonly TimeProvider _time = time ?? TimeProvider.System;
     private readonly AzureOpenAiOptions _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
 
     private const int MaxPostingChars = 8_000;
@@ -102,7 +109,54 @@ public sealed class KernelApplicationWriter(
         - Never claim enthusiasm for something the advert does not describe.
         """;
 
+    /// <summary>
+    /// Writes one application, timed and recorded to the ledger whatever happens to it.
+    /// </summary>
+    /// <remarks>
+    /// This is the only consumer of the <c>writing</c> deployment, and Semantic Kernel falls back
+    /// to whichever chat service is present rather than throwing when a prompt names one that is
+    /// not registered. A ledger showing CVs served by <c>bulk</c> is how that gets noticed, which
+    /// is why the deployment is recorded rather than assumed.
+    ///
+    /// One document per call, so requested is always one - but the pairing still matters: a
+    /// person pressed a button and either got a CV or did not, and until now the "did not" left
+    /// no trace beyond a log line.
+    /// </remarks>
     public async Task<ApplicationDraft?> WriteAsync(ApplicationRequest request, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var started = _time.GetTimestamp();
+        var (draft, reason) = await WriteCoreAsync(request, ct);
+
+        if (callLog is not null)
+        {
+            try
+            {
+                await callLog.RecordAsync(
+                    AiCallRecord.Create(
+                        _time.GetUtcNow(),
+                        LedgerOperation,
+                        _options.WritingDeployment,
+                        draft is null ? AiCallOutcome.Failed : AiCallOutcome.Succeeded,
+                        requested: 1,
+                        returned: draft is null ? 0 : 1,
+                        (long)_time.GetElapsedTime(started).TotalMilliseconds,
+                        reason,
+                        draft is null ? [request.Posting.PostingId] : []),
+                    ct);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "Could not record the application writing call to the AI ledger.");
+            }
+        }
+
+        return draft;
+    }
+
+    private async Task<(ApplicationDraft? Draft, string? Reason)> WriteCoreAsync(
+        ApplicationRequest request, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
 
@@ -135,12 +189,12 @@ public sealed class KernelApplicationWriter(
         {
             logger?.LogWarning(
                 "Application writing timed out after {Seconds}s.", _options.WritingTimeoutSeconds);
-            return null;
+            return (null, $"timed out after {_options.WritingTimeoutSeconds}s");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger?.LogWarning(ex, "Application writing failed.");
-            return null;
+            return (null, $"{ex.GetType().Name}: {ex.Message}");
         }
 
         var json = AiJson.ExtractJsonObject(response);
@@ -148,7 +202,7 @@ public sealed class KernelApplicationWriter(
         if (json is null)
         {
             logger?.LogWarning("Application writing returned no JSON object.");
-            return null;
+            return (null, "response carried no JSON object");
         }
 
         try
@@ -165,21 +219,23 @@ public sealed class KernelApplicationWriter(
             if (string.IsNullOrWhiteSpace(cv) || string.IsNullOrWhiteSpace(letter))
             {
                 logger?.LogWarning("Application writing returned an incomplete draft.");
-                return null;
+                return (null, "draft was missing a CV or a cover letter");
             }
 
-            return new ApplicationDraft
-            {
-                CurriculumVitaeMarkdown = cv,
-                CoverLetterMarkdown = letter,
-                Emphasised = Strings(root, "emphasised"),
-                Model = _options.WritingDeployment,
-            };
+            return (
+                new ApplicationDraft
+                {
+                    CurriculumVitaeMarkdown = cv,
+                    CoverLetterMarkdown = letter,
+                    Emphasised = Strings(root, "emphasised"),
+                    Model = _options.WritingDeployment,
+                },
+                null);
         }
         catch (JsonException ex)
         {
             logger?.LogWarning(ex, "Application writing returned malformed JSON.");
-            return null;
+            return (null, $"malformed JSON: {ex.Message}");
         }
     }
 
