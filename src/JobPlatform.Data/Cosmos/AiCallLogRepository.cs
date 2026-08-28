@@ -26,11 +26,13 @@ public sealed class AiCallLogRepository : IAiCallLog
 {
     private readonly Container _container;
     private readonly ILogger<AiCallLogRepository> _logger;
+    private readonly bool _recordPrompts;
 
     public AiCallLogRepository(
         CosmosClient client,
         IOptions<CosmosOptions> options,
-        ILogger<AiCallLogRepository> logger)
+        ILogger<AiCallLogRepository> logger,
+        IOptions<AiLedgerOptions>? ledger = null)
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(options);
@@ -38,7 +40,25 @@ public sealed class AiCallLogRepository : IAiCallLog
         var settings = options.Value;
         _container = client.GetContainer(settings.DatabaseName, settings.AiCallsContainerName);
         _logger = logger;
+        _recordPrompts = ledger?.Value.RecordPrompts ?? false;
     }
+
+    /// <summary>
+    /// What is actually stored, after the prompt rules.
+    /// </summary>
+    /// <remarks>
+    /// Applied here rather than at the call sites, deliberately. Four passes report to this
+    /// ledger and a fifth will; a rule enforced in four places is a rule that survives until
+    /// somebody adds the fifth. Stripping at the sink means a call site cannot get it wrong by
+    /// passing a prompt it should not have.
+    ///
+    /// A success has nothing to reproduce, so its prompt is dropped even when recording is on.
+    /// That is most of them, and it is most of the personal data that would otherwise accrue.
+    /// </remarks>
+    private AiCallRecord Sanitise(AiCallRecord record)
+        => record.Prompt is null || (_recordPrompts && record.Outcome != AiCallOutcome.Succeeded)
+            ? record
+            : record with { Prompt = null };
 
     public async Task RecordAsync(AiCallRecord record, CancellationToken ct = default)
     {
@@ -46,7 +66,8 @@ public sealed class AiCallLogRepository : IAiCallLog
 
         try
         {
-            await _container.CreateItemAsync(record, new PartitionKey(record.Day), cancellationToken: ct);
+            await _container.CreateItemAsync(
+                Sanitise(record), new PartitionKey(record.Day), cancellationToken: ct);
         }
         catch (Exception ex)
         {

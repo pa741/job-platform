@@ -175,7 +175,7 @@ public sealed class KernelDocumentExtractor(
         CancellationToken ct)
     {
         var started = _time.GetTimestamp();
-        var (results, reason) = await RunOneBatchAsync(batch, ct);
+        var (results, reason, prompt) = await RunOneBatchAsync(batch, ct);
 
         if (callLog is not null)
         {
@@ -203,7 +203,10 @@ public sealed class KernelDocumentExtractor(
                         [.. batch.Where((_, i) => results[i] is null)
                             .Select(r => r.SourceId)
                             .Where(id => id is not null)
-                            .Select(id => id!.Value)]),
+                            .Select(id => id!.Value)],
+                        // Offered, not decided: the sink keeps it only for a call that lost
+                        // something, and only where the deployment asked for prompts at all.
+                        prompt),
                     ct);
             }
             catch (Exception ex)
@@ -215,7 +218,7 @@ public sealed class KernelDocumentExtractor(
         return results;
     }
 
-    private async Task<(DocumentExtraction?[] Results, string? Reason)> RunOneBatchAsync(
+    private async Task<(DocumentExtraction?[] Results, string? Reason, string? Prompt)> RunOneBatchAsync(
         ExtractionRequest[] batch,
         CancellationToken ct)
     {
@@ -245,8 +248,14 @@ public sealed class KernelDocumentExtractor(
 
         if (documents.Length == 0)
         {
-            return (results, "nothing to send");
+            return (results, "nothing to send", null);
         }
+
+        // The prompt as the model will see it, so a failure can be replayed rather than
+        // reconstructed by hand.
+        var prompt = PromptTemplate
+            .Replace("{{$vocabulary}}", ExtractionPrompt.Vocabulary, StringComparison.Ordinal)
+            .Replace("{{$documents}}", documents.ToString(), StringComparison.Ordinal);
 
         var arguments = new KernelArguments(AiPrompt.Bulk(_options))
         {
@@ -269,14 +278,14 @@ public sealed class KernelDocumentExtractor(
             logger?.LogWarning(
                 "Extraction of {Count} document(s) timed out after {Seconds}s.",
                 batch.Length, _options.TimeoutSeconds);
-            return (results, $"timed out after {_options.TimeoutSeconds}s");
+            return (results, $"timed out after {_options.TimeoutSeconds}s", prompt);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // A provider failure must not fail the queue message forever. The rows simply have
             // no extraction and are picked up again by the backfill.
             logger?.LogWarning(ex, "Extraction call failed for {Count} document(s).", batch.Length);
-            return (results, $"{ex.GetType().Name}: {ex.Message}");
+            return (results, $"{ex.GetType().Name}: {ex.Message}", prompt);
         }
 
         var json = AiJson.ExtractJsonObject(response);
@@ -284,7 +293,7 @@ public sealed class KernelDocumentExtractor(
         if (json is null)
         {
             logger?.LogWarning("Extraction returned no JSON object.");
-            return (results, "response carried no JSON object");
+            return (results, "response carried no JSON object", prompt);
         }
 
         try
@@ -297,7 +306,7 @@ public sealed class KernelDocumentExtractor(
             reason = $"malformed JSON: {ex.Message}";
         }
 
-        return (results, reason);
+        return (results, reason, prompt);
     }
 
     /// <summary>

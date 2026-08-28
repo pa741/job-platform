@@ -1,3 +1,4 @@
+using JobPlatform.Core.Ai;
 using System.Globalization;
 using JobPlatform.Core.Enrichment;
 using JobPlatform.Data.Sql;
@@ -33,8 +34,11 @@ public sealed class CollectExtractionBatchesFunction(
     PostingExtractionWriter writer,
     TimeProvider time,
     ILogger<CollectExtractionBatchesFunction> logger,
-    IBatchDocumentExtractor? extractor = null)
+    IBatchDocumentExtractor? extractor = null,
+    IAiCallLog? callLog = null)
 {
+    /// <summary>Names this pass in the AI call ledger.</summary>
+    public const string LedgerOperation = "posting-extraction-batch";
     /// <summary>How many open batches one tick will poll. Small; there is rarely more than one.</summary>
     private const int MaxBatchesPerTick = 5;
 
@@ -146,6 +150,74 @@ public sealed class CollectExtractionBatchesFunction(
     }
 
     /// <summary>
+    /// One record per batch, written when the batch closes rather than when it was submitted.
+    /// </summary>
+    /// <remarks>
+    /// <b>Collection is the only moment that knows the answer.</b> Submission knows what was
+    /// asked for and nothing about what came back, and the two are up to twenty-four hours
+    /// apart - so a record written at submission would have to be updated later or left as a
+    /// question. One record, at the point the outcome is known, is the honest shape.
+    ///
+    /// Written once the batch actually completes, never on an invocation that deferred work.
+    /// A partial pass would report a shortfall that the next tick is about to fill, which is
+    /// exactly the kind of number that makes a ledger untrustworthy.
+    ///
+    /// The counts come from <c>outcome.Results</c> rather than from this invocation's tallies,
+    /// because a corpus-sized batch is applied across several ticks and only the provider's
+    /// result set describes the whole of it.
+    /// </remarks>
+    private async Task RecordAsync(
+        string providerBatchId,
+        IReadOnlyDictionary<string, PendingBatchItem> items,
+        BatchOutcome outcome,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        if (callLog is null)
+        {
+            return;
+        }
+
+        var usable = outcome.Results
+            .Where(r => r.Extraction is not null && items.ContainsKey(r.CorrelationId))
+            .Select(r => r.CorrelationId)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var lost = items
+            .Where(pair => !usable.Contains(pair.Key))
+            .Select(pair => pair.Value.PostingId)
+            .ToArray();
+
+        try
+        {
+            await callLog.RecordAsync(
+                AiCallRecord.Create(
+                    now,
+                    LedgerOperation,
+                    // The batch path runs on OpenAI rather than Azure, which is the one place
+                    // the two providers differ - worth seeing in the ledger beside the rest.
+                    "openai-batch",
+                    lost.Length == 0
+                        ? AiCallOutcome.Succeeded
+                        : usable.Count == 0 ? AiCallOutcome.Failed : AiCallOutcome.PartiallyDiscarded,
+                    items.Count,
+                    usable.Count,
+                    // A batch is answered up to a day after it is submitted, so wall-clock
+                    // duration would measure the provider's queue rather than the call.
+                    durationMs: 0,
+                    lost.Length == 0
+                        ? null
+                        : $"batch {providerBatchId}: {lost.Length} of {items.Count} documents came back without an extraction",
+                    lost),
+                ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not record batch {BatchId} to the AI ledger.", providerBatchId);
+        }
+    }
+
+    /// <summary>
     /// Writes one finished batch's results back against the postings that produced them.
     /// </summary>
     /// <remarks>
@@ -237,6 +309,8 @@ public sealed class CollectExtractionBatchesFunction(
         }
 
         await batches.CompleteAsync(batchId, outcome.State, succeeded, failed, null, now, ct);
+
+        await RecordAsync(providerBatchId, items, outcome, now, ct);
 
         logger.LogInformation(
             "Batch {BatchId}: {Succeeded} extracted, {Failed} failed, of {Requested} submitted.",

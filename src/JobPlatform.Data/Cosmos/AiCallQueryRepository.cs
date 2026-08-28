@@ -1,3 +1,4 @@
+using System.Globalization;
 using JobPlatform.Core.Ai;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.Options;
@@ -57,7 +58,7 @@ public sealed class AiCallQueryRepository : IAiCallSource
         var partitions = Enumerable
             .Range(0, window)
             .Select(offset => today.AddDays(-offset).ToString(
-                "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture))
+                "yyyy-MM-dd", CultureInfo.InvariantCulture))
             .ToArray();
 
         var sql = failuresOnly
@@ -132,6 +133,47 @@ public sealed class AiCallQueryRepository : IAiCallSource
                 g.Sum(r => r.Returned)))
             .OrderByDescending(t => t.Discarded)];
     }
+
+    /// <summary>
+    /// One record, whole, including its prompt where one was kept.
+    /// </summary>
+    /// <remarks>
+    /// A point read against the day partition, which the id carries as its prefix - so this
+    /// costs a single RU rather than a fan-out, and needs no extra parameter from the caller.
+    /// </remarks>
+    public async Task<AiCallRecord?> GetAsync(string id, CancellationToken ct = default)
+    {
+        var day = DayOf(id);
+
+        if (day is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return await _container.ReadItemAsync<AiCallRecord>(id, new PartitionKey(day), cancellationToken: ct);
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The partition an id belongs to, read back out of the id itself.
+    /// </summary>
+    /// <remarks>
+    /// <c>AiCallRecord.Create</c> builds the id as <c>yyyyMMddTHHmmssfff-operation-guid</c>, so
+    /// the day is the first eight characters. Deriving it beats asking the caller for it: a
+    /// client that has to pass a partition key alongside an id will eventually pass the wrong
+    /// one, and the read would then answer 404 for a record that exists.
+    /// </remarks>
+    private static string? DayOf(string id)
+        => id.Length < 8 || !DateTime.TryParseExact(
+            id[..8], "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed)
+            ? null
+            : parsed.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
     Task<IReadOnlyList<AiCallRecord>> IAiCallSource.ListAsync(
         int days, bool failuresOnly, int limit, CancellationToken ct)

@@ -127,7 +127,7 @@ public sealed class KernelApplicationWriter(
         ArgumentNullException.ThrowIfNull(request);
 
         var started = _time.GetTimestamp();
-        var (draft, reason) = await WriteCoreAsync(request, ct);
+        var (draft, reason, prompt) = await WriteCoreAsync(request, ct);
 
         if (callLog is not null)
         {
@@ -143,7 +143,11 @@ public sealed class KernelApplicationWriter(
                         returned: draft is null ? 0 : 1,
                         (long)_time.GetElapsedTime(started).TotalMilliseconds,
                         reason,
-                        draft is null ? [request.Posting.PostingId] : []),
+                        draft is null ? [request.Posting.PostingId] : [],
+                        // Offered, not decided. This is the prompt most worth guarding: it
+                        // contains the candidate's whole profile, and the sink keeps it only
+                        // for a failed call on a deployment that asked for prompts.
+                        prompt),
                     ct);
             }
             catch (Exception ex)
@@ -155,7 +159,7 @@ public sealed class KernelApplicationWriter(
         return draft;
     }
 
-    private async Task<(ApplicationDraft? Draft, string? Reason)> WriteCoreAsync(
+    private async Task<(ApplicationDraft? Draft, string? Reason, string? Prompt)> WriteCoreAsync(
         ApplicationRequest request, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -175,6 +179,13 @@ public sealed class KernelApplicationWriter(
                 : Truncate(request.Instructions, 2_000),
         };
 
+        // The prompt as the model will see it, so a failure can be replayed rather than
+        // reconstructed by hand.
+        var prompt = arguments.Aggregate(
+            PromptTemplate,
+            (text, pair) => text.Replace(
+                $"{{{{${pair.Key}}}}}", pair.Value?.ToString() ?? string.Empty, StringComparison.Ordinal));
+
         string response;
 
         try
@@ -189,12 +200,12 @@ public sealed class KernelApplicationWriter(
         {
             logger?.LogWarning(
                 "Application writing timed out after {Seconds}s.", _options.WritingTimeoutSeconds);
-            return (null, $"timed out after {_options.WritingTimeoutSeconds}s");
+            return (null, $"timed out after {_options.WritingTimeoutSeconds}s", prompt);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger?.LogWarning(ex, "Application writing failed.");
-            return (null, $"{ex.GetType().Name}: {ex.Message}");
+            return (null, $"{ex.GetType().Name}: {ex.Message}", prompt);
         }
 
         var json = AiJson.ExtractJsonObject(response);
@@ -202,7 +213,7 @@ public sealed class KernelApplicationWriter(
         if (json is null)
         {
             logger?.LogWarning("Application writing returned no JSON object.");
-            return (null, "response carried no JSON object");
+            return (null, "response carried no JSON object", prompt);
         }
 
         try
@@ -219,7 +230,7 @@ public sealed class KernelApplicationWriter(
             if (string.IsNullOrWhiteSpace(cv) || string.IsNullOrWhiteSpace(letter))
             {
                 logger?.LogWarning("Application writing returned an incomplete draft.");
-                return (null, "draft was missing a CV or a cover letter");
+                return (null, "draft was missing a CV or a cover letter", prompt);
             }
 
             return (
@@ -230,12 +241,13 @@ public sealed class KernelApplicationWriter(
                     Emphasised = Strings(root, "emphasised"),
                     Model = _options.WritingDeployment,
                 },
-                null);
+                null,
+                prompt);
         }
         catch (JsonException ex)
         {
             logger?.LogWarning(ex, "Application writing returned malformed JSON.");
-            return (null, $"malformed JSON: {ex.Message}");
+            return (null, $"malformed JSON: {ex.Message}", prompt);
         }
     }
 

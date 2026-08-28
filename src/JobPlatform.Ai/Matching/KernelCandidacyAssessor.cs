@@ -150,7 +150,7 @@ public sealed class KernelCandidacyAssessor(
         CancellationToken ct)
     {
         var started = _time.GetTimestamp();
-        var (results, reason) = await RunOneBatchAsync(profileText, declared, batch, ct);
+        var (results, reason, prompt) = await RunOneBatchAsync(profileText, declared, batch, ct);
 
         if (callLog is null)
         {
@@ -180,7 +180,10 @@ public sealed class KernelCandidacyAssessor(
                     reason,
                     // The postings that went unassessed, which is what a reader needs in order
                     // to know what was lost rather than merely that something was.
-                    [.. batch.Where((_, i) => results[i] is null).Select(r => r.PostingId)]),
+                    [.. batch.Where((_, i) => results[i] is null).Select(r => r.PostingId)],
+                    // Kept only for a call that lost something, and only where the deployment
+                    // asked for it. The sink decides; this just offers.
+                    prompt),
                 ct);
         }
         catch (Exception ex)
@@ -191,7 +194,7 @@ public sealed class KernelCandidacyAssessor(
         return results;
     }
 
-    private async Task<(CandidacyAssessment?[] Results, string? Reason)> RunOneBatchAsync(
+    private async Task<(CandidacyAssessment?[] Results, string? Reason, string? Prompt)> RunOneBatchAsync(
         string profileText,
         string declared,
         CandidacyRequest[] batch,
@@ -226,6 +229,14 @@ public sealed class KernelCandidacyAssessor(
             ["roles"] = roles.ToString(),
         };
 
+        // The prompt as the model will see it, so a failure can be replayed rather than
+        // reconstructed by hand. Rendering it here costs a string the call is about to build
+        // anyway; the sink throws it away unless the call went wrong.
+        var prompt = PromptTemplate
+            .Replace("{{$profile}}", profileText, StringComparison.Ordinal)
+            .Replace("{{$declared}}", declared, StringComparison.Ordinal)
+            .Replace("{{$roles}}", roles.ToString(), StringComparison.Ordinal);
+
         string response;
 
         try
@@ -241,14 +252,14 @@ public sealed class KernelCandidacyAssessor(
             logger?.LogWarning(
                 "Candidacy assessment of {Count} role(s) timed out after {Seconds}s.",
                 batch.Length, _options.TimeoutSeconds);
-            return (results, $"timed out after {_options.TimeoutSeconds}s");
+            return (results, $"timed out after {_options.TimeoutSeconds}s", prompt);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // The deterministic score is already stored and is what the UI falls back to, so a
             // failure here degrades the shortlist rather than losing it.
             logger?.LogWarning(ex, "Candidacy assessment failed for {Count} role(s).", batch.Length);
-            return (results, $"{ex.GetType().Name}: {ex.Message}");
+            return (results, $"{ex.GetType().Name}: {ex.Message}", prompt);
         }
 
         var json = AiJson.ExtractJsonObject(response);
@@ -256,7 +267,7 @@ public sealed class KernelCandidacyAssessor(
         if (json is null)
         {
             logger?.LogWarning("Candidacy assessment returned no JSON object.");
-            return (results, "response carried no JSON object");
+            return (results, "response carried no JSON object", prompt);
         }
 
         try
@@ -269,7 +280,7 @@ public sealed class KernelCandidacyAssessor(
             reason = $"malformed JSON: {ex.Message}";
         }
 
-        return (results, reason);
+        return (results, reason, prompt);
     }
 
     /// <summary>

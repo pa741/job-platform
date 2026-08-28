@@ -131,6 +131,49 @@ public sealed class AiCallEndpointTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task The_list_never_carries_a_prompt_even_when_one_was_kept()
+    {
+        // The guard that matters. Api:AllowAnonymousReads relaxes the policy this list sits
+        // behind, and an assessment prompt is somebody's employment history - so one config
+        // flag would be the difference between a dashboard and a published CV. The prompt is
+        // absent from the list contract entirely rather than filtered, so exposing it would
+        // take a deliberate edit.
+        _factory.AiCalls.Records.Add(AiCallRecord.Create(
+            new DateTimeOffset(2026, 8, 28, 3, 30, 0, TimeSpan.Zero),
+            "candidacy-assessment",
+            "bulk",
+            AiCallOutcome.Failed,
+            requested: 1,
+            returned: 0,
+            durationMs: 10,
+            reason: "malformed JSON",
+            affectedIds: [99],
+            prompt: "CANDIDATE / somebody's employment history"));
+
+        var response = await _client.GetAsync("/api/v1/ai-calls?failuresOnly=false");
+        var raw = await response.Content.ReadAsStringAsync();
+
+        Assert.DoesNotContain("employment history", raw, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"prompt\"", raw, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Replay_stays_closed_even_though_the_list_beside_it_is_open()
+    {
+        // The whole reason the prompt has its own route. This test host runs with anonymous
+        // reads on - every assertion above is made without a token - and the replay route
+        // still refuses, because it is behind AuthenticatedPolicy, which ignores that flag
+        // entirely. Same reasoning as /me.
+        var record = _factory.AiCalls.Records[1];
+
+        var listed = await _client.GetAsync("/api/v1/ai-calls");
+        var replay = await _client.GetAsync($"/api/v1/ai-calls/{record.Id}/replay");
+
+        Assert.Equal(HttpStatusCode.OK, listed.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, replay.StatusCode);
+    }
+
     public void Dispose()
     {
         _client.Dispose();

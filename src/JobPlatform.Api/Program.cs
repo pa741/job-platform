@@ -39,6 +39,15 @@ builder.Services.AddProblemDetails();
 // Data. Both connections are identity-based; there is no secret in either path.
 // ---------------------------------------------------------------------------
 
+// Off unless a deployment asks. Turning it on stores the prompt of a failed call so the
+// failure can be replayed, and an assessment or profile prompt is somebody's employment
+// history - a decision to make deliberately, per deployment. The sink still keeps one only
+// for a call that lost something, and no list endpoint returns it.
+builder.Services.Configure<AiLedgerOptions>(options =>
+    options.RecordPrompts =
+        bool.TryParse(configuration[$"{AiLedgerOptions.SectionName}:RecordPrompts"], out var record)
+        && record);
+
 builder.Services.Configure<CosmosOptions>(options =>
 {
     options.AccountEndpoint = configuration["Cosmos:AccountEndpoint"]

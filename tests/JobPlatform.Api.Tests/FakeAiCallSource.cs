@@ -27,6 +27,9 @@ public sealed class FakeAiCallSource : IAiCallSource
         return Task.FromResult(results);
     }
 
+    public Task<AiCallRecord?> GetAsync(string id, CancellationToken ct = default)
+        => Task.FromResult(Records.FirstOrDefault(r => r.Id == id));
+
     public Task<IReadOnlyList<AiCallTotals>> SummariseAsync(int days, CancellationToken ct = default)
     {
         IReadOnlyList<AiCallTotals> results =

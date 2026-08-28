@@ -34,10 +34,17 @@ public enum AiCallOutcome
 /// ninety were paid for. Recording both is what makes the difference visible, and it is why this
 /// type carries counts rather than a bare success flag.
 ///
-/// <b>No prompt, ever.</b> The assessor's and the extractor's prompts carry the candidate's
-/// profile: employment history, contact details, salary expectations. This record holds counts, a
-/// bounded reason and the ids affected, all of which are safe to keep and to show. A store that
-/// holds both public postings and profile-derived prose is a store that leaks the second one.
+/// <b>The prompt is kept only where it buys something, and only when asked for.</b> A failure
+/// that cannot be reproduced is a failure somebody has to guess at, so <see cref="Prompt"/>
+/// exists - but it carries the candidate's employment history, contact details and salary
+/// expectations, so three rules hold it down and all three live in the sink rather than at the
+/// call sites, where one of them would eventually be forgotten:
+/// <list type="number">
+/// <item>Off unless <c>AiLedger:RecordPrompts</c> is set. A clone stores none.</item>
+/// <item>Kept only when the call lost something. A success has nothing to reproduce.</item>
+/// <item>Never returned by the list endpoint, which <c>Api:AllowAnonymousReads</c> can open.
+/// It has its own route behind the authenticated policy.</item>
+/// </list>
 /// </remarks>
 public sealed record AiCallRecord
 {
@@ -118,6 +125,26 @@ public sealed record AiCallRecord
     [JsonPropertyName("affectedIds")]
     public IReadOnlyList<long> AffectedIds { get; init; } = [];
 
+    /// <summary>
+    /// The exact text sent to the model, for reproducing a failure.
+    /// </summary>
+    /// <remarks>
+    /// Development diagnostics, not a record of what happened - which is why it is stripped by
+    /// the sink rather than trusted to be absent, and why it is the one field the list endpoint
+    /// will not return. With this and <see cref="Deployment"/> the call can be replayed against
+    /// the provider directly, which is the difference between fixing a parsing fault and
+    /// theorising about one.
+    ///
+    /// Bounded at <see cref="MaxPromptChars"/>. A batch prompt carries the whole vocabulary plus
+    /// ten adverts and is the largest thing this system produces; storing it whole would put
+    /// megabytes into a document store for a diagnostic.
+    /// </remarks>
+    [JsonPropertyName("prompt")]
+    public string? Prompt { get; init; }
+
+    /// <summary>Bound on <see cref="Prompt"/>, applied at construction.</summary>
+    public const int MaxPromptChars = 60_000;
+
     /// <summary>Bound on <see cref="Reason"/>, applied at construction.</summary>
     public const int MaxReasonChars = 300;
 
@@ -136,7 +163,8 @@ public sealed record AiCallRecord
         int returned,
         long durationMs,
         string? reason = null,
-        IReadOnlyList<long>? affectedIds = null)
+        IReadOnlyList<long>? affectedIds = null,
+        string? prompt = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(operation);
 
@@ -162,6 +190,9 @@ public sealed record AiCallRecord
                 ? reason
                 : reason[..MaxReasonChars],
             AffectedIds = ids,
+            Prompt = prompt is null || prompt.Length <= MaxPromptChars
+                ? prompt
+                : prompt[..MaxPromptChars],
         };
     }
 }
@@ -207,6 +238,11 @@ public interface IAiCallSource
     /// <summary>Recent calls, newest first.</summary>
     Task<IReadOnlyList<AiCallRecord>> ListAsync(
         int days, bool failuresOnly, int limit, CancellationToken ct = default);
+
+    /// <summary>
+    /// One record, whole. The only way to reach a stored prompt.
+    /// </summary>
+    Task<AiCallRecord?> GetAsync(string id, CancellationToken ct = default);
 
     /// <summary>What the window cost and what was lost, per pass.</summary>
     Task<IReadOnlyList<AiCallTotals>> SummariseAsync(int days, CancellationToken ct = default);
