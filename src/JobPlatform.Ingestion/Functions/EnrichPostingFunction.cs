@@ -104,7 +104,8 @@ public sealed class EnrichPostingFunction(
             }
 
             pending.Add((posting.Id, inputHash));
-            requests.Add(new ExtractionRequest(DocumentKind.Posting, posting.Description, posting.Title));
+            requests.Add(new ExtractionRequest(
+                DocumentKind.Posting, posting.Description, posting.Title, posting.Id));
         }
 
         // One call covering many postings rather than one call each. The concept vocabulary is

@@ -257,17 +257,11 @@ internal static class ExtractionPrompt
             ? value.GetString()
             : null;
 
-    public static int? Int(JsonElement element, string name)
-        => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number
-            && value.TryGetInt32(out var parsed)
-                ? parsed
-                : null;
+    /// <summary>See <see cref="AiJson.Int"/>: one reader, so the two paths cannot disagree.</summary>
+    public static int? Int(JsonElement element, string name) => AiJson.Int(element, name);
 
-    public static double? Double(JsonElement element, string name)
-        => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number
-            && value.TryGetDouble(out var parsed)
-                ? parsed
-                : null;
+    /// <summary>See <see cref="AiJson.Double"/>.</summary>
+    public static double? Double(JsonElement element, string name) => AiJson.Double(element, name);
 
     public static decimal? Decimal(JsonElement element, string name)
         => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number

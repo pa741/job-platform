@@ -21,10 +21,21 @@ public enum DocumentKind
 /// <param name="Kind">Which half of the match this is.</param>
 /// <param name="Text">The body. The caller decides how much of it to send.</param>
 /// <param name="Title">The advert title or the candidate's headline, where there is one.</param>
+/// <param name="SourceId">
+/// The row this document came from, carried only so a failure can say what it lost.
+/// </param>
+/// <remarks>
+/// <see cref="SourceId"/> is optional and the extractor never reads it. It exists because a
+/// dropped answer used to be reportable only as "one of ten failed", which is not something
+/// anybody can act on - the AI call ledger names the rows instead. An id is safe to record where
+/// the document itself is not: a profile's text is somebody's employment history, its id is an
+/// integer.
+/// </remarks>
 public readonly record struct ExtractionRequest(
     DocumentKind Kind,
     string Text,
-    string? Title = null);
+    string? Title = null,
+    long? SourceId = null);
 
 /// <summary>
 /// What the model concluded, in the same vocabulary the deterministic pass uses.

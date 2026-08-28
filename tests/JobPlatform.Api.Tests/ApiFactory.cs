@@ -92,6 +92,10 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             services.RemoveAll<IAiCallSource>();
             services.AddSingleton<IAiCallSource>(AiCalls);
 
+            // Left absent rather than faked: every consumer resolves it as nullable and
+            // skips, which is the degraded mode a host without Cosmos is supposed to have.
+            services.RemoveAll<IAiCallLog>();
+
             services.RemoveAll<Microsoft.Extensions.Diagnostics.HealthChecks.IHealthCheck>();
 
         });

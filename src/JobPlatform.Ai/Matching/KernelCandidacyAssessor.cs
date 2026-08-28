@@ -455,39 +455,8 @@ public sealed class KernelCandidacyAssessor(
             ? value.GetString()
             : null;
 
-    /// <summary>
-    /// An integer property, whether the model quoted it or not.
-    /// </summary>
-    /// <remarks>
-    /// A JSON string holding a number is accepted deliberately. This used to demand
-    /// <see cref="JsonValueKind.Number"/>, and on 2026-08-28 five of nine batches were discarded
-    /// whole - every role in them - which is the signature of a response that is well formed and
-    /// typed differently, not one that is wrong. The prompt asking for the index to be "copied
-    /// exactly" from its heading is an invitation to copy it as text.
-    ///
-    /// This concedes nothing that matters. The guarantee worth having is that an answer lands
-    /// against the role it was written for, and that is enforced by the range and duplicate
-    /// checks in <see cref="Distribute"/>, which are untouched. Reading "3" as 3 is not trusting
-    /// the model; it is parsing it.
-    /// </remarks>
-    private static int? Int(JsonElement element, string name)
-    {
-        if (!element.TryGetProperty(name, out var value))
-        {
-            return null;
-        }
-
-        return value.ValueKind switch
-        {
-            JsonValueKind.Number when value.TryGetInt32(out var parsed) => parsed,
-            JsonValueKind.String when int.TryParse(
-                value.GetString(),
-                NumberStyles.Integer,
-                CultureInfo.InvariantCulture,
-                out var parsed) => parsed,
-            _ => null,
-        };
-    }
+    /// <summary>See <see cref="AiJson.Int"/>. One reader for both paths.</summary>
+    private static int? Int(JsonElement element, string name) => AiJson.Int(element, name);
 
     /// <summary>
     /// What an unusable index actually held, for the warning. Never the whole item.

@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using JobPlatform.Core.Ai;
 using JobPlatform.Core.Enrichment;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -38,8 +39,23 @@ namespace JobPlatform.Ai.Extraction;
 public sealed class KernelDocumentExtractor(
     Kernel kernel,
     IOptions<AzureOpenAiOptions> options,
-    ILogger<KernelDocumentExtractor>? logger = null) : IDocumentExtractor
+    ILogger<KernelDocumentExtractor>? logger = null,
+    IAiCallLog? callLog = null,
+    TimeProvider? time = null) : IDocumentExtractor
 {
+    /// <summary>
+    /// Names this pass in the AI call ledger, by which half of the match it read.
+    /// </summary>
+    /// <remarks>
+    /// Split by kind rather than reported as one "extraction" pass, because the two have
+    /// different costs, different volumes and different failure histories - the corpus backfill
+    /// is the one that once spent its whole budget on HTTP 429s, and a profile extraction is a
+    /// single document somebody is waiting on. Averaging them would hide both.
+    /// </remarks>
+    public static string LedgerOperation(DocumentKind kind)
+        => kind == DocumentKind.Profile ? "profile-extraction" : "posting-extraction";
+
+    private readonly TimeProvider _time = time ?? TimeProvider.System;
     private readonly AzureOpenAiOptions _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
 
     private const string PromptTemplate =
@@ -145,11 +161,66 @@ public sealed class KernelDocumentExtractor(
         return results;
     }
 
+    /// <summary>
+    /// One batch, timed and recorded to the ledger whatever happens to it.
+    /// </summary>
+    /// <remarks>
+    /// Wraps the call rather than sitting inside it, so every exit is accounted for: a throw, a
+    /// timeout, an unparseable body and a partially usable answer are all things somebody needs
+    /// to be able to see. Dropping a misaligned answer is right - it would otherwise land against
+    /// the wrong posting, plausibly and undetectably - but it was previously right and invisible.
+    /// </remarks>
     private async Task<DocumentExtraction?[]> ExtractOneBatchAsync(
         ExtractionRequest[] batch,
         CancellationToken ct)
     {
+        var started = _time.GetTimestamp();
+        var (results, reason) = await RunOneBatchAsync(batch, ct);
+
+        if (callLog is not null)
+        {
+            var returned = results.Count(r => r is not null);
+
+            var outcome = returned == batch.Length
+                ? AiCallOutcome.Succeeded
+                : returned == 0 ? AiCallOutcome.Failed : AiCallOutcome.PartiallyDiscarded;
+
+            try
+            {
+                await callLog.RecordAsync(
+                    AiCallRecord.Create(
+                        _time.GetUtcNow(),
+                        LedgerOperation(batch.Length > 0 ? batch[0].Kind : DocumentKind.Posting),
+                        _options.BulkDeployment,
+                        outcome,
+                        batch.Length,
+                        returned,
+                        (long)_time.GetElapsedTime(started).TotalMilliseconds,
+                        reason,
+                        // Only the rows that came back with nothing. They are re-extracted by the
+                        // backfill, and naming them is the difference between knowing that and
+                        // hoping so.
+                        [.. batch.Where((_, i) => results[i] is null)
+                            .Select(r => r.SourceId)
+                            .Where(id => id is not null)
+                            .Select(id => id!.Value)]),
+                    ct);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "Could not record the extraction call to the AI ledger.");
+            }
+        }
+
+        return results;
+    }
+
+    private async Task<(DocumentExtraction?[] Results, string? Reason)> RunOneBatchAsync(
+        ExtractionRequest[] batch,
+        CancellationToken ct)
+    {
         var results = new DocumentExtraction?[batch.Length];
+        string? reason = null;
 
         var documents = new StringBuilder(4_000);
 
@@ -174,7 +245,7 @@ public sealed class KernelDocumentExtractor(
 
         if (documents.Length == 0)
         {
-            return results;
+            return (results, "nothing to send");
         }
 
         var arguments = new KernelArguments(AiPrompt.Bulk(_options))
@@ -198,14 +269,14 @@ public sealed class KernelDocumentExtractor(
             logger?.LogWarning(
                 "Extraction of {Count} document(s) timed out after {Seconds}s.",
                 batch.Length, _options.TimeoutSeconds);
-            return results;
+            return (results, $"timed out after {_options.TimeoutSeconds}s");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // A provider failure must not fail the queue message forever. The rows simply have
             // no extraction and are picked up again by the backfill.
             logger?.LogWarning(ex, "Extraction call failed for {Count} document(s).", batch.Length);
-            return results;
+            return (results, $"{ex.GetType().Name}: {ex.Message}");
         }
 
         var json = AiJson.ExtractJsonObject(response);
@@ -213,19 +284,20 @@ public sealed class KernelDocumentExtractor(
         if (json is null)
         {
             logger?.LogWarning("Extraction returned no JSON object.");
-            return results;
+            return (results, "response carried no JSON object");
         }
 
         try
         {
-            Distribute(json, batch, results);
+            reason = Distribute(json, batch, results);
         }
         catch (JsonException ex)
         {
             logger?.LogWarning(ex, "Extraction returned malformed JSON.");
+            reason = $"malformed JSON: {ex.Message}";
         }
 
-        return results;
+        return (results, reason);
     }
 
     /// <summary>
@@ -238,7 +310,7 @@ public sealed class KernelDocumentExtractor(
     /// afterwards - so anything ambiguous is discarded and the affected postings are simply
     /// re-extracted by the backfill later.
     /// </remarks>
-    private void Distribute(string json, ExtractionRequest[] batch, DocumentExtraction?[] results)
+    private string? Distribute(string json, ExtractionRequest[] batch, DocumentExtraction?[] results)
     {
         using var document = JsonDocument.Parse(json);
 
@@ -246,23 +318,31 @@ public sealed class KernelDocumentExtractor(
             || array.ValueKind != JsonValueKind.Array)
         {
             logger?.LogWarning("Extraction response carried no documents array.");
-            return;
+            return "response carried no documents array";
         }
 
         var seen = new HashSet<int>();
         var placed = 0;
+        var rejected = new List<string>();
 
         foreach (var item in array.EnumerateArray())
         {
             if (ExtractionPrompt.Int(item, "index") is not { } index || index < 0 || index >= batch.Length)
             {
-                logger?.LogWarning("Extraction returned an out-of-range document index.");
+                logger?.LogWarning(
+                    "Extraction returned an unusable document index: {Index} against a batch of "
+                    + "{BatchSize}.",
+                    DescribeIndex(item),
+                    batch.Length);
+
+                rejected.Add(DescribeIndex(item));
                 continue;
             }
 
             if (!seen.Add(index))
             {
                 logger?.LogWarning("Extraction returned document index {Index} twice.", index);
+                rejected.Add($"duplicate:{index}");
                 continue;
             }
 
@@ -278,6 +358,36 @@ public sealed class KernelDocumentExtractor(
             logger?.LogInformation(
                 "Extraction returned {Placed} of {Expected} documents.", placed, batch.Length);
         }
+
+        // Summarised rather than listed one per line: the ledger wants "why", and six identical
+        // rejections are one fault, not six.
+        return rejected.Count == 0
+            ? placed == batch.Length
+                ? null
+                : $"{batch.Length - placed} of {batch.Length} documents missing from the response"
+            : $"{rejected.Count} of {batch.Length} document indices unusable: "
+                + string.Join(", ", rejected.Distinct().Take(5));
+    }
+
+    /// <summary>
+    /// What an unusable index actually held, for the warning. Never the whole item.
+    /// </summary>
+    /// <remarks>
+    /// The rest of the entry is extracted content, and for a profile that is derived from
+    /// somebody's employment history. The index alone is a number or a short token and
+    /// distinguishes a wrong type from an out-of-range value, which is what a reader needs.
+    /// </remarks>
+    private static string DescribeIndex(JsonElement item)
+    {
+        if (!item.TryGetProperty("index", out var value))
+        {
+            return "absent";
+        }
+
+        var raw = value.ValueKind == JsonValueKind.String ? value.GetString() : value.ToString();
+        var trimmed = raw is null ? string.Empty : raw.Length <= 20 ? raw : raw[..20];
+
+        return $"{value.ValueKind}:{trimmed}";
     }
 
 }

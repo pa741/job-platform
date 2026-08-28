@@ -1,3 +1,4 @@
+using JobPlatform.Core.Ai;
 using JobPlatform.Ai;
 using JobPlatform.Ai.Extraction;
 using JobPlatform.Core.Enrichment;
@@ -29,13 +30,18 @@ namespace JobPlatform.Api.Tests;
 public sealed class DocumentExtractorTests
 {
     private static KernelDocumentExtractor Extractor(string response)
+        => Extractor(response, callLog: null);
+
+    private static KernelDocumentExtractor Extractor(string response, IAiCallLog? callLog)
     {
         var builder = Kernel.CreateBuilder();
         Register(builder, new StubChatService(response));
 
         return new KernelDocumentExtractor(
             builder.Build(),
-            Options.Create(new AzureOpenAiOptions { BulkDeployment = "bulk" }));
+            Options.Create(new AzureOpenAiOptions { BulkDeployment = "bulk" }),
+            logger: null,
+            callLog);
     }
 
     /// <summary>
@@ -444,6 +450,85 @@ public sealed class DocumentExtractorTests
     }
 
     /// <summary>Returns a canned body and records what it was asked.</summary>
+    [Fact]
+    public async Task An_index_the_model_quoted_is_still_read()
+    {
+        // The same latent bug the assessor had, in the higher-volume path. Both read indices
+        // through AiJson now, so this and its counterpart in CandidacyAssessorTests are
+        // testing one reader from two sides.
+        var extractor = Extractor(
+            """
+            {"documents": [{
+              "index": "0",
+              "concepts": [{"key": "skill.csharp", "polarity": "required", "confidence": "0.9"}]
+            }]}
+            """);
+
+        var results = await extractor.ExtractBatchAsync([Request()]);
+
+        Assert.NotNull(results[0]);
+        Assert.Contains(results[0]!.Concepts, c => c.ConceptKey == "skill.csharp");
+    }
+
+    [Fact]
+    public async Task Every_extraction_call_is_recorded_with_what_it_lost()
+    {
+        // The postings named here are the ones with no extraction row, which the backfill will
+        // pick up. Naming them is the difference between knowing that and hoping so.
+        var log = new RecordingAiCallLog();
+
+        var extractor = Extractor(
+            """
+            {"documents": [{
+              "index": 0,
+              "concepts": [{"key": "skill.csharp", "polarity": "required"}]
+            }]}
+            """,
+            log);
+
+        await extractor.ExtractBatchAsync(
+        [
+            new ExtractionRequest(DocumentKind.Posting, "We use C#.", "Engineer", 41),
+            new ExtractionRequest(DocumentKind.Posting, "We use Go.", "Engineer", 42),
+        ]);
+
+        var record = Assert.Single(log.Records);
+        Assert.Equal("posting-extraction", record.Operation);
+        Assert.Equal(AiCallOutcome.PartiallyDiscarded, record.Outcome);
+        Assert.Equal(2, record.Requested);
+        Assert.Equal(1, record.Returned);
+        Assert.Equal([42L], record.AffectedIds);
+    }
+
+    [Fact]
+    public async Task A_profile_extraction_is_named_apart_from_a_posting_one()
+    {
+        // Different costs, different volumes, different failure histories. Averaging them
+        // would hide both - the corpus backfill is the one that once spent its whole budget
+        // on 429s, and a profile extraction is a single document somebody is waiting on.
+        var log = new RecordingAiCallLog();
+        var extractor = Extractor("not json", log);
+
+        await extractor.ExtractBatchAsync(
+            [new ExtractionRequest(DocumentKind.Profile, "Six years of C#.", "Engineer", 7)]);
+
+        var record = Assert.Single(log.Records);
+        Assert.Equal("profile-extraction", record.Operation);
+        Assert.Equal(AiCallOutcome.Failed, record.Outcome);
+        Assert.Equal([7L], record.AffectedIds);
+    }
+
+    private sealed class RecordingAiCallLog : IAiCallLog
+    {
+        public List<AiCallRecord> Records { get; } = [];
+
+        public Task RecordAsync(AiCallRecord record, CancellationToken ct = default)
+        {
+            Records.Add(record);
+            return Task.CompletedTask;
+        }
+    }
+
     private sealed class StubChatService(string response) : IChatCompletionService
     {
         public int Calls { get; private set; }

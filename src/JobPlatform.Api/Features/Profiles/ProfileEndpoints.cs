@@ -155,7 +155,9 @@ public sealed class ProfileEndpoints : IEndpointGroup
         try
         {
             var extraction = await extractor.ExtractAsync(
-                new ExtractionRequest(DocumentKind.Profile, document, view.Profile.Headline), ct);
+                new ExtractionRequest(
+                    DocumentKind.Profile, document, view.Profile.Headline, view.Id),
+                ct);
 
             if (extraction is null)
             {

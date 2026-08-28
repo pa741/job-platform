@@ -86,6 +86,11 @@ builder.Services.AddScoped<ApplicationDocumentRepository>();
 builder.Services.AddScoped<MetricsQueryRepository>();
 builder.Services.AddScoped<AiCallQueryRepository>();
 builder.Services.AddScoped<IAiCallSource>(sp => sp.GetRequiredService<AiCallQueryRepository>());
+
+// The write side too: profile extraction runs here, in the request, and is the one AI call
+// somebody is waiting on. Consumers resolve it as nullable, so a host without it still
+// makes the call - which is what the API test host relies on.
+builder.Services.AddScoped<IAiCallLog, AiCallLogRepository>();
 builder.Services.AddScoped<IMetricsSource>(sp => sp.GetRequiredService<MetricsQueryRepository>());
 
 builder.Services.AddAiProvider(configuration);

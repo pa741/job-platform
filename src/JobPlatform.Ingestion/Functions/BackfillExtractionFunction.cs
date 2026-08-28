@@ -142,7 +142,8 @@ public sealed class BackfillExtractionFunction(
 
             items.Add(new BatchExtractionItem(
                 posting.Id.ToString(CultureInfo.InvariantCulture),
-                new ExtractionRequest(DocumentKind.Posting, posting.Description, posting.Title)));
+                new ExtractionRequest(
+                    DocumentKind.Posting, posting.Description, posting.Title, posting.Id)));
 
             pending.Add(new PendingBatchItem(posting.Id, Hash(posting.Description)));
         }
