@@ -42,6 +42,8 @@ public sealed record MatchRow(
     string? AssessmentGapsJson,
     string? EmphasiseJson,
     int ScorerVersion,
+    double? Similarity,
+    double RankScore,
     bool HasApplication)
 {
     /// <summary>Reads one of the JSON columns back. Never throws - see the repository.</summary>
@@ -170,19 +172,33 @@ public sealed class JobMatchRepository(JobsDbContext db)
     /// made against different arithmetic and is genuinely stale. An edited advert reaches this
     /// the same way: its assertions are re-extracted, the score moves, and the stale judgement
     /// goes with it - which is why no separate content hash is tracked here.
+    ///
+    /// <b>A rank that moved clears nothing.</b> The ordering key is derived from the score and
+    /// the embedding and says where to look first; the assessment was made about the posting, and
+    /// re-sorting the page is not a reason to pay for that judgement twice.
     /// </remarks>
+    /// <param name="ranking">
+    /// What <c>MatchRanker</c> made of the same pass, correlated by posting id rather than by
+    /// position. Pairs absent from it keep whatever rank they had - which is right for a partial
+    /// pass and, being a dictionary lookup rather than a parallel index, cannot silently file one
+    /// posting's ordering against another.
+    /// </param>
     public async Task<int> UpsertScoresAsync(
         long profileId,
         IReadOnlyList<(PostingFacts Posting, MatchResult Result)> scores,
+        IReadOnlyList<RankedMatch> ranking,
         DateTimeOffset now,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(scores);
+        ArgumentNullException.ThrowIfNull(ranking);
 
         if (scores.Count == 0)
         {
             return 0;
         }
+
+        var ranked = ranking.ToDictionary(r => r.PostingId);
 
         var postingIds = scores.Select(s => s.Posting.PostingId).ToList();
 
@@ -204,11 +220,17 @@ public sealed class JobMatchRepository(JobsDbContext db)
 
                 db.JobMatches.Add(entity);
             }
-            else if (entity.Score == result.Score && entity.ScorerVersion == result.Version)
+            else if (entity.Score == result.Score
+                && entity.ScorerVersion == result.Version
+                && entity.RankerVersion == MatchRanker.CurrentVersion
+                && Unmoved(entity, posting.PostingId))
             {
                 // Nothing moved. Skipping the write keeps the sweep from touching every row it
                 // looked at, which on a database billed by wall-clock time is the difference
-                // between a nightly job and a nightly bill.
+                // between a nightly job and a nightly bill. The rank is included in "nothing
+                // moved" rather than exempted from it, which is why MatchRanker rounds: at full
+                // precision a night's new postings nudge every key in the pool and this test
+                // would never pass again.
                 continue;
             }
             else if (entity.Score != result.Score)
@@ -233,6 +255,22 @@ public sealed class JobMatchRepository(JobsDbContext db)
             entity.ScorerVersion = result.Version;
             entity.ScoredAtUtc = now;
 
+            if (ranked.TryGetValue(posting.PostingId, out var rank))
+            {
+                entity.Similarity = rank.Similarity;
+                entity.RankScore = rank.RankScore;
+                entity.RankerVersion = MatchRanker.CurrentVersion;
+            }
+            else
+            {
+                // Scored but not ranked. Falling back to the score keeps the row orderable
+                // against ranked ones instead of sinking it to the bottom of the page, and
+                // leaving the version behind is what gets it re-ranked next time.
+                entity.Similarity = null;
+                entity.RankScore = result.Score;
+                entity.RankerVersion = 0;
+            }
+
             written++;
         }
 
@@ -242,6 +280,11 @@ public sealed class JobMatchRepository(JobsDbContext db)
         }
 
         return written;
+
+        bool Unmoved(JobMatchEntity entity, long postingId)
+            => ranked.TryGetValue(postingId, out var rank)
+                && entity.RankScore == rank.RankScore
+                && Nullable.Equals(entity.Similarity, rank.Similarity);
     }
 
     /// <summary>
@@ -380,13 +423,18 @@ public sealed class JobMatchRepository(JobsDbContext db)
     /// A candidate's scored matches, best first.
     /// </summary>
     /// <remarks>
-    /// Ordered by the deterministic score rather than by the model's, because the model's is
-    /// null for everything the nightly sweep has not reached and a null-last ordering would put
-    /// this morning's best new posting at the bottom of the page. The client has both numbers
-    /// and can re-sort once it knows which rows carry a verdict.
+    /// <b>Ordered by the ranking key, not by the score and not by the model's verdict.</b> The
+    /// verdict is null for everything the nightly sweep has not reached, so ordering by it would
+    /// put this morning's best new posting at the bottom of the page. The score orders the corpus
+    /// well and inverts inside its own top band, which is the thing <c>MatchRanker</c> exists to
+    /// fix. All three numbers are returned, so a client can re-sort once it knows which rows
+    /// carry a verdict.
+    ///
+    /// <c>RankScore</c> falls back to the score for any row the ranker has not reached, so a
+    /// freshly scored pair sorts sensibly among ranked ones rather than sinking to the bottom.
     ///
     /// The description is excluded. This is a list, and it lands on the
-    /// <c>(ProfileId, Score)</c> index precisely so that showing fifty matches does not read
+    /// <c>(ProfileId, RankScore)</c> index precisely so that showing fifty matches does not read
     /// fifty unbounded text columns.
     /// </remarks>
     public async Task<IReadOnlyList<MatchRow>> ListAsync(
@@ -407,7 +455,10 @@ public sealed class JobMatchRepository(JobsDbContext db)
         }
 
         return await query
-            .OrderByDescending(m => m.Score)
+            .OrderByDescending(m => m.RankScore)
+            // Deterministic beyond the key itself. Rounding the rank to two places makes ties
+            // possible, and a page whose contents shuffle between two identical requests is a
+            // bug nobody can reproduce.
             .ThenBy(m => m.PostingId)
             .Skip(offset)
             .Take(limit)
@@ -436,6 +487,8 @@ public sealed class JobMatchRepository(JobsDbContext db)
                 m.AssessmentGapsJson,
                 m.EmphasiseJson,
                 m.ScorerVersion,
+                m.Similarity,
+                m.RankScore,
                 false))
             .ToListAsync(ct);
     }
@@ -471,6 +524,8 @@ public sealed class JobMatchRepository(JobsDbContext db)
                 m.AssessmentGapsJson,
                 m.EmphasiseJson,
                 m.ScorerVersion,
+                m.Similarity,
+                m.RankScore,
                 db.ApplicationDocuments.Any(d => d.ProfileId == profileId && d.PostingId == postingId)))
             .FirstOrDefaultAsync(ct);
 

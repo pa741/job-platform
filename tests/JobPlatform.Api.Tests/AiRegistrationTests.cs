@@ -1,4 +1,5 @@
 using JobPlatform.Ai;
+using JobPlatform.Core.Ai;
 using JobPlatform.Core.Applications;
 using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Matching;
@@ -108,7 +109,7 @@ public sealed class AiRegistrationTests
     }
 
     /// <summary>
-    /// All three consumers appear and disappear together with the Kernel.
+    /// All four consumers appear and disappear together with the Kernel.
     /// </summary>
     /// <remarks>
     /// They are registered inside one <c>if</c> deliberately, and this is what holds that
@@ -123,6 +124,7 @@ public sealed class AiRegistrationTests
         Assert.Null(unconfigured.GetService<IDocumentExtractor>());
         Assert.Null(unconfigured.GetService<ICandidacyAssessor>());
         Assert.Null(unconfigured.GetService<IApplicationWriter>());
+        Assert.Null(unconfigured.GetService<ITextEmbedder>());
 
         using var configured = Build(
             ("Ai:Provider", "azureopenai"),
@@ -131,6 +133,30 @@ public sealed class AiRegistrationTests
         Assert.NotNull(configured.GetService<IDocumentExtractor>());
         Assert.NotNull(configured.GetService<ICandidacyAssessor>());
         Assert.NotNull(configured.GetService<IApplicationWriter>());
+        Assert.NotNull(configured.GetService<ITextEmbedder>());
+    }
+
+    /// <summary>
+    /// The embedding generator resolves, and it is not on the Kernel.
+    /// </summary>
+    /// <remarks>
+    /// Two things fail silently here and both are worth a test of their own. The registration
+    /// helper is marked experimental, which also hides it from extension-method lookup - so the
+    /// call is written against an aliased static class, and a refactor that "tidies" it back into
+    /// the fluent form compiles against the <c>IKernelBuilder</c> overload and registers nothing
+    /// on the container at all. And an embedding is not a chat completion, so resolving it
+    /// through the Kernel would be the wrong seam even where it worked.
+    /// </remarks>
+    [Fact]
+    public void The_embedding_generator_is_on_the_container_rather_than_the_kernel()
+    {
+        using var configured = Build(
+            ("Ai:Provider", "azureopenai"),
+            ("Ai:AzureOpenAi:Endpoint", Endpoint));
+
+        Assert.NotNull(
+            configured.GetService<Microsoft.Extensions.AI.IEmbeddingGenerator<
+                string, Microsoft.Extensions.AI.Embedding<float>>>());
     }
 
     /// <summary>

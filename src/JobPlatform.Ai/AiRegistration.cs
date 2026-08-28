@@ -4,6 +4,7 @@ using Azure.Identity;
 using JobPlatform.Ai.Applications;
 using JobPlatform.Ai.Extraction;
 using JobPlatform.Ai.Matching;
+using JobPlatform.Core.Ai;
 using JobPlatform.Core.Applications;
 using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Matching;
@@ -11,6 +12,12 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.SemanticKernel;
 using OpenAI;
+
+// Two classes of this name are in scope - Semantic Kernel declares one in its own namespace and
+// another in Microsoft.Extensions.DependencyInjection - so an unqualified reference is ambiguous
+// and the extension-method form silently resolves to the IKernelBuilder overload instead. Named
+// once here rather than fully qualified at the call.
+using AzureOpenAiServices = Microsoft.Extensions.DependencyInjection.AzureOpenAIServiceCollectionExtensions;
 
 namespace JobPlatform.Ai;
 
@@ -57,6 +64,28 @@ public static class AiRegistration
 
         services.AddSingleton(BuildKernel(options));
 
+        // The embeddings deployment, which is not on the Kernel and cannot be. A Kernel holds
+        // chat completion services and invokes prompts against them; an embedding is not a
+        // prompt and returns no completion, so it is registered on the container directly as
+        // the Microsoft.Extensions.AI abstraction Semantic Kernel itself sits on. No new
+        // package, no new credential, and the same TokenCredential the chat services use.
+        // Marked experimental by Semantic Kernel, and suppressed at exactly this call rather than
+        // through a project-wide NoWarn - the same treatment, and for the same reason, as the one
+        // in AiPrompt: a blanket suppression would silently accept the next experimental API
+        // somebody reaches for.
+#pragma warning disable SKEXP0010
+        AzureOpenAiServices.AddAzureOpenAIEmbeddingGenerator(
+            services,
+            deploymentName: options.EmbeddingDeployment,
+            endpoint: options.Endpoint!,
+            credentials: Credential(options),
+            // Ask the deployment for a truncated vector rather than truncating one here.
+            // Matryoshka representation learning is what makes the first 512 of 1,536 dimensions
+            // a real embedding rather than a lossy prefix, and 512 is the width MatchRanker's
+            // weight was measured at.
+            dimensions: EmbeddingVector.Dimensions);
+#pragma warning restore SKEXP0010
+
         // Inside the same `if`, deliberately. No Kernel means no extractor, no assessor and no
         // writer, so a consumer resolving one of these as nullable gets null and skips the
         // step — the pipeline still runs and nothing is enqueued for a model that does not
@@ -64,6 +93,7 @@ public static class AiRegistration
         services.AddSingleton<IDocumentExtractor, KernelDocumentExtractor>();
         services.AddSingleton<ICandidacyAssessor, KernelCandidacyAssessor>();
         services.AddSingleton<IApplicationWriter, KernelApplicationWriter>();
+        services.AddSingleton<ITextEmbedder, KernelTextEmbedder>();
 
         return services;
     }
@@ -140,15 +170,7 @@ public static class AiRegistration
 
         var builder = Kernel.CreateBuilder();
 
-        // A single credential instance, shared. Each one maintains its own token cache, so
-        // constructing them per service would mean two identical round trips to IMDS.
-        TokenCredential credential = new DefaultAzureCredential(
-            new DefaultAzureCredentialOptions
-            {
-                ManagedIdentityClientId = string.IsNullOrWhiteSpace(options.ManagedIdentityClientId)
-                    ? null
-                    : options.ManagedIdentityClientId,
-            });
+        var credential = Credential(options);
 
         builder.AddAzureOpenAIChatCompletion(
             deploymentName: options.BulkDeployment,
@@ -164,4 +186,23 @@ public static class AiRegistration
 
         return builder.Build();
     }
+
+    /// <summary>
+    /// The identity every deployment on this resource is reached with.
+    /// </summary>
+    /// <remarks>
+    /// A <see cref="TokenCredential"/>, not a key, which is what makes the no-secret property
+    /// hold end to end rather than only at a vault boundary. Constructed per call site rather
+    /// than cached in a static: each instance maintains its own token cache, so the two callers
+    /// here cost one extra round trip to IMDS at startup and nothing afterwards - and a static
+    /// would outlive the options it was built from.
+    /// </remarks>
+    private static TokenCredential Credential(AzureOpenAiOptions options)
+        => new DefaultAzureCredential(
+            new DefaultAzureCredentialOptions
+            {
+                ManagedIdentityClientId = string.IsNullOrWhiteSpace(options.ManagedIdentityClientId)
+                    ? null
+                    : options.ManagedIdentityClientId,
+            });
 }

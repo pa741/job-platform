@@ -16,6 +16,12 @@ the rule in `CLAUDE.md` covers fixtures, examples and screenshots alike.
 **In flight.** 1.1 has all four call sites, a dashboard page and a replay route; 1.2 has a
 candidate fix. Both are marked *Progress* below, with what remains.
 
+**1.6 is built and has not yet run.** The matches page is now ordered by `MatchRanker` rather
+than by the score, and until `run-embed-corpus` has been through the corpus that ordering is
+identical to the old one - correctly, and invisibly. `POST /api/run-embed-corpus` is the first
+thing to do after deploying, and `EmbedSummary.Embedded` against `.Corpus` is how to tell it
+worked.
+
 **The next sweep at 03:30 UTC is the test for 1.2.** If the "unusable role index" warnings stop,
 the cause was the quoted index; if they continue, the warning now names which fault it is. Either
 way the ledger will have recorded it, so start at
@@ -300,11 +306,29 @@ never been read by the model. The unresolved-mention log remains where the next 
 comes from — it is what surfaced `containers`, though `agile` came from reading the ranking
 rather than the log, which suggests the log is not the only place worth looking.
 
-### 1.6 Embeddings are the axis 1.3 is missing - measured, not argued
+### 1.6 Embeddings are the axis 1.3 was missing - measured, then built
 
-Researched against Microsoft Learn and **validated against the 70 assessed pairs** on
-2026-08-28. **Not built yet.** This section is the evidence and the design constraints, so
-neither has to be rediscovered.
+**Built on 2026-08-28.** `MatchRanker`, `EmbeddingVector`, `EmbeddingText`, `PostingEmbeddings`,
+`ProfileEmbeddings`, `EmbedCorpusFunction`, an `embeddings` deployment in Bicep, and the list
+ordered by the result. The evidence below is kept in full because every constant in
+`MatchRanker` is one of these numbers, and a future tuning has to argue with them rather than
+around them.
+
+**What was built, against what this section proposed:**
+
+| proposed | built | why the difference |
+| --- | --- | --- |
+| a similarity axis inside `MatchScorer` | a separate `MatchRanker` | folding it into the score clears every stored assessment - a moved score is the staleness signal - so it would have destroyed the 195 labels it was fitted on |
+| `vector(512)` columns on `JobPostings` and `CandidateProfiles` | two side tables | the blob is read by two passes and would otherwise be carried by every query that materialises a posting row |
+| ledger operation `posting-embedding` | `text-embedding` | one call site serves both sides, and naming it for the posting half would have been wrong on the other |
+| raw product of score and similarity | convex combination at α=0.6 | measured after this section was written; +0.045, CI [-0.006, +0.098] - not significant, but it is the form whose weight means something |
+
+**What is not done and is the first thing to check.** The pass has never run against the real
+corpus. `POST /api/run-embed-corpus` is bounded to ~150s and resumable, so a first pass over
+~4,000 adverts is several calls; the timer at 03:00 UTC will also chew through it. Until it has,
+every match ranks on its score alone - which is the old behaviour, correctly, and is
+indistinguishable from the new one without looking. **`EmbedSummary` reports `Embedded` against
+`Corpus`, and that ratio is the check.**
 
 #### The result
 
@@ -650,23 +674,45 @@ course of a personal non-professional activity"**, which is exactly this.
 **That carve-out disappears the moment this is offered to other job seekers.** Worth knowing
 before, not after.
 
-#### What building it looks like
+#### What was built, and what is left
 
-1. An embeddings deployment **in Bicep** - the experiment used a hand-made one, deleted
-   afterwards rather than left as drift.
-2. A `vector(512)` column on `JobPostings` and one on `CandidateProfiles`, filled by a pass
-   that reports to the AI ledger as `posting-embedding`, versioned like the enrichment.
-3. A similarity axis in `MatchScorer`, weighted and **measured against the corpus** the way
-   §3 describes - the top-60 diff, not the six rows anybody already has in mind.
-4. Only then revisit 1.3. With a signal that has 100% coverage, the ranking question may stop
-   needing the verdict at all - and if it does not, the two combine.
+Done, on 2026-08-28:
+
+1. **An `embeddings` deployment in Bicep** - `text-embedding-3-small` v1, GlobalStandard, 350k
+   TPM, threaded to both hosts as `Ai__AzureOpenAi__EmbeddingDeployment`. The hand-made probe
+   deployment the experiment used was deleted rather than left as drift; the account now carries
+   exactly the three the template declares.
+2. **`PostingEmbeddings` and `ProfileEmbeddings`**, filled by `EmbedCorpusFunction` (03:00 UTC,
+   plus `run-embed-corpus`) and by the sweep respectively, reporting to the ledger as
+   `text-embedding`. Staleness is `EmbeddingVector.EmbeddingVersion` plus, on the posting side,
+   the `ContentHash`/`DescriptionLength` pair `HasMaterialChange` already uses - so "what needs
+   embedding" is a join over short columns rather than a nightly pull of every description.
+3. **`MatchRanker`**, pure and Azure-free like `MatchScorer`, with 15 tests pinning exact
+   numbers. The score is untouched; `JobMatches` gained `Similarity`, `RankScore` and
+   `RankerVersion`, and the list orders by `RankScore`.
+
+Left:
+
+4. **Run the pass and re-measure against the corpus** the way §3 describes - the top-60 diff, not
+   the six rows anybody already has in mind. The α=0.6 is fitted on 195 labels and the honest
+   summary of the bootstrap is that anything in [0.6, 0.7] is indistinguishable.
+5. **Then revisit 1.3.** The embedding is a signal with 100% coverage once the pass has run, so
+   the question is whether the top of the list still needs the verdict to be tolerable. The
+   verdict counts in the top 30 went 6/14/10 (S/P/W) on the score to 11/16/3 combined on the
+   assessed 195, which suggests it does not need it as badly - but that is 195 rows deep and
+   ranked within the assessed subset, not the corpus.
+6. **A second profile would break the ranker's assumptions in a useful way.** Everything measured
+   here is one candidate against one corpus. `RankScore` is pool-normalised per profile, so it is
+   correct by construction across candidates, but nothing has tested that.
 
 ---
 
 ## 2. What changed this round
 
-Four fixes, all deployed and verified against the live corpus. The `CurrentVersion` remarks on
-`EnrichedPosting` and `MatchResult` carry the same history where the code can see it.
+Five changes. The first four are deployed and verified against the live corpus; the fifth - the
+ranking - is built and tested but has not yet met real data. The `CurrentVersion` remarks on
+`EnrichedPosting`, `MatchResult` and `MatchRanker` carry the same history where the code can see
+it.
 
 ### 2.1 The concept floor asks what the demands are, not how many
 
@@ -739,6 +785,25 @@ folding without a leading space broke `C#.NET` and `VB.NET`.
 
 **Asserting the classifier alone would not have caught any of this** — a dead entry and a
 working one look identical from its output. The tests assert the tokenisation too.
+
+### 2.5 The matches page is ordered by the embedding, not by the score
+
+The whole of 1.6, and the evidence is there rather than repeated here. In one line: the score
+orders the corpus at +0.315 and its own top band at **-0.191**, the embedding does the reverse,
+and the combination orders 68.5% of judged pairs correctly against the score's 61.3%.
+
+What a reader of this file most needs to know about it:
+
+- **`MatchResult.Score` did not move and no assessment was cleared.** The ranking is a separate
+  column with its own version constant. That was the design constraint, not a nicety - folding it
+  into the score would have invalidated the 195 labels it was fitted on.
+- **`RankScore` must never be displayed.** It is min-maxed per profile per sweep, so the top of
+  any pool is exactly 100 and nothing is comparable across pools. `Similarity` is the durable
+  number and is the one to argue with.
+- **The migration seeds `RankScore` from `Score`**, so the page is ordered exactly as it was
+  yesterday between the deploy and the first sweep, rather than by a column of zeroes.
+- **Nothing below score 45 is re-ordered.** That is the edge of the labelled range, and it is
+  what stops a posting the concept floor scored at zero from climbing on textual resemblance.
 
 ---
 

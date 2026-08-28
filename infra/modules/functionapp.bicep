@@ -43,6 +43,9 @@ param openAiBulkDeployment string = ''
 @description('Deployment name for the writing pass. Nothing here uses it today; it is set so that a function which needs it is a code change and not a deploy.')
 param openAiWritingDeployment string = ''
 
+@description('Deployment name for the embedding pass: the profile and every advert, as vectors.')
+param openAiEmbeddingDeployment string = ''
+
 @description('Key Vault secret URI holding the OpenAI API key. Empty leaves the batch extraction path unregistered.')
 param openAiApiKeySecretUri string = ''
 
@@ -265,6 +268,10 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'Ai__AzureOpenAi__WritingDeployment'
           value: openAiWritingDeployment
+        }
+        {
+          name: 'Ai__AzureOpenAi__EmbeddingDeployment'
+          value: openAiEmbeddingDeployment
         }
       ] : [])
     }

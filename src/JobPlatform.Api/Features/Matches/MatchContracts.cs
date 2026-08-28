@@ -10,6 +10,11 @@ namespace JobPlatform.Api.Features.Matches;
 /// throwing away the signal that a 58 the model called strong is the most interesting row on
 /// the page.
 ///
+/// <b>The list arrives ordered by <see cref="RankScore"/>, which is neither of them.</b> That
+/// is the third number here and the one a client must not display: it is an ordering key, not a
+/// measure of the match. Rows will therefore not be in descending <see cref="Score"/> order, and
+/// that is the fix rather than the bug - see <c>MatchRanker</c> for the measurement behind it.
+///
 /// No description. This is a list response and the same rule <c>PostingSummary</c> follows
 /// applies: the full advert is one request away, and including it would turn a page of fifty
 /// matches into megabytes.
@@ -56,6 +61,30 @@ public record MatchSummary
 
     /// <summary>Two or three sentences addressed to the candidate.</summary>
     public string? Rationale { get; init; }
+
+    /// <summary>
+    /// Cosine of the profile against this advert, or null where either side has no vector.
+    /// </summary>
+    /// <remarks>
+    /// Returned because the ordering should be arguable rather than merely obeyed - a candidate
+    /// asking why one posting is above another deserves the inputs, not just the outcome. It is
+    /// not a percentage and it does not span 0 to 1 in practice: for one profile the whole corpus
+    /// typically occupies a band around 0.15 wide, so the absolute value says very little and the
+    /// position within the band says everything. Present it as a comparison or not at all.
+    /// </remarks>
+    public double? Similarity { get; init; }
+
+    /// <summary>
+    /// What the list is ordered by, 0-100. <b>An ordering key, not a score.</b>
+    /// </summary>
+    /// <remarks>
+    /// A convex combination of <see cref="Score"/> and <see cref="Similarity"/>, normalised over
+    /// this candidate's whole pool - so it is not comparable between candidates or between
+    /// nights, and rendering it beside the score would put two numbers on screen that look like
+    /// the same kind of thing and are not. Returned so a client can re-sort without a second
+    /// request, and so the order can be explained.
+    /// </remarks>
+    public double RankScore { get; init; }
 
     public DateTimeOffset ScoredAtUtc { get; init; }
     public DateTimeOffset? AssessedAtUtc { get; init; }

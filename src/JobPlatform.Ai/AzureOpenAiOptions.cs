@@ -11,12 +11,14 @@ namespace JobPlatform.Ai;
 /// secret reference and the out-of-band <c>az keyvault secret set</c> that put a value in it
 /// have all gone, and a fresh clone now deploys with genuinely nothing to leak.
 ///
-/// Two deployments rather than one, because the two jobs have opposite shapes. Extraction and
-/// assessment are high-volume, structured and cheap-per-item, so they run on the smallest
+/// Three deployments rather than one, because the jobs have different shapes. Extraction and
+/// assessment are high-volume, structured and cheap-per-item, so they run on the smallest chat
 /// model that can do the job. Writing a CV happens once, for one person, and is the thing they
-/// will actually be judged on, so it runs on the best model available. Both are deployment
-/// names rather than model ids: an Azure OpenAI deployment is a name the subscription chose,
-/// and pointing one at a newer model is a Bicep change with no code in it.
+/// will actually be judged on, so it runs on the best model available. Embedding is neither: it
+/// returns no completion at all, so it cannot share a deployment with either of them however
+/// the quota falls. All three are deployment names rather than model ids: an Azure OpenAI
+/// deployment is a name the subscription chose, and pointing one at a newer model is a Bicep
+/// change with no code in it.
 /// </remarks>
 public sealed class AzureOpenAiOptions
 {
@@ -62,6 +64,31 @@ public sealed class AzureOpenAiOptions
     /// because this path runs once per application rather than once per posting.
     /// </remarks>
     public string WritingDeployment { get; set; } = "writing";
+
+    /// <summary>
+    /// Deployment name for the embedding pass: the profile and every advert, as vectors.
+    /// </summary>
+    /// <remarks>
+    /// Named for the job like the other two, and a third deployment rather than a reuse of the
+    /// bulk one because it is a different model family entirely - an embeddings model returns no
+    /// completion and cannot serve a prompt. It is also priced two orders of magnitude below the
+    /// chat deployments, which is what makes embedding the whole corpus nightly a rounding error
+    /// rather than a decision.
+    /// </remarks>
+    public string EmbeddingDeployment { get; set; } = "embeddings";
+
+    /// <summary>
+    /// How many texts travel in one embedding call.
+    /// </summary>
+    /// <remarks>
+    /// Far smaller than the endpoint's ceiling of 2,048 inputs, and bounded by tokens rather
+    /// than by items: an advert truncated to
+    /// <see cref="JobPlatform.Core.Matching.EmbeddingVector"/>'s input limit is a few thousand
+    /// tokens, so thirty-two of them is a call of comfortable size against the deployment's
+    /// rate pool. It also bounds the blast radius - a batch that fails loses thirty-two
+    /// postings to the next pass, not two thousand.
+    /// </remarks>
+    public int EmbeddingBatchSize { get; set; } = 32;
 
     /// <summary>
     /// How many documents travel in one bulk call.

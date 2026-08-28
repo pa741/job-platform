@@ -54,6 +54,9 @@ param openAiBulkDeployment string = ''
 @description('Deployment name for the writing pass: tailored CV and cover letter.')
 param openAiWritingDeployment string = ''
 
+@description('Deployment name for the embedding pass: the profile and every advert, as vectors.')
+param openAiEmbeddingDeployment string = ''
+
 var useAzureOpenAi = aiProvider == 'azureopenai' && !empty(openAiEndpoint)
 
 // Array-typed configuration binds by index, so each origin becomes its own variable. Hoisted
@@ -213,6 +216,10 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'Ai__AzureOpenAi__WritingDeployment'
               value: openAiWritingDeployment
+            }
+            {
+              name: 'Ai__AzureOpenAi__EmbeddingDeployment'
+              value: openAiEmbeddingDeployment
             }
           ] : [])
           probes: [

@@ -62,6 +62,51 @@ public sealed class JobMatchEntity
 
     public DateTimeOffset ScoredAtUtc { get; set; }
 
+    // --- the ordering half, written by the same pass as the score -----------
+
+    /// <summary>
+    /// Cosine of the profile against this advert, or null where either side has no vector.
+    /// </summary>
+    /// <remarks>
+    /// Stored beside <see cref="RankScore"/> rather than only feeding it, because the two are
+    /// durable for different lengths of time. This is a measurement - the same pair gives the
+    /// same number in any pool - so it is what a re-tuning of the weight is fitted against, and
+    /// what makes an ordering arguable after the fact. <see cref="RankScore"/> is derived from
+    /// it and from every other pair in the sweep, and is worth nothing outside that pool.
+    ///
+    /// Null rather than zero where the pass has not reached the posting. Absent evidence and a
+    /// measured dissimilarity are different facts and the ranker treats them differently.
+    /// </remarks>
+    public double? Similarity { get; set; }
+
+    /// <summary>
+    /// Where this pair sits in the list, 0-100. <b>An ordering key, not a score.</b>
+    /// </summary>
+    /// <remarks>
+    /// <see cref="MatchRanker"/> holds why this exists and what it is worth: the deterministic
+    /// <see cref="Score"/> orders the corpus well and inverts inside its own top band, and the
+    /// embedding does the opposite, so the list is ordered by a convex combination of the two
+    /// while the score keeps meaning what it always meant.
+    ///
+    /// <b>Not comparable between profiles or between sweeps.</b> It is computed from a min-max
+    /// normalisation over one profile's eligible pool, which is what makes a cosine occupying a
+    /// band 0.15 wide combinable with a 0-100 score at all. Nothing should present it as a
+    /// percentage, and no query should compare it across a ProfileId boundary.
+    /// </remarks>
+    public double RankScore { get; set; }
+
+    /// <summary>
+    /// Which ranker produced <see cref="RankScore"/>. Rows below the current value are stale.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="ScorerVersion"/> because re-deriving the two costs different
+    /// things. A scorer change needs the concept graph and every assertion row, and it clears
+    /// the assessment when the number moves; a ranker change needs nothing but the columns
+    /// already here, and clears nothing. Sharing one constant would make every tuning of the
+    /// embedding weight pay for a full re-score and throw away the judgements it was fitted on.
+    /// </remarks>
+    public int RankerVersion { get; set; }
+
     // --- the model half, written only for rows that cleared the threshold ----
 
     /// <summary>Null until the sweep reaches this row. Never a default - see the remarks.</summary>

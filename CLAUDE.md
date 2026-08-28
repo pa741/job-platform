@@ -111,6 +111,9 @@ worked around.
   load-bearing in ways that fail with a 400 rather than a compile error; read the remarks.
 - `src/JobPlatform.Core/Matching/MatchScorer.cs` — the whole scoring rulebook. Pure and
   Azure-free, like `MetricsCalculator`, which is what makes the numbers assertable exactly.
+- `src/JobPlatform.Core/Matching/MatchRanker.cs` — what the matches page is *ordered* by, which
+  is not the score. Pure and Azure-free for the same reason, and it carries the measurement that
+  justifies every constant in it.
 - `src/JobPlatform.Core/Profiles/CandidateProfile.cs` — the supply side of the match, and
   `ToDocument()`, which is the exact text the extractor reads and the hash is taken over.
 - `src/JobPlatform.Data/Sql/CandidateProfileRepository.cs` — every profile read and write.
@@ -340,6 +343,14 @@ Each of these cost a red CI run; none of them fail locally.
 - **`Api:AllowAnonymousReads` is the only switch that opens reads**, and it never opens
   `/me`. Do not make it depend on whether `AzureAd` happens to be configured — a mistyped
   section name would then silently publish the whole dataset.
+- **There are three deployments and the embedding one is not on the Kernel.** A Kernel holds
+  chat completion services and invokes prompts against them; an embedding returns a vector and no
+  completion, so `AddAiProvider` registers `IEmbeddingGenerator<string, Embedding<float>>` on the
+  container directly — the same Microsoft.Extensions.AI abstraction Semantic Kernel itself sits
+  on, so no package and no credential is added. The SK helper that registers it is experimental
+  and is suppressed at that one line, and it is also **hidden from extension-method lookup by
+  that diagnostic**, which is why the call is written against an aliased static class rather than
+  as `services.AddAzureOpenAI...`. Its parameter is `credentials:`, not `credential:`.
 - **Semantic Kernel is the LLM abstraction, and the connector under it is first-party.**
   `AiRegistration.BuildKernel` registers *two* Azure OpenAI chat services on one Kernel, under
   the service ids `bulk` and `writing`, and a prompt names which one it wants through
@@ -510,12 +521,57 @@ Each of these cost a red CI run; none of them fail locally.
   "Senior Software Engineer - C#" (100, two concepts) together - and it ranks by how long an
   advert is, which is a fact about the recruiter. **Neither how much a posting said nor how
   much of it you can answer is the signal; which concept carried the match is.**
-- **A widely-held skill on a role from another field still scores 100, and is the open one.**
-  "Yardi Residential Implementation Consultant" requires SQL, genuinely, and a SQL-holding
-  candidate genuinely meets it. `skill.sql` discriminates - most postings naming it do mean an
-  engineering role - so the floor above correctly leaves it alone, and no rule over the concept
-  axes separates it from a real match. What separates them is what the *role* is, which is a
-  judgement, and `ICandidacyAssessor` is the half of the design that makes judgements.
+- **A widely-held skill on a role from another field still scores 100. No rule over the concept
+  axes fixes it, and the fix is not to try.** "Yardi Residential Implementation Consultant"
+  requires SQL, genuinely, and a SQL-holding candidate genuinely meets it. `skill.sql`
+  discriminates - most postings naming it do mean an engineering role - so the floor above
+  correctly leaves it alone. What separates them is what the *role* is, and that is not a fact
+  the assertions carry.
+- **So the list is ordered by something other than the score, and that is `MatchRanker`.**
+  Measured against the model's judgement on a stratified 195 spanning scores 45 to 100: the score
+  correlates at **+0.315** across the corpus and at **-0.191** inside its own top two bands - the
+  90-100 band holds a higher share of Weak verdicts (31%) than the two below it (20%, 17%). A
+  `text-embedding-3-small` cosine between the profile document and the advert does the opposite:
+  **+0.296** overall, no better than the score, and **+0.448** exactly where the score inverts.
+  A convex combination at α=0.6 over pool-normalised inputs scores **+0.521**, and in terms
+  anybody can hold: of every pair of postings the model has a preference between, the score alone
+  orders 61.3% the right way round and the combination orders **68.5%**.
+- **The score is untouched, deliberately, and this is the part not to "simplify".** Folding the
+  embedding into `MatchResult.Score` would clear every stored assessment - a moved score is the
+  signal that a judgement was made against different arithmetic - and would therefore destroy the
+  labels the weight was fitted on. `RankScore` is a separate column with a separate version
+  constant, and a moved rank clears nothing.
+- **The fusion is floored at 45 and the floor is the bound on the measurement, not a tuning
+  knob.** The stratified sample was drawn from bands 45-59 upward, so nothing below 45 was ever
+  labelled. Fusing globally would let a posting the concept floor scored at zero climb the list
+  on textual resemblance alone - which is the exact failure that once put 44 of the top 60 matches
+  there. It is the same constant as the sweep's assessment threshold on purpose.
+- **`RankScore` is an ordering key, not a score, and no client may display it.** It is min-maxed
+  over one profile's eligible pool, so it is not comparable between candidates or between nights,
+  and the top of any pool is always exactly 100. `Similarity` is the durable half - the same pair
+  gives the same cosine in any pool - which is why both are stored rather than only the derived
+  one. It is rounded to two decimals so that an unchanged night writes no rows; at full precision
+  a scrape widening the pool nudges every key and the sweep's skip-the-write test never passes
+  again.
+- **Silence drops the embedding axis too.** A posting the pass has not reached ranks on its score
+  alone rather than on a similarity of zero - absence of a vector is a fact about the queue, not
+  about the job - and an axis that does not vary across the pool is dropped for the same reason.
+  With no embeddings at all the ranker returns the score unchanged, so a deployment with no AI
+  provider gets exactly the ordering it had before.
+- **`EmbeddingText` is the one place that decides what gets embedded, and it has to be.** A
+  cosine between a profile and an advert means nothing unless both were built by the same recipe,
+  and the two are built by different code - a corpus pass over SQL rows on one side, the sweep on
+  the other. Changing anything in it is a `EmbeddingVector.EmbeddingVersion` bump, exactly as
+  changing model would be.
+- **Staleness for a vector is decided without reading a description.** `PostingEmbeddings` copies
+  the posting's `ContentHash` and `DescriptionLength` - the same two signals
+  `JobPostingRepository.HasMaterialChange` uses - so "what needs embedding" is a join over short
+  columns rather than a nightly pull of every unbounded advert. The profile side reuses
+  `ExtractionInputHash`, which is already a hash of the exact text embedded.
+- **The judgement layer is still the half that knows what a role *is*.** The ranking makes the
+  top of the list better; it does not make a Yardi consultant into an engineering job.
+  `ICandidacyAssessor` remains the answer to that, and its verdict is what the two numbers exist
+  to be checked against.
 - **`AssertionPolarity.Unspecified` is weighted as preferred, not as required.** It is by far the
   most common polarity - only the model pass can tell essential from desirable and it has not
   necessarily run - so treating it as a hard requirement would score most of the corpus at zero.
@@ -618,7 +674,12 @@ dotnet run --project tools/JobPlatform.DbAdmin -- seed-concepts "<connection-str
 # afterwards, and no follow-up command to run.
 ./scripts/provision.ps1 -ResourceGroup <rg> -LandingStorageAccount <account> -AiProvider azureopenai
 
-# Score every profile against the corpus now, rather than waiting for 03:30 UTC.
+# Embed the recent corpus now, rather than waiting for 03:00 UTC. Bounded to ~150s per call,
+# and resumable from the database, so calling it repeatedly is how a first pass gets finished.
+curl -X POST "https://<function-app>.azurewebsites.net/api/run-embed-corpus?code=<function-key>"
+
+# Score every profile against the corpus now, rather than waiting for 03:30 UTC. Wants the
+# embedding pass to have run first; without it the matches rank on the score alone.
 curl -X POST "https://<function-app>.azurewebsites.net/api/run-match-sweep?code=<function-key>"   -H 'Content-Type: application/json' -d '{}'
 
 # Build the API image the way CI does (context is the repo root, not the project directory)

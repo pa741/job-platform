@@ -43,6 +43,13 @@ const RELATION: Record<string, string> = {
  * Both numbers are shown and neither is presented as the answer. The score says how much of the
  * posting the profile covers; the verdict says whether the rest matters. A 58 the model called
  * strong is the most interesting row on the page, and showing only one of them deletes it.
+ *
+ * **The rows are not in descending score order, and that is the fix rather than the bug.** The
+ * score orders the corpus well and inverts inside its own top band — measured against the model's
+ * judgement, the 90-100 band carries a higher share of Weak verdicts than the two below it — so
+ * the API orders by a combination of the score and how closely the advert reads like the profile.
+ * The subtitle says so, because a list sorted by something other than the number on screen is
+ * otherwise indistinguishable from a broken one.
  */
 export function Matches({ api }: { api: JobPlatformApi }) {
   const [items, setItems] = useState<MatchSummary[]>();
@@ -117,7 +124,10 @@ export function Matches({ api }: { api: JobPlatformApi }) {
       )}
 
       {items && items.length > 0 && (
-        <Card title="Matches" subtitle="Ranked by how much of each posting your profile covers.">
+        <Card
+          title="Matches"
+          subtitle="Ordered by overall fit: the score below, combined with how closely each advert reads like your profile. The score alone is the first column."
+        >
           <div className="scroll-x">
             <table>
               <thead>

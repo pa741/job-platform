@@ -416,6 +416,25 @@ export interface MatchSummary {
   assessmentScore: number | null;
   rationale: string | null;
 
+  /**
+   * Cosine of your profile against this advert, or null where either side has no vector yet.
+   *
+   * Not a percentage, and not on a 0-1 scale in practice: for one profile the whole corpus sits
+   * in a band roughly 0.15 wide, so the absolute value says very little and the position within
+   * the band says everything. Show it as a comparison between rows or not at all.
+   */
+  similarity: number | null;
+
+  /**
+   * What the list is ordered by, 0-100. **An ordering key, not a score — do not display it.**
+   *
+   * A convex combination of `score` and `similarity`, normalised over this candidate's whole
+   * pool, so it is not comparable between candidates or between nights. It is here so a client
+   * can re-sort without a second request, not so it can be put on screen beside the score where
+   * the two would read as the same kind of number.
+   */
+  rankScore: number;
+
   scoredAtUtc: string;
   assessedAtUtc: string | null;
 }

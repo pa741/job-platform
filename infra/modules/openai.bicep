@@ -26,6 +26,12 @@ param writingModelName string = 'gpt-5.6-sol'
 
 param writingModelVersion string = '2026-07-09'
 
+@description('Model behind the embedding deployment: the profile and every advert, as vectors.')
+param embeddingModelName string = 'text-embedding-3-small'
+
+@description('Version of the embedding model. Pinned - a new version is a new vector space.')
+param embeddingModelVersion string = '1'
+
 // Tokens per minute, in thousands, and a rate ceiling rather than a reservation: Global
 // Standard bills per token, so a higher number costs nothing until tokens actually flow. It
 // was 100, and the first real backfill spent most of its calls collecting HTTP 429s.
@@ -34,6 +40,13 @@ param bulkCapacity int = 250
 
 @description('Thousands of tokens per minute for the writing deployment. Small: one call per application.')
 param writingCapacity int = 20
+
+// Generous, and it costs nothing to be. Global Standard bills per token and this model is priced
+// two orders of magnitude below the chat deployments, so the whole corpus is a few pence a night;
+// what the number buys is a first pass over several thousand adverts that does not spend itself
+// collecting 429s, which is exactly how the first extraction backfill was lost.
+@description('Thousands of tokens per minute for the embedding deployment.')
+param embeddingCapacity int = 350
 
 // ---------------------------------------------------------------------------
 // The Foundry resource.
@@ -80,11 +93,12 @@ resource account 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
 // ---------------------------------------------------------------------------
 // Deployments.
 //
-// Two, because the two jobs have opposite shapes. Extraction and assessment are high-volume,
-// structured and cheap per item, so they run on the smallest model that can do the work.
+// Three, because the jobs have different shapes. Extraction and assessment are high-volume,
+// structured and cheap per item, so they run on the smallest chat model that can do the work.
 // Writing a CV happens once, for one person, and is the thing they are judged on, so it runs
-// on the best model available. The price ratio between them runs one way and the call ratio
-// runs the other.
+// on the best model available. The price ratio between those two runs one way and the call ratio
+// runs the other. Embedding is neither: it answers with a vector rather than a completion, so it
+// needs a deployment of its own whatever the quota looks like.
 //
 // Deployed sequentially: the control plane rejects concurrent writes to deployments under one
 // account with a conflict, which surfaces as an intermittently red pipeline rather than a
@@ -142,6 +156,38 @@ resource writing 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' =
   ]
 }
 
+// The third deployment, and the one that is not a chat model at all. It returns a vector rather
+// than a completion, so it cannot share a deployment with either of the others however the quota
+// falls - and it is what MatchRanker orders the matches page with.
+//
+// text-embedding-3-small at 512 dimensions rather than its full 1,536. Matryoshka representation
+// learning is what makes the truncation a real embedding rather than a lossy prefix, and the
+// width is requested per call by the application rather than fixed here.
+resource embeddings 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  parent: account
+  name: 'embeddings'
+  sku: {
+    name: 'GlobalStandard'
+    capacity: embeddingCapacity
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: embeddingModelName
+      version: embeddingModelVersion
+    }
+    // A new model version is a new vector space, not a better answer in the old one: every
+    // stored vector would silently stop being comparable with every new one. Pinned harder than
+    // the chat deployments for that reason, and moving it means bumping
+    // EmbeddingVector.EmbeddingVersion so the corpus is re-embedded rather than mixed.
+    versionUpgradeOption: 'NoAutoUpgrade'
+  }
+  // Sequential, as above. Two deployments created in parallel under one account conflict.
+  dependsOn: [
+    writing
+  ]
+}
+
 // ---------------------------------------------------------------------------
 // Access. Data-plane RBAC, exactly as Cosmos does it.
 // ---------------------------------------------------------------------------
@@ -185,3 +231,6 @@ output bulkDeployment string = bulk.name
 
 @description('Deployment name for the writing pass.')
 output writingDeployment string = writing.name
+
+@description('Deployment name for the embedding pass.')
+output embeddingDeployment string = embeddings.name

@@ -191,6 +191,7 @@ builder.Services.AddScoped<IngestionPipeline>();
 // ICandidacyAssessor would add.
 builder.Services.AddScoped<CandidateProfileRepository>();
 builder.Services.AddScoped<JobMatchRepository>();
+builder.Services.AddScoped<EmbeddingRepository>();
 builder.Services.AddScoped<ExtractionBatchRepository>();
 builder.Services.AddScoped<PostingExtractionWriter>();
 

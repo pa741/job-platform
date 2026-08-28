@@ -41,6 +41,9 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
     public DbSet<JobMatchEntity> JobMatches => Set<JobMatchEntity>();
     public DbSet<ApplicationDocumentEntity> ApplicationDocuments => Set<ApplicationDocumentEntity>();
 
+    public DbSet<PostingEmbeddingEntity> PostingEmbeddings => Set<PostingEmbeddingEntity>();
+    public DbSet<ProfileEmbeddingEntity> ProfileEmbeddings => Set<ProfileEmbeddingEntity>();
+
     /// <summary>
     /// On SQLite, stores <see cref="DateTimeOffset"/> as ticks.
     /// </summary>
@@ -455,8 +458,15 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
             entity.HasIndex(e => new { e.ProfileId, e.PostingId }).IsUnique();
 
             // The shortlist query: this candidate's matches, best first. Without it, "show me
-            // my top 50" is a scan of every pair ever scored for them.
+            // my top 50" is a scan of every pair ever scored for them. Kept although the list
+            // now orders by RankScore, because the sweep still selects its model budget by
+            // score and a band sweep still filters on it.
             entity.HasIndex(e => new { e.ProfileId, e.Score });
+
+            // What the list actually orders by. Same shape as the index above and the same
+            // reason for existing - without it, showing fifty matches sorts every pair ever
+            // scored for this candidate.
+            entity.HasIndex(e => new { e.ProfileId, e.RankScore });
 
             // What the nightly sweep selects on: this profile, not yet assessed.
             entity.HasIndex(e => new { e.ProfileId, e.AssessedAtUtc });
@@ -483,6 +493,41 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
                 .WithMany()
                 .HasForeignKey(e => e.PostingId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // Vectors. Side tables rather than columns, so the blob is read by the two passes that
+        // need it and by none of the queries that merely touch the row it hangs off.
+        modelBuilder.Entity<PostingEmbeddingEntity>(entity =>
+        {
+            entity.ToTable("PostingEmbeddings");
+
+            // The posting id is the key. One vector per posting - a second could only ever be a
+            // stale first, and the staleness columns already say which.
+            entity.HasKey(e => e.PostingId);
+
+            entity.Property(e => e.Model).HasMaxLength(100);
+            entity.Property(e => e.ContentHash).HasMaxLength(64).IsFixedLength();
+
+            entity.HasOne(e => e.Posting)
+                .WithMany()
+                .HasForeignKey(e => e.PostingId)
+                // A posting that goes takes its vector with it. Unlike a match, this row is
+                // derived from the posting alone and means nothing without it.
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ProfileEmbeddingEntity>(entity =>
+        {
+            entity.ToTable("ProfileEmbeddings");
+            entity.HasKey(e => e.ProfileId);
+
+            entity.Property(e => e.Model).HasMaxLength(100);
+            entity.Property(e => e.InputHash).HasMaxLength(64).IsFixedLength();
+
+            entity.HasOne(e => e.Profile)
+                .WithMany()
+                .HasForeignKey(e => e.ProfileId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<ApplicationDocumentEntity>(entity =>

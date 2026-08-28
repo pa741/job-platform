@@ -189,6 +189,8 @@ public sealed class MatchEndpoints : IEndpointGroup
             Verdict = row.Verdict?.ToString(),
             AssessmentScore = row.AssessmentScore,
             Rationale = row.Rationale,
+            Similarity = row.Similarity,
+            RankScore = row.RankScore,
             ScoredAtUtc = row.ScoredAtUtc,
             AssessedAtUtc = row.AssessedAtUtc,
         };

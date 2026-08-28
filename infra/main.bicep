@@ -232,6 +232,7 @@ module functionApp 'modules/functionapp.bicep' = {
     openAiEndpoint: aiProvider == 'azureopenai' ? openAi!.outputs.endpoint : ''
     openAiBulkDeployment: aiProvider == 'azureopenai' ? openAi!.outputs.bulkDeployment : ''
     openAiWritingDeployment: aiProvider == 'azureopenai' ? openAi!.outputs.writingDeployment : ''
+    openAiEmbeddingDeployment: aiProvider == 'azureopenai' ? openAi!.outputs.embeddingDeployment : ''
     openAiApiKeySecretUri: aiOpenAiBatchEnabled ? keyVault!.outputs.openAiSecretUri : ''
   }
 }
@@ -307,6 +308,7 @@ module containerApp 'modules/containerapp.bicep' = {
     openAiEndpoint: aiProvider == 'azureopenai' ? openAi!.outputs.endpoint : ''
     openAiBulkDeployment: aiProvider == 'azureopenai' ? openAi!.outputs.bulkDeployment : ''
     openAiWritingDeployment: aiProvider == 'azureopenai' ? openAi!.outputs.writingDeployment : ''
+    openAiEmbeddingDeployment: aiProvider == 'azureopenai' ? openAi!.outputs.embeddingDeployment : ''
   }
 }
 
@@ -364,6 +366,9 @@ output aiProvider string = aiProvider
 output aiEndpoint string = aiProvider == 'azureopenai' ? openAi!.outputs.endpoint : ''
 output aiBulkDeployment string = aiProvider == 'azureopenai' ? openAi!.outputs.bulkDeployment : ''
 output aiWritingDeployment string = aiProvider == 'azureopenai' ? openAi!.outputs.writingDeployment : ''
+
+@description('Deployment name for the embedding pass. Empty where no AI provider is configured.')
+output aiEmbeddingDeployment string = aiProvider == 'azureopenai' ? openAi!.outputs.embeddingDeployment : ''
 output keyVaultName string = aiOpenAiBatchEnabled ? keyVault!.outputs.vaultName : ''
 output openAiSecretName string = aiOpenAiBatchEnabled ? keyVault!.outputs.openAiSecretName : ''
 output webName string = deployWeb ? staticWebApp!.outputs.name : ''

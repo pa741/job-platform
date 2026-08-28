@@ -1,3 +1,4 @@
+using JobPlatform.Core.Ai;
 using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Matching;
 using JobPlatform.Data.Sql;
@@ -35,9 +36,11 @@ public sealed class MatchSweepFunction(
     JobsDbContext db,
     CandidateProfileRepository profiles,
     JobMatchRepository matches,
+    EmbeddingRepository embeddings,
     TimeProvider time,
     ILogger<MatchSweepFunction> logger,
-    ICandidacyAssessor? assessor = null)
+    ICandidacyAssessor? assessor = null,
+    ITextEmbedder? embedder = null)
 {
     /// <summary>
     /// How far back the scoring pass looks.
@@ -47,8 +50,11 @@ public sealed class MatchSweepFunction(
     /// one required skill - would need the score this pass exists to compute, and would drop
     /// exactly the roles a candidate is qualified for by a route the filter cannot see.
     /// Recency biases nothing about the match itself.
+    ///
+    /// Public because <c>EmbedCorpusFunction</c> reads it. That pass exists to serve this one,
+    /// and a shorter window there would leave the oldest slice of every ranking silently unfused.
     /// </remarks>
-    private const int LookbackDays = 45;
+    public const int LookbackDays = 45;
 
     /// <summary>Ceiling on how many postings one sweep scores per profile.</summary>
     private const int MaxPostings = 20_000;
@@ -63,7 +69,7 @@ public sealed class MatchSweepFunction(
     /// precisely to catch that. A threshold tuned to look efficient would filter out the cases
     /// worth judging.
     /// </remarks>
-    private const int AssessmentThreshold = 45;
+    private const int AssessmentThreshold = MatchRanker.FusionFloor;
 
     /// <summary>Ceiling on how many pairs one sweep sends to the model, per profile.</summary>
     /// <remarks>
@@ -168,16 +174,22 @@ public sealed class MatchSweepFunction(
         // thing that exhausts the database's monthly grant.
         var postings = await matches.GetPostingFactsAsync(since, MaxPostings, ct);
 
+        // Once for the whole sweep too, and for the same reason with more force behind it: these
+        // are two-kilobyte blobs, so re-reading them per profile is megabytes of transfer to
+        // recompute an answer that does not depend on which candidate is being scored.
+        var vectors = await embeddings.GetPostingVectorsAsync(since, MaxPostings, ct);
+
         logger.LogInformation(
-            "Match sweep: {Profiles} profile(s) against {Postings} posting(s) seen since {Since:yyyy-MM-dd}.",
-            profileIds.Count, postings.Count, since);
+            "Match sweep: {Profiles} profile(s) against {Postings} posting(s) seen since "
+            + "{Since:yyyy-MM-dd}; {Vectors} carry an embedding.",
+            profileIds.Count, postings.Count, since, vectors.Count);
 
         var scored = 0;
         var assessed = AssessmentTally.Empty;
 
         foreach (var id in profileIds)
         {
-            scored += await ScoreAsync(id, postings, now, ct);
+            scored += await ScoreAsync(id, postings, vectors, now, ct);
             assessed += await AssessAsync(id, assessmentLimit, minScore, maxScore, ct);
         }
 
@@ -193,7 +205,11 @@ public sealed class MatchSweepFunction(
     }
 
     private async Task<int> ScoreAsync(
-        long profileId, IReadOnlyList<PostingFacts> postings, DateTimeOffset now, CancellationToken ct)
+        long profileId,
+        IReadOnlyList<PostingFacts> postings,
+        IReadOnlyDictionary<long, float[]> vectors,
+        DateTimeOffset now,
+        CancellationToken ct)
     {
         var candidate = await BuildCandidateAsync(profileId, ct);
 
@@ -203,14 +219,105 @@ public sealed class MatchSweepFunction(
         }
 
         var graph = ConceptGraph.Default;
-        var scores = new List<(PostingFacts, MatchResult)>(postings.Count);
+        var scores = new List<(PostingFacts Posting, MatchResult Result)>(postings.Count);
 
         foreach (var posting in postings)
         {
             scores.Add((posting, MatchScorer.Score(candidate, posting, graph)));
         }
 
-        return await matches.UpsertScoresAsync(profileId, scores, now, ct);
+        // The score is the whole of the match; the rank is only the order it is read in. So the
+        // ranking is computed after every pair has a score, over the whole pool at once - which
+        // is what MatchRanker needs and what a per-pair call could never give it.
+        var profileVector = await EnsureProfileVectorAsync(profileId, ct);
+
+        var ranking = MatchRanker.Rank(
+        [
+            .. scores.Select(s => new RankInput(
+                s.Posting.PostingId,
+                s.Result.Score,
+                Similarity(profileVector, s.Posting.PostingId))),
+        ]);
+
+        return await matches.UpsertScoresAsync(profileId, scores, ranking, now, ct);
+
+        double? Similarity(float[]? profile, long postingId)
+            => profile is not null && vectors.TryGetValue(postingId, out var posting)
+                ? EmbeddingVector.Similarity(profile, posting)
+                : null;
+    }
+
+    /// <summary>
+    /// The profile's vector, embedding it first if the document has changed since the last one.
+    /// </summary>
+    /// <remarks>
+    /// <b>Here rather than in the corpus pass, and it is one call.</b> The posting side is
+    /// thousands of adverts and belongs to a bounded pass of its own; the profile side is a
+    /// single document per candidate, needed by the ranking that is about to run, and cheap
+    /// enough that making somebody wait a night for it would be the only cost worth mentioning.
+    ///
+    /// The staleness test is the profile's own <c>ExtractionInputHash</c>, which is a hash of
+    /// <c>ToDocument()</c> - the exact text embedded here. So a save that edited a phone number
+    /// costs nothing and one that rewrote a job description costs one call, which is the same
+    /// bargain the extraction path already strikes.
+    ///
+    /// Null on every failure path, and the ranker drops the axis for it: no provider, no
+    /// document, a profile never saved, or a call that did not come back. None of those is a
+    /// reason to stop scoring.
+    /// </remarks>
+    private async Task<float[]?> EnsureProfileVectorAsync(long profileId, CancellationToken ct)
+    {
+        var identity = await db.CandidateProfiles
+            .AsNoTracking()
+            .Where(p => p.Id == profileId)
+            .Select(p => new { p.SubjectId, p.ExtractionInputHash })
+            .FirstOrDefaultAsync(ct);
+
+        if (identity?.ExtractionInputHash is not { } hash)
+        {
+            return null;
+        }
+
+        if (await embeddings.GetProfileVectorAsync(profileId, hash, ct) is { } current)
+        {
+            return current;
+        }
+
+        if (embedder is null || string.IsNullOrWhiteSpace(identity.SubjectId))
+        {
+            return null;
+        }
+
+        // Only reached when the vector is genuinely stale, so the profile graph is loaded on the
+        // nights it is needed rather than on every night.
+        var view = await profiles.GetAsync(identity.SubjectId, ct);
+
+        if (view is null)
+        {
+            return null;
+        }
+
+        var text = EmbeddingText.ForProfile(view.Profile.ToDocument());
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        var embedded = await embedder.EmbedAsync([text], ct);
+
+        if (embedded.Count == 0 || embedded[0] is not { } vector)
+        {
+            logger.LogWarning(
+                "Match sweep: could not embed profile {ProfileId}; its matches will rank on the "
+                + "score alone. The AI ledger carries why.", profileId);
+            return null;
+        }
+
+        await embeddings.UpsertProfileEmbeddingAsync(
+            profileId, vector, hash, embedder.Deployment, time.GetUtcNow(), ct);
+
+        return vector;
     }
 
     /// <summary>
