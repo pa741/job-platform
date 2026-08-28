@@ -418,6 +418,134 @@ out this formulation rather than the whole idea - though halving the correlation
 marginal difference. And two runs of the *same* CV measurement gave +0.488 and +0.501, so
 treat anything under about 0.02 as run-to-run noise; the HyDE gap is far outside that.
 
+#### What the statistics actually license, and two claims above that were too strong
+
+Researched and then applied to our own numbers. Three corrections, one confirmation.
+
+**Confidence intervals at n=70** (Fisher z with the 1.06 Spearman correction):
+
+| signal | Spearman | Kendall tau-b | 95% CI |
+| --- | --- | --- | --- |
+| deterministic score | -0.198 | -0.143 | **[-0.43, +0.05] - includes zero** |
+| CV embedding | +0.501 | +0.367 | [+0.29, +0.67] |
+| HyDE embedding | +0.256 | +0.179 | [+0.01, +0.48] |
+| score x CV | +0.432 | +0.318 | [+0.21, +0.61] |
+
+**Paired bootstrap on the differences** (10,000 resamples - paired, because these share the
+same 70 items and the product contains the embedding as a factor, so independent intervals
+would be the wrong test):
+
+- **CV beats HyDE: +0.245, CI [+0.082, +0.417] - significant.** The rejection above holds.
+- **CV vs score x CV: +0.069, CI [-0.012, +0.152] - NOT significant.** The table above should
+  not be read as showing the embedding alone beats the combination. It does not.
+- CV beats the deterministic score: +0.699, CI [+0.41, +0.96] - significant.
+
+**Kendall tau-b is the more defensible statistic here** - integer scores with many ties - and
+runs about 0.73x the Spearman value throughout. Do not compare a tau against the Spearman
+numbers already recorded; recompute both if switching.
+
+**The 0.015 run-to-run wobble noted earlier is not the dominant uncertainty.** It is
+judge non-determinism. Sampling error at n=70 is an order of magnitude larger - CI half-widths
+of ~0.25. Re-running the judge on the same pairs buys nothing; **only new labels tighten these
+numbers, and halving the interval needs roughly 270 labels** - about five more nights.
+
+**Thorndike's range-restriction correction was tried and is not usable here.** The assessed 70
+have an SD of 2.98 against 12.67 across the 2,943 eligible pairs, a 4.3x restriction, and the
+Case II correction turns -0.198 into -0.652. But applying it to the CI bounds gives roughly
+[-0.89, +0.22] - still spanning zero, and enormous. **Correcting a non-significant estimate
+produces an amplified non-significant estimate, not new information.** Recorded so nobody
+quotes the -0.652.
+
+**The pooling bias is the thing to fix, and it is fixable for free.** The 70 labels were
+selected by the deterministic score - a single selector, which is a sharper version of the
+pooling bias TREC evaluation has documented since Zobel 1998, and closer still to the
+missing-not-at-random problem in recommender evaluation (Schnabel et al., ICML 2016). Every
+number here therefore describes ranking **only within the top decile of deterministic score**.
+That is a coverage problem, not a variance problem: no interval widens to cover it.
+
+The fix costs nothing extra. **Spend the next night's 40 assessments on a stratified sample
+across the score range instead of the top 40.** Same budget, and it is the only way any of
+these correlations become statements about the corpus rather than about its top decile.
+
+#### Mean-centring: tested, and the mechanism worked without the ranking improving
+
+The leading recommendation from the embedding research was corpus mean-centring - subtract
+the mean advert vector from everything before taking cosine, removing the shared
+"advert-ness" direction. Anisotropy is the named cause of compressed similarity spread, and
+Mu & Viswanath (all-but-the-top) and Su et al. (BERT-whitening, which moved median pairwise
+cosine from 0.833 to -0.010) report large gains on symmetric similarity tasks.
+
+Tested with the mean estimated from a random 143-posting sample of the corpus - deliberately
+not from the assessed 70, which were selected for being good matches and whose mean is not
+the corpus mean.
+
+| | Spearman | range | Strong-Weak gap | Weak in top 20 | Strong buried |
+| --- | --- | --- | --- | --- | --- |
+| baseline cosine | **+0.501** | 0.341 to 0.579 | +0.045 | 3 | 2 |
+| mean-centred | +0.366 | -0.195 to 0.162 | **+0.062** | **1** | 5 |
+
+Paired bootstrap: **-0.135, CI [-0.329, +0.065] - not significant.**
+
+**The mechanism did exactly what the theory says and it did not help.** The Strong-to-Weak gap
+widened by 38% and the range nearly doubled, so the shared direction was real and removing it
+did re-expand the spread. Weak matches in the top 20 fell from 3 to 1. But genuine Strong
+matches buried in the bottom 20 rose from 2 to 5, and rank correlation did not improve.
+
+That is worth more than the negative result itself: **compressed spread was my diagnosis of
+the HyDE failure, and widening the spread turns out not to be sufficient.** Spread was a
+symptom, not the cause. Do not reach for whitening or all-but-the-top on the strength of that
+diagnosis without re-testing.
+
+Caveats: the mean came from 143 postings rather than all 4,078, only mean-centring was tried
+(not top-principal-component removal), and at n=70 the interval is wide enough that a real
+effect of this size could hide in it.
+
+#### Other findings worth not rediscovering
+
+- **`RoleFamily` is already computed, stored, indexed - and unread by the scorer.** Measured
+  earlier and rejected because `Unknown` is 38% of the corpus and holds the residue and the
+  best matches alike. The research adds the part that resolves it: `Unknown` conflates "no
+  signal" with "different profession" because the classifier only enumerates *tech* families.
+  Add Legal, Tax, Academic, Healthcare, HR, Sales and the residue classifies instead of
+  falling through. **This is the cheapest remaining fix for 1.3 and needs no model call.**
+- **LinkedIn published our exact failure.** *Learning to Retrieve for Job Matching* describes
+  "a job posting aims to recruit a backend developer proficient in Java; however, the system
+  may match frontend developers with Java expertise" - and their fix is deterministic rules
+  layered on the learned signal, not a retrained embedding. Our cheap-corpus-pass into
+  expensive-shortlist-pass is also the standard retrieve-rank-rerank shape.
+- **RRF is the wrong fusion tool here.** Its k=60 was "fixed during a pilot investigation and
+  not altered" (Cormack et al., SIGIR 2009) - a rounded number, not a derived constant. Bruch
+  (ACM TOIS 2023) shows a convex combination beats RRF significantly, p<0.01, on every dataset
+  tested. RRF exists for unnormalisable scores across many black-box systems with no labels;
+  we have two signals with known ranges and some labels. **Normalise using statistics from all
+  ~4,000 pairs, never from the 70** - min-maxing on a range-restricted sample is the textbook
+  error - then fit one convex weight by leave-one-out cross-validation.
+- **No learned ranker is justified at n=70.** LambdaMART and friends need orders of magnitude
+  more. One coefficient, cross-validated, is the ceiling - which is also all the C# constraint
+  would accept.
+- **Cohere Rerank on Azure AI Foundry requires API-key auth**; Entra ID is not supported on
+  that route today. It would breach the no-secrets rule. Azure AI Search's semantic ranker is
+  the Entra-compatible reranker, at roughly $0.10 a night for this corpus, but needs an index
+  kept in sync - real engineering, unverified gain on this domain.
+- **Do not prefix OpenAI embeddings with `query:`/`passage:`.** That scheme belongs to E5 and
+  friends; `text-embedding-3-*` was never trained on those tokens. Cargo-culting it is more
+  likely to add noise than signal.
+- **Azure OpenAI embeddings cannot be fine-tuned at all** - a hard blocker, not a cost
+  trade-off. The strongest result found anywhere (ConFit v2, +13.8 recall / +17.5 nDCG over
+  `text-embedding-3`) requires an open-weights model and far more labels, so it is a roadmap
+  item rather than an option.
+
+#### Legal, and it changes with distribution
+
+**NYC Local Law 144 does not apply** - it governs employers and agencies evaluating
+applicants; this ranks postings for one person. **The EU AI Act Annex III point 4 makes
+recruitment AI high-risk**, and the Commission's AI Act Service Desk has said job boards
+recommending vacancies to seekers are in scope - **but Article 3(4) excludes use "in the
+course of a personal non-professional activity"**, which is exactly this.
+
+**That carve-out disappears the moment this is offered to other job seekers.** Worth knowing
+before, not after.
+
 #### What building it looks like
 
 1. An embeddings deployment **in Bicep** - the experiment used a hand-made one, deleted
