@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using JobPlatform.Core.Enrichment;
@@ -58,7 +59,7 @@ public sealed class KernelCandidacyAssessor(
         {
           "assessments": [
             {
-              "index": <the index given in the ROLE heading, copied exactly>,
+              "index": <integer: the number in the ROLE heading, unquoted>,
               "verdict": "strong" | "possible" | "weak",
               "score": <integer 0-100>,
               "rationale": "<2-3 sentences addressed to the candidate>",
@@ -231,7 +232,14 @@ public sealed class KernelCandidacyAssessor(
         {
             if (Int(item, "index") is not { } index || index < 0 || index >= batch.Length || !seen.Add(index))
             {
-                logger?.LogWarning("Candidacy assessment returned an unusable role index.");
+                // Says which of the three it was. "Unusable" on its own cost a night's
+                // diagnosis: a wrong type, an out-of-range number and a repeat are different
+                // faults with different fixes, and the log could not tell them apart.
+                logger?.LogWarning(
+                    "Candidacy assessment returned an unusable role index: {Index} against a "
+                    + "batch of {BatchSize}.",
+                    DescribeIndex(item),
+                    batch.Length);
                 continue;
             }
 
@@ -369,11 +377,59 @@ public sealed class KernelCandidacyAssessor(
             ? value.GetString()
             : null;
 
+    /// <summary>
+    /// An integer property, whether the model quoted it or not.
+    /// </summary>
+    /// <remarks>
+    /// A JSON string holding a number is accepted deliberately. This used to demand
+    /// <see cref="JsonValueKind.Number"/>, and on 2026-08-28 five of nine batches were discarded
+    /// whole - every role in them - which is the signature of a response that is well formed and
+    /// typed differently, not one that is wrong. The prompt asking for the index to be "copied
+    /// exactly" from its heading is an invitation to copy it as text.
+    ///
+    /// This concedes nothing that matters. The guarantee worth having is that an answer lands
+    /// against the role it was written for, and that is enforced by the range and duplicate
+    /// checks in <see cref="Distribute"/>, which are untouched. Reading "3" as 3 is not trusting
+    /// the model; it is parsing it.
+    /// </remarks>
     private static int? Int(JsonElement element, string name)
-        => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number
-            && value.TryGetInt32(out var parsed)
-                ? parsed
-                : null;
+    {
+        if (!element.TryGetProperty(name, out var value))
+        {
+            return null;
+        }
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.Number when value.TryGetInt32(out var parsed) => parsed,
+            JsonValueKind.String when int.TryParse(
+                value.GetString(),
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out var parsed) => parsed,
+            _ => null,
+        };
+    }
+
+    /// <summary>
+    /// What an unusable index actually held, for the warning. Never the whole item.
+    /// </summary>
+    /// <remarks>
+    /// The rest of the entry carries a rationale written about the candidate, so logging the
+    /// item wholesale would put profile-derived prose in telemetry. The index alone is a number
+    /// or a short token and says everything needed to tell a type problem from a range one.
+    /// </remarks>
+    private static string DescribeIndex(JsonElement item)
+    {
+        if (!item.TryGetProperty("index", out var value))
+        {
+            return "absent";
+        }
+
+        var raw = value.ValueKind == JsonValueKind.String ? value.GetString() : value.ToString();
+
+        return $"{value.ValueKind}:{Truncate(raw, 20)}";
+    }
 
     private static string Truncate(string? value, int max)
         => value is null ? string.Empty : value.Length <= max ? value : value[..max];
