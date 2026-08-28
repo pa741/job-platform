@@ -300,6 +300,101 @@ never been read by the model. The unresolved-mention log remains where the next 
 comes from — it is what surfaced `containers`, though `agile` came from reading the ranking
 rather than the log, which suggests the log is not the only place worth looking.
 
+### 1.6 Embeddings are the axis 1.3 is missing - measured, not argued
+
+Researched against Microsoft Learn and **validated against the 70 assessed pairs** on
+2026-08-28. **Not built yet.** This section is the evidence and the design constraints, so
+neither has to be rediscovered.
+
+#### The result
+
+Cosine similarity between the profile document and each advert, `text-embedding-3-small` at
+512 dimensions, against the model's own assessment score:
+
+| ordering | Spearman vs the model | Weak in top 20 | Strong buried in bottom 20 |
+| --- | --- | --- | --- |
+| arithmetic score alone | **-0.198** | 5 | 8 |
+| embedding similarity | **+0.488** | 3 | 2 |
+| score x similarity | +0.422 | 3 | 2 |
+
+**Read the -0.198 carefully.** It is not evidence that `MatchScorer` is worthless: the
+assessed set was *selected* by high score, so every row in it sits between 90 and 100 and the
+score has almost no range left to correlate with. What it does say is precise and is exactly
+1.3 - **within the band the score has already chosen, the score carries no further signal about
+which matches are good.** Similarity was not used to select the set, so its +0.488 is not
+restricted the same way.
+
+The extremes are convincing. `Legal Counsel - UK` is the **lowest similarity of all 70** at
+0.341, and the model scored it 5. `Workday Integrations Specialist` (0.392, model 20),
+`Senior Product Manager` (0.414, model 35), `TM1 Developer` (0.427, model 20) and
+`Product Developer` (0.429, model 10) follow it. At the other end `.NET Developer` (0.557) and
+`VoidZero Engineer` (0.556) are near the top. **Every posting the concept axes could not tell
+apart, the embedding does.**
+
+It is not clean, and the failures matter. Three `Senior Research Engineer` rows score 0.524 -
+high - and the model called them 20/Weak. `Delivery Solutions Engineer` (0.449) and
+`Lead Technical Consultant` (0.445) are both genuine Strong matches that similarity ranks low.
+Mean by verdict is Strong 0.503, Possible 0.493, Weak 0.459: the right order, with heavy
+overlap. **This is a better prior, not an oracle**, and it belongs beside the concept axes
+rather than instead of them.
+
+#### Cost, measured rather than estimated
+
+71 documents cost 54,271 tokens, so about 764 per posting after truncation to 6,000 chars.
+The whole 4,078-posting corpus is therefore **~3.1M tokens, one-off** - pennies on a small
+embedding model, and the cheapest model call this system makes by a wide margin. Re-embedding
+on a vocabulary change costs the same again, which is what makes it affordable to treat as
+versioned data.
+
+#### Why the architecture takes it cleanly
+
+- **Cosine similarity is pure arithmetic.** `MatchScorer` can take a precomputed similarity
+  and stay pure and Azure-free - the property that makes its numbers exactly assertable.
+- **This is not a kNN search.** One profile against ~4,000 postings, nightly, in memory. The
+  sweep already loads every posting's facts and can load vectors too, so **the SQL `vector`
+  type is not needed for the matching path at all** - which matters, because this database is
+  Basic DTU: 5 DTUs, under one vCore, HDD-backed.
+- **Managed identity already works.** An embeddings deployment on the existing account needs
+  the same `Cognitive Services OpenAI User` role and no new secret.
+- **The AI call ledger exists**, so an embedding pass is observable from its first run.
+
+#### Constraints found, with the ones that bite
+
+| | |
+| --- | --- |
+| SQL `vector` max dimensions | **1998** - `text-embedding-3-large` at 3072 **will not fit** |
+| `text-embedding-3-small` | 1-1536 dims, MRL-trained, so truncation is graceful |
+| Storage, 4,078 postings | ~25 MB at 1536 dims, ~8 MB at 512 (Basic caps at 2 GB) |
+| Region | both `-3-small` and `-3-large` are available in Spain Central |
+
+- **`sp_describe_first_result_set` does not report the `vector` type correctly**, so EF and
+  many drivers see `varchar`/`nvarchar`. A mapping problem, not a theoretical one.
+- **You cannot upgrade between embedding models.** Changing the model *or the dimension count*
+  means re-embedding everything, so it needs a version constant with the same discipline as
+  `EnrichedPosting.CurrentVersion`.
+- **A freshly created GlobalStandard deployment answers 404 intermittently** while it
+  propagates across the global pool - measured as 200, 404, 200 on three consecutive calls.
+  Treat `DeploymentNotFound` as transient for a new deployment or a backfill will die on it.
+
+#### Two things to rule out now
+
+- **Never as a replacement for the concept graph.** A similarity is a number with no
+  explanation. `MatchResult.Matched` is presentable to the candidate rather than merely
+  diagnostic, and every point traces to an assertion. This is an *additional axis* or nothing.
+- **Not in-database `AI_GENERATE_EMBEDDINGS`.** It would bypass the AI call ledger, and Basic
+  tier caps external connections at three.
+
+#### What building it looks like
+
+1. An embeddings deployment **in Bicep** - the experiment used a hand-made one, deleted
+   afterwards rather than left as drift.
+2. A `vector(512)` column on `JobPostings` and one on `CandidateProfiles`, filled by a pass
+   that reports to the AI ledger as `posting-embedding`, versioned like the enrichment.
+3. A similarity axis in `MatchScorer`, weighted and **measured against the corpus** the way
+   §3 describes - the top-60 diff, not the six rows anybody already has in mind.
+4. Only then revisit 1.3. With a signal that has 100% coverage, the ranking question may stop
+   needing the verdict at all - and if it does not, the two combine.
+
 ---
 
 ## 2. What changed this round
