@@ -2,270 +2,98 @@
 
 State of the matching work as of 2026-08-28, for whoever picks this up next.
 
-Conventions, architecture and the standing rules live in [`CLAUDE.md`](CLAUDE.md). This file
-is only the delta and the open work. The previous round of fixes — the `containers`
-vocabulary bug, the enrichment version coupling, each producer clearing only its own rows, the
-withdrawn evidence-count rule, and the bounded admin endpoints — is described in `CLAUDE.md`
-and in the `CurrentVersion` remarks on `EnrichedPosting` and `MatchResult`.
+Conventions, architecture and the standing rules live in [`CLAUDE.md`](CLAUDE.md). This file is
+the delta and the open work, and **the open work comes first** because that is what someone
+picking this up needs. What changed, and how it was measured, are below it as context for why.
 
-**Deployed and verified.** `main` is at the commit the container app runs, the corpus has been
-re-enriched at `EnrichedPosting` version 5, and the working tree is clean.
+**Deployed and verified.** `main` is at the commit the container app runs, the corpus is
+re-enriched at `EnrichedPosting` version 5, and the working tree is clean. One profile exists
+and has been swept: 4,078 pairs scored, 2,495 over the assessment threshold, 50 assessed.
 
-**One profile now exists and has been swept**, so §4.1 has something to measure against for
-the first time: 4,078 pairs scored, 2,495 of them over the assessment threshold. Nothing
-about it belongs in this repository - it is somebody's employment history, and the rule in
-`CLAUDE.md` covers fixtures, examples and screenshots alike.
-
-§3 is what deploying §1.1 involved, and it is where §1.3 came from: driving the re-enrichment
-is what exposed the bound that could not act. The last re-enrichment, after §1.3 shipped, ran
-35 blobs in 4 calls at `limit=50` — the request shape that returned 504 twice before it.
+Nothing about that profile belongs in this repository. It is somebody's employment history, and
+the rule in `CLAUDE.md` covers fixtures, examples and screenshots alike.
 
 ---
 
-## 1. What changed
+## 1. Open work, in the order worth doing it
 
-### 1.1 The concept floor asks what the demands are, not how many
+### 1.1 AI calls fail silently, everywhere, and nobody can see it
 
-This is the open item the previous handoff left as §3.1: thin but genuine evidence scoring 100.
-It was left undone deliberately, because two scoring rules had been changed on judgement alone
-and one of them was wrong. It has now been measured before shipping, and the measurement
-changed the answer.
+**The general problem, and the one to fix first, because it is the instrument for the rest.**
 
-**The two directions the previous handoff suggested were both measured and both rejected.**
+Every AI path in this system degrades silently by design. `AddAiProvider` registers nothing when
+no provider is configured, and `IDocumentExtractor`, `ICandidacyAssessor` and
+`IApplicationWriter` are all resolved as nullable so consumers skip their step rather than
+throw. That design is right: a provider failure must not take down endpoints with nothing to do
+with AI. But *"must not fail loudly"* was implemented as *"must not be recorded at all"*, and
+those are different things.
 
-Damping the score by `Coverage` — the one that looked obvious, and the reason `Coverage`
-already existed — punishes the employer's terseness rather than the thin evidence:
+What it has cost, three times now:
 
-| posting | concepts read | coverage | outcome |
-| --- | --- | --- | --- |
-| `.NET Developer - St Albans` | 12 | 0.83 | wrongly dropped from the top 60 |
-| `Senior Platform Engineer` | 12 | 0.40 | wrongly dropped |
-| `Full Stack .NET Developer - C#, Azure, REST API` | 4 | 0.25 | wrongly dropped, scored 96 |
-| `Product Manager at Aries` | 2 | 0.85 | wrongly **kept** |
+- **2026-08-28.** The nightly sweep was raised to 90 assessments. Nine batches of ten went out;
+  five came back with role indices the assessor could not use and were discarded whole. 40
+  written, 50 paid for and thrown away. No exception, no error, and the sweep reported success.
+- **The first real extraction backfill** spent its calls collecting HTTP 429s and extracted
+  almost nothing. The symptom was a stalled count rather than a red anything.
+- **`KernelDocumentExtractor.Distribute`** drops misaligned answers by design, and the affected
+  postings are quietly re-extracted by a later backfill. Correct, and invisible.
 
-Damping by the number of demands, `n/(n+k)`, reproduces 1.4's ledger exactly. At k=1 it removes
-`Yardi Implementation Consultant` (100, one concept) and `Senior Software Engineer - C#` (100,
-two concepts) together — no threshold separates them, which is the same sentence the previous
-handoff wrote about `.NET Developer` and `Home Delivery Driver`. It also ranks by how long an
-advert is, which is a fact about the recruiter and not about the fit.
+**What to build.** A record per model call: which path made it, which deployment served it
+(`bulk` or `writing`), when, the outcome, and on failure a bounded reason plus the ids affected.
+Then a dashboard view whose subject is failures — a success count nobody reads is not the point.
 
-**What separates them is which concept carried the match.** Reading the actual evidence behind
-the corpus top 60 makes it plain: every wrongly-ranked thin match rested on `skill.agile` or on
-an `area.*` tag a board had applied, and every rightly-ranked thin one rested on a concrete
-technology.
+Constraints that are not obvious and will bite:
 
-The vocabulary already records that distinction as `tagOnly` — *"in prose they mean nothing;
-almost every advert contains them"* — and every domain is `tagOnly` implicitly. So the version 2
-floor now asks whether anything **discriminating** was demanded, rather than whether anything
-was. `Concept.IsDiscriminating` is that flag plus domains, and `skill.agile` joined the flag:
-nearly every advert says agile, which is precisely what it describes.
+- **Never store the prompt.** The assessor's and extractor's prompts carry the candidate's
+  profile. Store the outcome and a reason, not the payload, and bound the reason's length. The
+  posting side is public text; the profile side is not, and one store holding both is one store
+  that leaks.
+- **Cosmos, not SQL.** SQL is billed on wall-clock time online against a monthly grant that one
+  daily ingest half-consumes, and it is reserved for posting browse, search and detail. Every
+  dashboard metric already comes from Cosmos. This is a metric.
+- **App Insights is not a substitute, and that was measured.** Sampling is on with
+  `excludedTypes: "Request;Exception"`, so traces are sampled and these failures throw nothing.
+  On the night of 2026-08-28 the "unusable role index" warnings happened to survive while the
+  sweep's own completion line did not. A ledger you cannot trust to be complete is not a ledger.
+- **A failure has to name what it lost.** "One call failed" is not actionable; "these 10 posting
+  ids went unassessed and will be retried" is. The retry is usually automatic here, so the
+  reader's question is almost always *how much* and *is it converging*, not *what threw*.
+- **The Realtime component in `../model.md` is the one piece never built**, and it is a Cosmos
+  change-feed trigger pushing to clients. An AI failure feed is a natural first consumer, if you
+  would rather build it for a reason than for its own sake.
 
-Measured against the corpus, 117 of 3,908 scoring postings fall to zero. Eight leave the top 60:
+Start with the smallest useful piece: have the sweep log what it *asked for* against what it
+*wrote*, and warn when they diverge. That alone turns last night's 55% loss from invisible into
+obvious, it ships on its own, and it changes no behaviour.
 
-| posting | was | evidence |
-| --- | --- | --- |
-| Space Data Engineer | 100 | 1 × board tag `area.data` |
-| Real-Time Data Engineer | 100 | 1 × board tag `area.data` |
-| Senior Product Manager — Partner Algorithms | 100 | `skill.agile` |
-| Senior Platform Engineer — Energy Data | 100 | `skill.agile` |
-| Senior Engineer @ Xero | 98 | `skill.agile` |
-| Senior Manager, Regional Data Center Development | 94 | `area.cloud`, `area.ml` |
-| Transformation Manager (×2) | 92 | `skill.agile` |
+### 1.2 The assessor correlates answers by position, and loses whole batches
 
-**No good match went with them**, which is the whole point — 1.4 removed one bad match and four
-good ones. Eight genuine C#/.NET roles took their place. `Senior Software Engineer - C#` (100,
-two concepts) and `Senior Full-Stack Engineer | C#, .NET & Azure` (100, four) both survive: what
-they rest on is as thin as the Transformation Manager and it is a real requirement.
+The specific defect 1.1 would have surfaced. Do this second, or first if you would rather stop
+the money before building the instrument.
 
-Five tests in `MatchScorerTests` pin both directions, including the one 1.4 got wrong — one
-concrete skill still carries a match alone — and that an unknown key counts as discriminating,
-so removing a concept from the vocabulary cannot silently zero the postings still referencing
-it. Two in `ConceptGraphTests` pin agile in prose against agile in a board's skills field.
+`KernelCandidacyAssessor` packs ten roles into one call as `ROLE 0..9` and matches answers back
+by index. When the model returns a different count, or 1-based indices, or a truncated response,
+every index is unusable and the whole batch is dropped. Measured on 2026-08-28: **4 of 9 batches
+usable, 5 discarded**.
 
-`MatchResult.CurrentVersion` is 5, and `EnrichedPosting.CurrentVersion` went to 4 here (5 by
-the end of §1.4). The remarks on both carry this history, including the two rejected rules, so
-neither is retried from scratch.
+**Dropping them is right.** An answer landing against the wrong posting would be wrong,
+self-consistent and undetectable afterwards, which is exactly why
+`KernelDocumentExtractor.Distribute` drops rather than clamps. Do not "fix" this by clamping.
 
-### 1.2 `deploy.yml` has a concurrency group
+The fix is to stop correlating by position: give each role an opaque id and require it echoed
+back. That is this codebase's own lesson from the other side of the same problem — *"A batch API
+echoes a `custom_id` per request, so correlation is the platform's problem."* The assessor is the
+last path still trusting ordering.
 
-Previously §3.2. Runs were concurrent and landed in whatever order the runners freed up; a
-stale queued run could deploy over a newer commit, which nearly happened during an Actions
-outage. The group serialises them and cancels the pending run when a newer one queues behind it.
+Reducing the batch size is the tempting shortcut. It only makes each loss smaller.
 
-`cancel-in-progress` is **false** deliberately: a run already executing may be part way through
-a Bicep deployment or `dbadmin migrate`, and killing the runner there trades a recoverable delay
-for a half-applied change. Waiting costs at worst a few minutes of the older image being live,
-and the newer run still lands last.
+Before changing anything, log one rejected **response** — never the prompt — and the
+misalignment will be obvious rather than guessed at.
 
-### 1.3 The reprocess endpoint's bound can act, and is tested
+### 1.3 A widely-held skill on a role from another field still scores 100
 
-Found by driving §3's re-enrichment: `POST /api/reprocess` returned **504 for `limit=50` and
-again for `limit=25`** — the same gateway timeout 1.5 was written to prevent.
-
-The reasoning behind the original bound was right. The continuation token is only accurate at
-a page boundary, so that is the only place it can be applied. What was missed is that **a page
-can cost more than the whole budget**: measured across the run, pages of five blobs took 4s,
-11s, 12s, 47s and **151s** against a 150s budget. A check passing at 149s committed the call to
-a whole further page with nothing able to interrupt it, and the gateway gave up at ~240s.
-Worse, a 504 carries no token, so the caller lost its place and restarted the listing —
-survivable only because the writes are idempotent, the second time that property has covered
-for a bound that could not act.
-
-The fix is not a smaller budget; no budget survives a page that costs more than all of it. The
-loop is now `BoundedWalk`, which stops **between items** and hands back the token for the start
-of the page it was in. The resume point is still a real boundary, so nothing is skipped, and
-the cost is redoing that page's finished items — free here, because a blob whose content has
-not changed converges in about a second. Overshoot past the budget falls from one page to one
-item.
-
-It will not stop before a page has completed, deliberately: bailing out of the first page would
-hand back the token the call arrived with, and the next call — with a fresh clock — would stop
-in the same place forever.
-
-`BoundedWalk` is generic over the item and takes a clock, so **it needs no Azure types to
-test**, which is what unblocked the test that had been open since the endpoint was written.
-That is the lesson worth carrying: the previous handoff called this untestable because faking a
-`BlobContainerClient` is hard, and the answer was to stop trying — the bound was never about
-blobs. `tests/JobPlatform.Ingestion.Tests` is new and holds seven tests, each a shape that
-actually happened, including the residual limit: a single item slower than the whole budget
-still overshoots by its own duration, and the margin to the gateway's ~230s absorbs it. The
-production-shape test was checked against the pre-fix code and fails there.
-
-### 1.4 A rule list written in a spelling the tokeniser destroys
-
-`RoleFamilyClassifier` called `.NET Developer` `Unknown`. The previous revision of this file
-guessed it had "no rule for the language-plus-role shape". That was wrong, and the real cause
-is worth more than the fix: the rule **was** there. `.net`, `node.js` and `ui/ux` had been in
-the lists since the file was written, and `TitleTokenizer` splits on `.` and `/`, so by the
-time a rule saw the text those were already `net`, `node` + `js` and `ui` + `ux`. Three dead
-entries that read exactly like working ones.
-
-`TitleTokenizer.DottedNames` now folds the three names whose spelling contains a separator,
-and the rules name the folded form. `ui/ux` was deleted outright — the bare `ux` beside it
-already covered every title it aimed at.
-
-Measured over 2,709 distinct corpus titles: **13 moved out of `Unknown`, all of them
-unambiguously .NET backend roles, and nothing moved between families or into `Unknown`.**
-
-Two intermediate attempts are worth not repeating. Making `.` a word character — the obvious
-fix, and what `ConceptGraph.NameChar` does for the vocabulary — fixed .NET and broke
-"Sr.Product Manager" and "React.js Developer", because any `Word.Word` spelling then becomes
-one token. Thirteen fixes for two regressions is the shape of a change to reject. Folding
-without a leading space then broke `C#.NET` and `VB.NET`, which are written glued to what
-precedes them. Both regressions were caught by diffing the whole corpus rather than by the
-examples in hand, which is the third time that has paid this session.
-
-Ten tests, and the pairing matters: the ones that assert `.NET Developer` is Backend fail
-without the fold, and the ones that assert `Sr.Product Manager` is still Product fail under
-the word-character version. **Asserting the classifier alone would not have caught this** —
-a dead entry and a working one look identical from there.
-
-`EnrichedPosting.CurrentVersion` is 5: the classifier produces a different answer for the
-same input, so stored rows are stale.
-
----
-
-## 2. How the measurement was done
-
-Worth repeating rather than reinventing, because it is what caught 1.4 and what changed the
-answer here.
-
-The corpus was read **once** into a local JSON cache (4,078 postings — the enriched columns and
-the concept assertions, which is exactly what `GetPostingFactsAsync` selects), and every
-candidate rule was then evaluated offline against that cache. Nothing was written to the
-database, and no profile row was created: `MatchScorer` is pure, so a `CandidateFacts` built in
-memory scores the whole corpus without a profile existing anywhere.
-
-The synthetic profile used was a senior C#/.NET engineer in London. It reproduced the previous
-handoff's reported numbers exactly — `Space Data Engineer` and `Yardi` both at 100 with one
-concept each — which is what made the diff trustworthy.
-
-Two environment notes, since neither is obvious:
-
-- **The SQL firewall holds only `AllowAllWindowsAzureIps`.** Reading the database from a
-  laptop needs a temporary rule for the client IP:
-  `az sql server firewall-rule create -g <rg> -s <server> -n <name> --start-ip-address <ip> --end-ip-address <ip>`,
-  and `... delete` immediately afterwards. The database is `azureADOnlyAuthentication`, so the
-  rule grants nobody access without a token for a database user — but leaving it behind on a
-  public portfolio project is exactly the kind of thing to avoid. Cache the corpus on the first
-  read and close the hole rather than keeping it open across an afternoon of iteration.
-- The API's `Api__AllowAnonymousReads` is `False` in the deployed container app, and there is no
-  bulk endpoint for posting concepts, so the API is not a route to the corpus.
-
----
-
-## 3. What deploying this involved
-
-Done, in this order. Recorded because step 2 surfaced the defect §1.3 fixes.
-
-1. **Push.** `.github/workflows/deploy.yml` is in the workflow's own `paths:` filter, so the
-   concurrency change deployed itself. The group is read from each run's own copy of the file,
-   so it takes effect from that run onward and cannot rescue anything already queued.
-2. **Re-enrich the corpus.** `EnrichedPosting.CurrentVersion` went to 4, marking every stored
-   posting stale. 25 blobs, 0 failures. The floor never depended on this — it keys on the
-   concept, not on the assertion's source, and was measured against the corpus before the
-   reprocess — so this was cleanup rather than a prerequisite.
-
-   Verified through `GET /api/v1/postings/facets`: `skill.agile` fell from 1,388 assertions to
-   625. The 749 `Taxonomy` ones are gone, because the description matcher no longer produces
-   them; the 554 `Model` readings and 85 `Board` tags survived, which is the *previous* round's
-   "each producer clears only its own rows" doing exactly what it should — enrichment clears what
-   enrichment writes. The floor is keyed on the concept, so the survivors still cannot carry a
-   match alone.
-3. **`seed-concepts` was not required.** `ConceptSeeder` projects labels, relations and the
-   closure; `tagOnly` is not among them, so the SQL projection had not drifted. It is idempotent,
-   and `deploy.yml` runs it beside `migrate` on a dispatch anyway.
-4. **No re-sweep.** `MatchResult.CurrentVersion` went to 5, so every stored match is stale, but
-   there are **no profiles** — `GET /api/v1/matches` returns 404 until one is created.
-
-Verify the deployed image is the commit you expect:
-
-```bash
-az containerapp list --query "[0].properties.template.containers[0].image" -o tsv
-```
-
-A token for the API, which is how the facet check above was done without touching SQL:
-
-```bash
-CLIENT=$(az containerapp show -n <app> -g <rg> \
-  --query "properties.template.containers[0].env[?name=='AzureAd__ClientId'].value | [0]" -o tsv)
-az account get-access-token --resource "api://$CLIENT" --query accessToken -o tsv
-```
-
----
-
-## 4. Open work
-
-### 4.1 A widely-held skill on a role from another field still scores 100
-
-The honest residue of §1.1, and the clearest remaining ranking defect.
-
-| posting | score | evidence |
-| --- | --- | --- |
-| Yardi Residential Implementation Consultant | 100 | `skill.sql` |
-| Risk Strategy Program Manager | 92 | `skill.sql` |
-| NetSuite Developer/Technical Consultant | 95 | `skill.rest` |
-| Product Analyst | 94 | `skill.csharp`, `skill.sql`, `skill.python` |
-
-These are correct readings of real requirements, and `skill.sql` genuinely discriminates — most
-postings naming it do mean an engineering role — so the floor correctly leaves it alone. **No
-rule over the concept axes separates these from a real match**, which is now measured three
-ways rather than argued: not by count, not by coverage, and not by how specific the concept is
-(the vocabulary is two levels deep, so `skill.sql` and `skill.csharp` are structurally
-identical — neither is broader than the other).
-
-What separates them is what the *role* is, which is a judgement rather than an arithmetic fact.
-`ICandidacyAssessor` is the half of the design that makes judgements, and it already reads the
-advert. Two directions worth considering, in order:
-
-- The sweep spends its model budget on the highest-scoring unassessed pairs. It is currently
-  spending it on these. That is the defect doing damage, and also the mechanism that could fix
-  it — a verdict on Yardi is exactly the thing that would sink it.
-- Nothing in ranking reads `Verdict`. A posting the model has already called a poor match still
-  sits at rank 2. Surfacing that in `ListAsync`'s ordering is cheap and needs no new signal.
-
-**There is now a real profile and 50 assessed pairs to work from**, and they settle the
-question. The arithmetic and the model disagree hard, and the model is right:
+The clearest remaining ranking defect. It now has a real profile and 50 assessed pairs behind it
+rather than an argument.
 
 | posting | score | model |
 | --- | --- | --- |
@@ -276,75 +104,174 @@ question. The arithmetic and the model disagree hard, and the model is right:
 | `.NET Developer` | **90** | **92, Strong** |
 | VoidZero Engineer | 100 | 92, Strong |
 
-The scorer ranks Legal Counsel above `.NET Developer`. Nothing in `ListAsync` reads
-`Verdict`, so it stays there after the model has said 5 out of 100. Across the 50: 14 Strong,
-23 Possible, 13 Weak.
+The scorer ranks Legal Counsel above `.NET Developer`, and it stays there after the model has
+said 5 out of 100. Across the 50 assessed: 14 Strong, 23 Possible, 13 Weak.
 
-Two things to be careful of before ranking on it. Only 50 of 2,495 pairs over the threshold
-are assessed, so most rows have no verdict at all and the ordering must leave them where they
-are rather than sorting them above or below everything judged. And the sweep spends its budget
-strictly top-down, so a better ranking feeds itself a better shortlist - which is the argument
-for fixing 4.2 first, since over half of what is currently paid for is discarded.
+These are correct readings of real requirements — `skill.sql` genuinely discriminates, so the
+version 5 floor correctly leaves them alone. **No rule over the concept axes separates them**,
+which is measured three ways rather than argued: not by count, not by coverage, and not by how
+specific the concept is (the vocabulary is two levels deep, so `skill.sql` and `skill.csharp`
+are structurally identical). What separates them is what the *role* is, which is a judgement,
+and `ICandidacyAssessor` is the half of the design that makes judgements.
 
-Take a top-60 snapshot before and diff it after, the way this round was done.
+Nothing in `JobMatchRepository.ListAsync` reads `Verdict`. Surfacing it in the ordering is the
+cheap half and needs no new signal.
 
-### 4.2 Over half the assessment budget is discarded without failing
+Two things to be careful of:
 
-Found by verifying the run of 2026-08-28, and the most expensive defect currently open.
+- **Only 50 of 2,495 eligible pairs are assessed.** Most rows have no verdict at all, and the
+  ordering must leave those where they are rather than sorting them above or below everything
+  judged. Getting that wrong buries the corpus under a handful of rows.
+- **The sweep spends its budget strictly top-down**, so a better ranking feeds itself a better
+  shortlist. That is also why 1.1 and 1.2 come first: half of what is paid for never arrives.
 
-The nightly ceiling was raised to 90 for one run. **40 assessments were written.** Nothing
-failed: no exception, no error, and the sweep reported success. The assessor packs ten roles
-into one model call and asks for an answer per role index; five of the nine batches came back
-with indices it could not use, and `KernelCandidacyAssessor` drops a whole batch rather than
-guess which answer belongs to which posting:
+Take a top-60 snapshot before and diff it after, the way §3 describes.
 
-| batch | outcome |
-| --- | --- |
-| 4 of 9 | usable, 40 assessments written |
-| 5 of 9 | *"Candidacy assessment returned an unusable role index"* x10, all discarded |
+### 1.4 Generated documents have never run against real data
 
-**Dropping them is right** - an answer landing against the wrong posting would be wrong,
-self-consistent and undetectable afterwards, which is the same reason
-`KernelDocumentExtractor.Distribute` drops rather than clamps. The defect is that it is paid
-for and silent. The model call is made and billed, the answers are thrown away, and the only
-trace is a warning that reads like noise. `SweepSummary` reports how many were *written* and
-nothing compares that against how many were *asked for*, so a 55% loss looks exactly like a
-small night.
+`POST /api/v1/applications/{postingId}` writes a tailored CV and cover letter, renders them to
+PDF on demand, and **refuses to generate without an existing match** — the gap list is what the
+writer is told it must not claim. Until a profile existed there was nothing to run it against,
+so this path has never been exercised outside its unit tests.
 
-Worth doing in this order:
+It is now unblocked, it is the most demonstrable thing in the system for a portfolio repository,
+and one call would tell you whether it works. It is also the only consumer of the `writing`
+deployment, which is the one place a missing registration shows up as CVs quietly written by the
+cheap model — `AiRegistrationTests` asserts both resolve, but nothing has exercised it live.
 
-1. **Make the loss visible before changing anything.** The sweep should log requested against
-   written and warn when they diverge. This is the same class as the stalled backfill that
-   spent its calls on 429s and extracted almost nothing - swallowed by design, so the symptom
-   was a count nobody was comparing to anything.
-2. **Then find out why the indices are unusable.** Whole batches fail, not stray roles, so the
-   answer is structurally misaligned rather than one bad number - a different count, or
-   1-based indices, or the response truncated. Log one rejected payload and it will be obvious.
-3. **Consider whether packing earns its keep here.** It exists to amortise the profile text
-   across ten adverts. Against a 55% loss that trade is currently negative, and the batch API
-   already solved correlation on the extraction side by echoing a `custom_id` per request.
+Cheapest interesting thing available.
 
-Until this is fixed, a raised ceiling buys much less than it costs, so raise it again only
-after step 1.
+### 1.5 Extraction coverage
 
-### 4.3 Extraction coverage
-
-The previous handoff recorded a graded share of 0.490 and called this the highest-leverage work
-available. Measured directly this round, **92.6% of the corpus (3,775 of 4,078 postings) carries
-at least one model assertion** — so 0.490 is the share of *assertions* that are model-sourced,
-not the share of postings the model has read. The two are easy to confuse and they justify very
+92.6% of the corpus (3,775 of 4,078 postings) carries at least one model assertion. The 0.490
+figure an earlier revision called the graded share is the share of *assertions* that are
+model-sourced, not the share of postings read. The two are easy to confuse and justify very
 different work.
 
 What is left is thinner than it looked: 168 postings carry no concepts at all, and 303 have
 never been read by the model. The unresolved-mention log remains where the next vocabulary fix
-comes from — it is what surfaced `containers`, and `agile` came from reading the ranking rather
-than the log, which suggests the log is not the only place worth looking.
+comes from — it is what surfaced `containers`, though `agile` came from reading the ranking
+rather than the log, which suggests the log is not the only place worth looking.
 
 ---
 
-## 5. Environment notes
+## 2. What changed this round
 
-Carried forward; all still true.
+Four fixes, all deployed and verified against the live corpus. The `CurrentVersion` remarks on
+`EnrichedPosting` and `MatchResult` carry the same history where the code can see it.
+
+### 2.1 The concept floor asks what the demands are, not how many
+
+The open item the previous revision left as "thin but genuine evidence still scores 100",
+deliberately undone because two scoring rules had been changed on judgement alone and one was
+wrong. Measured before shipping, and the measurement changed the answer.
+
+**Both directions the previous revision suggested were measured and rejected.** Damping the
+score by `Coverage` punishes the employer's terseness rather than the thin evidence: it dropped
+a `.NET Developer` with twelve concepts read out of the top 60 for stating no salary, while
+keeping a Product Manager that answered every peripheral axis on one word. Damping by the number
+of demands, `n/(n+k)`, reproduces the withdrawn count rule exactly — it removes `Yardi
+Implementation Consultant` (100, one concept) and `Senior Software Engineer - C#` (100, two)
+together — and it ranks by how long an advert is, which is a fact about the recruiter.
+
+What separates them is **which concept carried the match**. Every wrongly-ranked thin match
+rested on `skill.agile` or an `area.*` board tag; every rightly-ranked one on a concrete
+technology. The vocabulary already records that as `tagOnly`, and every domain is `tagOnly`
+implicitly, so the floor now asks whether anything *discriminating* was demanded rather than
+whether anything was. `Concept.IsDiscriminating` is that flag plus domains, and `skill.agile`
+joined the flag.
+
+Measured: 117 of 3,908 scoring postings fall to zero and eight leave the top 60, every one
+correctly — two Transformation Managers and a Senior Product Manager on the single word agile, a
+Space Data Engineer at 100 on one board tag reading "Data Engineering". **No good match went
+with them**, against the withdrawn rule's ledger of one bad and four good.
+
+### 2.2 `deploy.yml` has a concurrency group
+
+Runs were concurrent and landed in whatever order the runners freed up; a stale queued run could
+deploy over a newer commit, which nearly happened during an Actions outage. The group serialises
+them and cancels the pending run when a newer one queues behind it. `cancel-in-progress` is
+false deliberately — a run already executing may be part way through a Bicep deployment or
+`dbadmin migrate`.
+
+### 2.3 The reprocess endpoint's bound can act, and is tested
+
+`POST /api/reprocess` returned 504 for `limit=50` and again for `limit=25`. The reasoning behind
+the original bound was right — the continuation token is only accurate at a page boundary — but
+**a page can cost more than the whole budget**: pages of five blobs took 4s, 11s, 12s, 47s and
+**151s** against a 150s budget.
+
+`BoundedWalk` now stops *between items* and hands back the token for the start of the page it
+was in, so the resume point is still a real boundary and nothing is skipped; the cost is redoing
+that page's finished items, which idempotency makes free. It will not stop before one page has
+completed, or the next call would stop in the same place forever.
+
+It is generic over the item and takes a clock, so **it needs no Azure types to test** — which is
+what unblocked a test open since the endpoint was written. The previous revision called it
+untestable because faking a `BlobContainerClient` is hard; the answer was that the bound was
+never about blobs. `tests/JobPlatform.Ingestion.Tests` is new and holds seven tests.
+
+Verified live afterwards: `limit=50`, the request that had failed twice, returned 200 in 161s,
+and a full re-enrichment ran 35 blobs in 4 calls with 0 failures.
+
+### 2.4 A rule list written in a spelling the tokeniser destroys
+
+`RoleFamilyClassifier` called `.NET Developer` `Unknown`. The rule **was** there: `.net`,
+`node.js` and `ui/ux` had been in the lists since the file was written, and `TitleTokenizer`
+splits on `.` and `/`, so by the time a rule saw the text those were already `net`, `node`+`js`
+and `ui`+`ux`. Three dead entries that read exactly like working ones.
+
+`TitleTokenizer.DottedNames` folds the three names whose spelling contains a separator. Measured
+over 2,709 distinct titles: 13 moved out of `Unknown`, all unambiguous .NET backend roles, and
+nothing moved between families or into `Unknown`.
+
+Two rejected attempts, both caught by diffing the whole corpus rather than the examples in hand:
+making `.` a word character fixed .NET and broke `Sr.Product Manager` and `React.js Developer`;
+folding without a leading space broke `C#.NET` and `VB.NET`.
+
+**Asserting the classifier alone would not have caught any of this** — a dead entry and a
+working one look identical from its output. The tests assert the tokenisation too.
+
+---
+
+## 3. How measurement is done here
+
+Worth repeating rather than reinventing. It is what caught the withdrawn count rule, and it
+changed the answer on both 2.1 and 2.4.
+
+Read the corpus **once** into a local JSON cache — the enriched columns and the concept
+assertions, which is exactly what `GetPostingFactsAsync` selects — then evaluate every candidate
+rule offline against that cache. Nothing is written to the database and no profile row is
+needed: `MatchScorer` is pure, so a `CandidateFacts` built in memory scores the whole corpus.
+
+Diff the **whole** top 60 before and after, not the examples you already have in mind. Every
+regression this round was found that way and none would have been found otherwise.
+
+Two access notes:
+
+- **The SQL firewall holds only `AllowAllWindowsAzureIps`.** Reading the database from a laptop
+  needs a temporary rule for the client IP, and deleting it immediately afterwards. The database
+  is `azureADOnlyAuthentication`, so the rule grants nobody access without a token for a database
+  user — but leaving it behind on a public portfolio project is exactly the thing to avoid.
+  Cache the corpus on the first read and close the hole rather than keeping it open.
+- **A token for the API avoids touching SQL at all**, which is how the vocabulary change was
+  verified through `/postings/facets`:
+
+```bash
+CLIENT=$(az containerapp show -n <app> -g <rg> \
+  --query "properties.template.containers[0].env[?name=='AzureAd__ClientId'].value | [0]" -o tsv)
+az account get-access-token --resource "api://$CLIENT" --query accessToken -o tsv
+```
+
+Verify a deploy landed before trusting a behaviour change:
+
+```bash
+az containerapp list --query "[0].properties.template.containers[0].image" -o tsv
+```
+
+---
+
+## 4. Environment notes
 
 - **`jq` is not installed.** `gh --jq` works (built in); a standalone `jq` in a pipe silently
   produces nothing. Use `python -c` for JSON in shell loops.
@@ -356,6 +283,12 @@ Carried forward; all still true.
   `MSYS_NO_PATHCONV=1`, or pass `--resource-group` and `--server` instead of `--ids`.
 - **Heredocs and Python don't mix well here.** Multi-line edit scripts break Bash heredoc
   quoting. Write the script to a file first.
+- **Editing a CRLF file from Python needs `newline=""` on both the read and the write.** Reading
+  with it and writing without it turns every line ending into `\r\r\n` — a whole-file rewrite
+  that looks like a small diff until you check the bytes.
+- **`az monitor app-insights query` ignores `ago()` in the query.** It applies its own window,
+  defaulting to the last hour, so a query for last night returns zero rows and looks like an
+  absence of telemetry rather than a wrong question. Pass `--offset 12h`.
 - **Blob listing needs a data-plane role.** Subscription Owner is not enough; that needs
   `Storage Blob Data Reader` or better. `GET /api/v1/runs` is a usable proxy for what is in the
   container — one row per ingested blob.

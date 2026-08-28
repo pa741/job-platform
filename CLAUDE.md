@@ -354,6 +354,20 @@ Each of these cost a red CI run; none of them fail locally.
   to check for. `IDocumentExtractor`, `ICandidacyAssessor` and `IApplicationWriter` are all
   registered inside that same `if`, so consumers resolve them as **nullable** and skip their
   step - never as required.
+- **Degrading silently is not the same as degrading invisibly, and this codebase has confused
+  the two.** The rule above is right: a provider failure must not take down endpoints with
+  nothing to do with AI. But every AI path here also swallows its failures without recording
+  them, and it has cost real work three times - a nightly sweep that discarded five of nine
+  batches while reporting success, a backfill that spent its calls on HTTP 429s and extracted
+  almost nothing, and `Distribute` dropping misaligned answers to be re-extracted later by
+  something nobody was watching. In every case the symptom was a count nobody was comparing to
+  anything.
+  **Every model call should leave a record, and a failed one should be visible to the user.**
+  What was asked for against what came back, which deployment served it, and on failure a
+  bounded reason plus the ids affected - never the prompt, which carries the candidate's
+  profile. It belongs in Cosmos with the other metrics, never in SQL, for the reasons in the
+  API section. App Insights is not a substitute: traces are sampled here and these failures
+  throw nothing, so the record is incomplete exactly when it matters. See `HANDOFF.md` 1.1.
 - **`AiPrompt` carries two settings that fail obscurely when wrong.**
   `SetNewMaxCompletionTokensEnabled` must be true or SK serialises `max_tokens`, which every
   GPT-5 series model rejects with a 400 on the first real call. And `Temperature` is left
