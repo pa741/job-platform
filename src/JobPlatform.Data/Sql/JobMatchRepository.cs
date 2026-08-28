@@ -257,15 +257,44 @@ public sealed class JobMatchRepository(JobsDbContext db)
     /// The description comes across here, unlike in the scoring query, because this is the point
     /// at which something actually has to read the advert.
     /// </remarks>
+    /// <param name="maximumScore">
+    /// Upper bound on the score, for drawing a sample from one band rather than off the top.
+    /// </param>
+    /// <remarks>
+    /// <b>A band changes the ordering as well as the filter, and it has to.</b> Without a band
+    /// this takes the highest-scoring unassessed pairs, which is right: the model budget should
+    /// go where the arithmetic is most hopeful. With one, taking the top of the band would
+    /// reproduce the same restriction one level down - ask for 80-89 and get forty 89s - so the
+    /// order falls back to posting id, which is scrape order and uncorrelated with score.
+    ///
+    /// This exists because every measurement made against this system's assessments so far
+    /// describes only the top decile: the 70 pairs judged were all selected by score, which is
+    /// the textbook shape of pooling bias. A band is what makes a stratified sample reachable,
+    /// and a stratified sample is what makes those numbers statements about the corpus.
+    /// </remarks>
     public async Task<IReadOnlyList<CandidacyRequest>> GetUnassessedAsync(
-        long profileId, int minimumScore, int limit, CancellationToken ct = default)
+        long profileId,
+        int minimumScore,
+        int limit,
+        int? maximumScore = null,
+        CancellationToken ct = default)
     {
-        var rows = await db.JobMatches
+        var query = db.JobMatches
             .AsNoTracking()
             .Where(m => m.ProfileId == profileId
                 && m.Score >= minimumScore
-                && (m.AssessedAtUtc == null || m.AssessmentVersion != CandidacyAssessment.CurrentVersion))
-            .OrderByDescending(m => m.Score)
+                && (m.AssessedAtUtc == null || m.AssessmentVersion != CandidacyAssessment.CurrentVersion));
+
+        if (maximumScore is { } ceiling)
+        {
+            query = query.Where(m => m.Score <= ceiling);
+        }
+
+        var ordered = maximumScore is null
+            ? query.OrderByDescending(m => m.Score)
+            : query.OrderBy(m => m.PostingId);
+
+        var rows = await ordered
             .Take(limit)
             .Select(m => new
             {

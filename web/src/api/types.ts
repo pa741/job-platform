@@ -652,6 +652,12 @@ export interface AiCallResponse {
   /** Paid for and thrown away. The number that used to be invisible. */
   discarded: number;
   durationMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  /** Of the output, how many the model spent thinking. Zero on a non-reasoning model. */
+  reasoningTokens: number;
+  /** Zero means the provider reported nothing, which is not the same as free. */
+  totalTokens: number;
   reason: string | null;
   affectedIds: number[];
 }
@@ -663,4 +669,6 @@ export interface AiCallTotalsResponse {
   requested: number;
   returned: number;
   discarded: number;
+  totalTokens: number;
+  reasoningTokens: number;
 }

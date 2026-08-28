@@ -41,7 +41,9 @@ public sealed class FakeAiCallSource : IAiCallSource
                     g.Count(),
                     g.Count(r => r.Outcome != AiCallOutcome.Succeeded),
                     g.Sum(r => r.Requested),
-                    g.Sum(r => r.Returned))),
+                    g.Sum(r => r.Returned),
+                    g.Sum(r => (long)r.TotalTokens),
+                    g.Sum(r => (long)r.ReasoningTokens))),
         ];
 
         return Task.FromResult(results);

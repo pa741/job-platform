@@ -150,7 +150,7 @@ public sealed class KernelCandidacyAssessor(
         CancellationToken ct)
     {
         var started = _time.GetTimestamp();
-        var (results, reason, prompt) = await RunOneBatchAsync(profileText, declared, batch, ct);
+        var (results, reason, prompt, usage) = await RunOneBatchAsync(profileText, declared, batch, ct);
 
         if (callLog is null)
         {
@@ -183,7 +183,8 @@ public sealed class KernelCandidacyAssessor(
                     [.. batch.Where((_, i) => results[i] is null).Select(r => r.PostingId)],
                     // Kept only for a call that lost something, and only where the deployment
                     // asked for it. The sink decides; this just offers.
-                    prompt),
+                    prompt,
+                    usage),
                 ct);
         }
         catch (Exception ex)
@@ -194,7 +195,8 @@ public sealed class KernelCandidacyAssessor(
         return results;
     }
 
-    private async Task<(CandidacyAssessment?[] Results, string? Reason, string? Prompt)> RunOneBatchAsync(
+    private async Task<(CandidacyAssessment?[] Results, string? Reason, string? Prompt, AiTokenUsage Usage)>
+        RunOneBatchAsync(
         string profileText,
         string declared,
         CandidacyRequest[] batch,
@@ -202,6 +204,7 @@ public sealed class KernelCandidacyAssessor(
     {
         var results = new CandidacyAssessment?[batch.Length];
         string? reason = null;
+        var usage = default(AiTokenUsage);
         var roles = new StringBuilder(8_000);
 
         for (var i = 0; i < batch.Length; i++)
@@ -246,20 +249,21 @@ public sealed class KernelCandidacyAssessor(
 
             var result = await kernel.InvokePromptAsync(PromptTemplate, arguments, cancellationToken: timeout.Token);
             response = result.ToString();
+            usage = AiUsage.From(result);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             logger?.LogWarning(
                 "Candidacy assessment of {Count} role(s) timed out after {Seconds}s.",
                 batch.Length, _options.TimeoutSeconds);
-            return (results, $"timed out after {_options.TimeoutSeconds}s", prompt);
+            return (results, $"timed out after {_options.TimeoutSeconds}s", prompt, usage);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // The deterministic score is already stored and is what the UI falls back to, so a
             // failure here degrades the shortlist rather than losing it.
             logger?.LogWarning(ex, "Candidacy assessment failed for {Count} role(s).", batch.Length);
-            return (results, $"{ex.GetType().Name}: {ex.Message}", prompt);
+            return (results, $"{ex.GetType().Name}: {ex.Message}", prompt, usage);
         }
 
         var json = AiJson.ExtractJsonObject(response);
@@ -267,7 +271,7 @@ public sealed class KernelCandidacyAssessor(
         if (json is null)
         {
             logger?.LogWarning("Candidacy assessment returned no JSON object.");
-            return (results, "response carried no JSON object", prompt);
+            return (results, "response carried no JSON object", prompt, usage);
         }
 
         try
@@ -280,7 +284,7 @@ public sealed class KernelCandidacyAssessor(
             reason = $"malformed JSON: {ex.Message}";
         }
 
-        return (results, reason, prompt);
+        return (results, reason, prompt, usage);
     }
 
     /// <summary>

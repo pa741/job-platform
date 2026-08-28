@@ -127,7 +127,7 @@ public sealed class KernelApplicationWriter(
         ArgumentNullException.ThrowIfNull(request);
 
         var started = _time.GetTimestamp();
-        var (draft, reason, prompt) = await WriteCoreAsync(request, ct);
+        var (draft, reason, prompt, usage) = await WriteCoreAsync(request, ct);
 
         if (callLog is not null)
         {
@@ -147,7 +147,8 @@ public sealed class KernelApplicationWriter(
                         // Offered, not decided. This is the prompt most worth guarding: it
                         // contains the candidate's whole profile, and the sink keeps it only
                         // for a failed call on a deployment that asked for prompts.
-                        prompt),
+                        prompt,
+                        usage),
                     ct);
             }
             catch (Exception ex)
@@ -159,7 +160,8 @@ public sealed class KernelApplicationWriter(
         return draft;
     }
 
-    private async Task<(ApplicationDraft? Draft, string? Reason, string? Prompt)> WriteCoreAsync(
+    private async Task<(ApplicationDraft? Draft, string? Reason, string? Prompt, AiTokenUsage Usage)>
+        WriteCoreAsync(
         ApplicationRequest request, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -187,6 +189,7 @@ public sealed class KernelApplicationWriter(
                 $"{{{{${pair.Key}}}}}", pair.Value?.ToString() ?? string.Empty, StringComparison.Ordinal));
 
         string response;
+        var usage = default(AiTokenUsage);
 
         try
         {
@@ -195,17 +198,18 @@ public sealed class KernelApplicationWriter(
 
             var result = await kernel.InvokePromptAsync(PromptTemplate, arguments, cancellationToken: timeout.Token);
             response = result.ToString();
+            usage = AiUsage.From(result);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             logger?.LogWarning(
                 "Application writing timed out after {Seconds}s.", _options.WritingTimeoutSeconds);
-            return (null, $"timed out after {_options.WritingTimeoutSeconds}s", prompt);
+            return (null, $"timed out after {_options.WritingTimeoutSeconds}s", prompt, usage);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger?.LogWarning(ex, "Application writing failed.");
-            return (null, $"{ex.GetType().Name}: {ex.Message}", prompt);
+            return (null, $"{ex.GetType().Name}: {ex.Message}", prompt, usage);
         }
 
         var json = AiJson.ExtractJsonObject(response);
@@ -213,7 +217,7 @@ public sealed class KernelApplicationWriter(
         if (json is null)
         {
             logger?.LogWarning("Application writing returned no JSON object.");
-            return (null, "response carried no JSON object", prompt);
+            return (null, "response carried no JSON object", prompt, usage);
         }
 
         try
@@ -230,7 +234,7 @@ public sealed class KernelApplicationWriter(
             if (string.IsNullOrWhiteSpace(cv) || string.IsNullOrWhiteSpace(letter))
             {
                 logger?.LogWarning("Application writing returned an incomplete draft.");
-                return (null, "draft was missing a CV or a cover letter", prompt);
+                return (null, "draft was missing a CV or a cover letter", prompt, usage);
             }
 
             return (
@@ -242,12 +246,13 @@ public sealed class KernelApplicationWriter(
                     Model = _options.WritingDeployment,
                 },
                 null,
-                prompt);
+                prompt,
+                usage);
         }
         catch (JsonException ex)
         {
             logger?.LogWarning(ex, "Application writing returned malformed JSON.");
-            return (null, $"malformed JSON: {ex.Message}", prompt);
+            return (null, $"malformed JSON: {ex.Message}", prompt, usage);
         }
     }
 

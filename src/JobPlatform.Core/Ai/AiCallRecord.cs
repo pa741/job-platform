@@ -105,6 +105,39 @@ public sealed record AiCallRecord
     public long DurationMs { get; init; }
 
     /// <summary>
+    /// What the call actually cost, in tokens.
+    /// </summary>
+    /// <remarks>
+    /// Recorded because duration is not cost. A batch of ten adverts and a batch of one differ
+    /// by an order of magnitude in tokens and barely at all in wall clock, so a ledger with only
+    /// a duration cannot answer "what did that night cost" - which is the question anybody asking
+    /// about a raised assessment ceiling actually has.
+    ///
+    /// Zero where the provider did not report usage. Absent and free are different things, and
+    /// nothing here should be read as the latter.
+    /// </remarks>
+    [JsonPropertyName("inputTokens")]
+    public int InputTokens { get; init; }
+
+    [JsonPropertyName("outputTokens")]
+    public int OutputTokens { get; init; }
+
+    /// <summary>
+    /// Of <see cref="OutputTokens"/>, how many the model spent thinking.
+    /// </summary>
+    /// <remarks>
+    /// Split out because <c>ReasoningEffort</c> is a deliberate cost lever here - low for
+    /// extraction, medium for assessment, and never none - and this is the only number that
+    /// shows what raising it buys or costs. On a reasoning model it is routinely the majority of
+    /// the output.
+    /// </remarks>
+    [JsonPropertyName("reasoningTokens")]
+    public int ReasoningTokens { get; init; }
+
+    [JsonPropertyName("totalTokens")]
+    public int TotalTokens { get; init; }
+
+    /// <summary>
     /// Why, in a few words, when something went wrong. Never a payload.
     /// </summary>
     /// <remarks>
@@ -164,7 +197,8 @@ public sealed record AiCallRecord
         long durationMs,
         string? reason = null,
         IReadOnlyList<long>? affectedIds = null,
-        string? prompt = null)
+        string? prompt = null,
+        AiTokenUsage usage = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(operation);
 
@@ -190,12 +224,31 @@ public sealed record AiCallRecord
                 ? reason
                 : reason[..MaxReasonChars],
             AffectedIds = ids,
+            InputTokens = usage.InputTokens,
+            OutputTokens = usage.OutputTokens,
+            ReasoningTokens = usage.ReasoningTokens,
+            TotalTokens = usage.TotalTokens > 0
+                ? usage.TotalTokens
+                : usage.InputTokens + usage.OutputTokens,
             Prompt = prompt is null || prompt.Length <= MaxPromptChars
                 ? prompt
                 : prompt[..MaxPromptChars],
         };
     }
 }
+
+/// <summary>
+/// What one call cost, as the provider reported it.
+/// </summary>
+/// <remarks>
+/// A struct with a meaningful default, so a call site that cannot get usage passes nothing
+/// rather than inventing zeros that read as a measurement.
+/// </remarks>
+public readonly record struct AiTokenUsage(
+    int InputTokens = 0,
+    int OutputTokens = 0,
+    int ReasoningTokens = 0,
+    int TotalTokens = 0);
 
 /// <summary>
 /// Where a model call reports what happened to it.
@@ -218,8 +271,16 @@ public interface IAiCallLog
 /// <param name="FailedCalls">Calls that lost something, whole or in part.</param>
 /// <param name="Requested">Items sent, which is what was paid for.</param>
 /// <param name="Returned">Items that came back usable.</param>
+/// <param name="TotalTokens">What the window cost.</param>
+/// <param name="ReasoningTokens">How much of it the model spent thinking.</param>
 public sealed record AiCallTotals(
-    string Operation, int Calls, int FailedCalls, int Requested, int Returned)
+    string Operation,
+    int Calls,
+    int FailedCalls,
+    int Requested,
+    int Returned,
+    long TotalTokens = 0,
+    long ReasoningTokens = 0)
 {
     public int Discarded => Math.Max(0, Requested - Returned);
 }

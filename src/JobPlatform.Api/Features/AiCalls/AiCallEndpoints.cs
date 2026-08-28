@@ -135,6 +135,8 @@ public sealed class AiCallEndpoints : IEndpointGroup
                 Requested = t.Requested,
                 Returned = t.Returned,
                 Discarded = t.Discarded,
+                TotalTokens = t.TotalTokens,
+                ReasoningTokens = t.ReasoningTokens,
             }).ToList(),
         });
     }
@@ -150,6 +152,10 @@ public sealed class AiCallEndpoints : IEndpointGroup
             Returned = record.Returned,
             Discarded = record.Discarded,
             DurationMs = record.DurationMs,
+            InputTokens = record.InputTokens,
+            OutputTokens = record.OutputTokens,
+            ReasoningTokens = record.ReasoningTokens,
+            TotalTokens = record.TotalTokens,
             Reason = record.Reason,
             AffectedIds = record.AffectedIds,
         };
@@ -180,6 +186,16 @@ public sealed record AiCallResponse
     public int Discarded { get; init; }
 
     public long DurationMs { get; init; }
+
+    public int InputTokens { get; init; }
+
+    public int OutputTokens { get; init; }
+
+    /// <summary>Of the output, how many the model spent thinking. Zero on a non-reasoning model.</summary>
+    public int ReasoningTokens { get; init; }
+
+    /// <summary>What the call cost. Zero means not reported, which is not the same as free.</summary>
+    public int TotalTokens { get; init; }
 
     /// <summary>Why, in a few words. Never a prompt or a response body.</summary>
     public string? Reason { get; init; }
@@ -228,4 +244,10 @@ public sealed record AiCallTotalsResponse
     public int Returned { get; init; }
 
     public int Discarded { get; init; }
+
+    /// <summary>What this pass cost over the window.</summary>
+    public long TotalTokens { get; init; }
+
+    /// <summary>How much of it went on reasoning - the lever ReasoningEffort moves.</summary>
+    public long ReasoningTokens { get; init; }
 }

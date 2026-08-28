@@ -225,6 +225,44 @@ public sealed class CandidacyAssessorTests
         Assert.NotNull(results[0]);
     }
 
+    [Fact]
+    public async Task A_record_carries_what_the_call_cost()
+    {
+        // Duration is not cost. A batch of ten adverts and a batch of one differ by an order
+        // of magnitude in tokens and barely at all in wall clock, so a ledger with only a
+        // duration cannot answer the question anybody asking about a raised ceiling has.
+        //
+        // The stub returns no usage metadata, so this pins the honest zero rather than an
+        // invented number: absent and free are different things.
+        var log = new RecordingAiCallLog();
+        var assessor = Assessor(log, Body(Entry("0")));
+
+        await assessor.AssessAsync(Profile(), [Request(1, "A")]);
+
+        var record = Assert.Single(log.Records);
+        Assert.Equal(0, record.TotalTokens);
+        Assert.Equal(0, record.ReasoningTokens);
+    }
+
+    [Fact]
+    public void Total_tokens_falls_back_to_the_sum_when_the_provider_omits_it()
+    {
+        // Providers do not all report a total. Deriving it beats storing a zero that reads as
+        // a measurement.
+        var record = AiCallRecord.Create(
+            DateTimeOffset.UtcNow,
+            "candidacy-assessment",
+            "bulk",
+            AiCallOutcome.Succeeded,
+            requested: 1,
+            returned: 1,
+            durationMs: 10,
+            usage: new AiTokenUsage(InputTokens: 900, OutputTokens: 120, ReasoningTokens: 80));
+
+        Assert.Equal(1_020, record.TotalTokens);
+        Assert.Equal(80, record.ReasoningTokens);
+    }
+
     private sealed class RecordingAiCallLog : IAiCallLog
     {
         public List<AiCallRecord> Records { get; } = [];

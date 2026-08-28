@@ -96,7 +96,7 @@ public sealed class MatchSweepFunction(
         // have drained, and before anybody in the UK opens the dashboard.
         [TimerTrigger("0 30 3 * * *")] TimerInfo timer,
         CancellationToken ct)
-        => await SweepAsync(profileId: null, MaxAssessments, ct);
+        => await SweepAsync(profileId: null, MaxAssessments, AssessmentThreshold, maxScore: null, ct);
 
     /// <summary>
     /// The same sweep, on demand.
@@ -118,15 +118,37 @@ public sealed class MatchSweepFunction(
         CancellationToken ct)
     {
         var body = await RequestBody.ReadAsync<SweepRequest>(request, ct);
-        var summary = await SweepAsync(body?.ProfileId, MaxAssessmentsPerRequest, ct);
+
+        var summary = await SweepAsync(
+            body?.ProfileId,
+            MaxAssessmentsPerRequest,
+            Math.Max(body?.MinScore ?? AssessmentThreshold, 0),
+            body?.MaxScore,
+            ct);
 
         return new OkObjectResult(summary);
     }
 
     /// <param name="ProfileId">Restrict to one profile. Null sweeps every profile.</param>
-    public sealed record SweepRequest(long? ProfileId);
+    /// <param name="MinScore">
+    /// Floor on which pairs the model may be spent on. Defaults to the standing threshold.
+    /// </param>
+    /// <param name="MaxScore">
+    /// Ceiling, for drawing a sample from one score band instead of off the top.
+    /// </param>
+    /// <remarks>
+    /// The band exists to fix a measurement problem rather than a matching one. Every assessment
+    /// so far was selected by score, so every correlation computed from them describes only the
+    /// top decile - pooling bias, and no amount of extra top-down assessing cures it. Sweeping a
+    /// band at a time is how a stratified sample gets built, and a stratified sample is what makes
+    /// those numbers statements about the corpus.
+    ///
+    /// Scoring is unaffected: the band bounds only which pairs the model is spent on.
+    /// </remarks>
+    public sealed record SweepRequest(long? ProfileId, int? MinScore = null, int? MaxScore = null);
 
-    private async Task<SweepSummary> SweepAsync(long? profileId, int assessmentLimit, CancellationToken ct)
+    private async Task<SweepSummary> SweepAsync(
+        long? profileId, int assessmentLimit, int minScore, int? maxScore, CancellationToken ct)
     {
         var now = time.GetUtcNow();
         var since = now.AddDays(-LookbackDays);
@@ -156,7 +178,7 @@ public sealed class MatchSweepFunction(
         foreach (var id in profileIds)
         {
             scored += await ScoreAsync(id, postings, now, ct);
-            assessed += await AssessAsync(id, assessmentLimit, ct);
+            assessed += await AssessAsync(id, assessmentLimit, minScore, maxScore, ct);
         }
 
         // Requested is reported beside written, always, because the two diverging is the whole
@@ -250,7 +272,8 @@ public sealed class MatchSweepFunction(
     /// <summary>How many discarded posting ids to name in the warning before truncating.</summary>
     private const int DiscardedPostingsLogged = 20;
 
-    private async Task<AssessmentTally> AssessAsync(long profileId, int assessmentLimit, CancellationToken ct)
+    private async Task<AssessmentTally> AssessAsync(
+        long profileId, int assessmentLimit, int minScore, int? maxScore, CancellationToken ct)
     {
         if (assessor is null)
         {
@@ -261,7 +284,7 @@ public sealed class MatchSweepFunction(
         // over stays unassessed and is picked up next time - the shortlist query selects on
         // exactly that, so a partial pass resumes rather than restarting.
         var shortlist = await matches.GetUnassessedAsync(
-            profileId, AssessmentThreshold, assessmentLimit, ct);
+            profileId, minScore, assessmentLimit, maxScore, ct);
 
         if (shortlist.Count == 0)
         {

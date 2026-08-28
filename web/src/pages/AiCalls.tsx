@@ -81,6 +81,15 @@ function Totals({ api }: { api: JobPlatformApi }) {
                 ? `${Math.round((t.discarded / t.requested) * 100)}% of what was paid for`
                 : undefined}
             />
+            {/* Duration is not cost. A batch of ten adverts and a batch of one differ by an
+                order of magnitude in tokens and barely at all in wall clock. */}
+            <StatTile
+              label="Tokens"
+              value={t.totalTokens.toLocaleString()}
+              hint={t.reasoningTokens > 0
+                ? `${Math.round((t.reasoningTokens / t.totalTokens) * 100)}% spent reasoning`
+                : 'none reported as reasoning'}
+            />
           </div>
         </section>
       ))}
@@ -144,6 +153,7 @@ function Failures({ api }: { api: JobPlatformApi }) {
                 <th scope="col">Outcome</th>
                 <th scope="col">Usable</th>
                 <th scope="col">Took</th>
+                <th scope="col">Tokens</th>
                 <th scope="col">Why, and what it lost</th>
               </tr>
             </thead>
@@ -157,6 +167,12 @@ function Failures({ api }: { api: JobPlatformApi }) {
                   {/* Paired, never alone. This column is the whole point of the page. */}
                   <td>{call.returned} of {call.requested}</td>
                   <td>{(call.durationMs / 1000).toFixed(1)}s</td>
+                  <td>
+                    {call.totalTokens > 0 ? call.totalTokens.toLocaleString() : '—'}
+                    {call.reasoningTokens > 0 && (
+                      <div className="muted">{call.reasoningTokens.toLocaleString()} reasoning</div>
+                    )}
+                  </td>
                   <td>
                     {call.reason ?? '—'}
                     {call.affectedIds.length > 0 && (
