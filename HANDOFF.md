@@ -202,6 +202,78 @@ Two things to be careful of:
 
 Take a top-60 snapshot before and diff it after, the way §3 describes.
 
+#### The plan
+
+**The decision is what to do with the 98% of rows that have no verdict.** Any rule that only
+moves assessed rows makes "not yet judged" an advantage, which is the same shape as the
+silence problems the scorer already had. Two candidates survive; two are ruled out below.
+
+**R1 — the best available estimate.** `rank = AssessmentScore ?? Score`. Both numbers answer
+the same question on the same 0-100 scale - how good is this match - and one of them is
+better informed, so it replaces the estimate once it exists. No new arithmetic, nothing
+invented.
+
+**R2 — buckets, then the number.** Strong, then Possible, then unassessed, then Weak. Puts
+the 14 Strong rows on top today and sinks every Weak. It asserts more: that a Possible at 60
+belongs above an unjudged 96, which is a claim about judgement beating estimate that the data
+may not support.
+
+The two differ mainly in how much they depend on coverage, and that is the thing to weigh:
+**R1 changes almost nothing at 50 of 2,495 assessed** - the top would stay nearly all
+unassessed - while R2 works at any coverage precisely because it asserts more.
+
+**Ruled out, with reasons rather than preferences:**
+
+- **The model may only demote** (`min(Score, AssessmentScore)`). It would suppress the exact
+  case `CLAUDE.md` calls the informative one: *"a 58 the model calls strong is precisely the
+  posting worth surfacing"*. Rejected on the documented design, not on taste.
+- **A weighted blend** (`w·Score + (1-w)·AssessmentScore`). Inventing a weight is the shape of
+  the coverage damping that was measured and rejected in 2.1. If a blend ever looks necessary,
+  it needs a reason that is not "it looked about right".
+
+**How to measure it, before writing any of it.** Everything needed is already on
+`GET /api/v1/matches` - score, verdict, assessmentScore, title, company - so this needs no SQL
+and no firewall rule. Page all rows, compute each ordering offline, and diff the **whole**
+top-30 with titles. Not the six rows in the table above: every regression this repository has
+caught came from diffing the whole list, and none would have been found from the examples
+already in hand.
+
+Do it after a night with the 1.2 fix in place. At 40 usable assessments a night instead of
+~18, the assessed set roughly doubles, and R1 is only judgeable once there is enough of it.
+
+**How to implement it, once chosen.** Both candidates are a pure function of columns already
+stored, so neither needs new data - only somewhere indexable to put it. A **persisted computed
+column** is the right home:
+
+```sql
+RankScore AS ISNULL(AssessmentScore, Score) PERSISTED
+```
+
+with an index on `(ProfileId, RankScore)`. EF expresses this through
+`HasComputedColumnSql(..., stored: true)`. **This is what answers the objection that sank a
+stored `Coverage` column** - *"a second copy that could drift"* - because SQL maintains it and
+drifting is not a state it can reach. R2 is expressible the same way with a `CASE` over the
+verdict.
+
+**What must not change:**
+
+- **Keep the `(ProfileId, Score)` index.** `minScore` filters on the arithmetic and the sweep
+  still selects on it. Adding a rank index is not replacing that one.
+- **`GetUnassessedAsync` needs no change.** It selects only unassessed rows, and for those the
+  rank *is* the score under either candidate - so the model budget still goes to the
+  highest-scoring unjudged pair, which is what makes the list converge as coverage grows.
+- **`Verdict = Unknown` is not the same as unassessed.** Unknown means the model answered and
+  said nothing usable; unassessed means it has not run. A rule keyed on `AssessedAtUtc` and one
+  keyed on `Verdict` disagree on exactly those rows.
+- **The list already shows both numbers and calls neither the answer.** That stays. What needs
+  saying in the UI is what the list is *ordered* by, which is currently implicit and would
+  become a lie.
+
+**One thing the data may force.** Weak verdicts in the current 50 carry assessment scores from
+5 to 60, so under R1 a Weak at 60 outranks a Possible at 50 - the label and the number
+disagree. If that shows up in the diff, the fix is to rank on the verdict first and the number
+within it, which is R2 arriving by evidence rather than by assertion.
+
 ### 1.4 Generated documents have never run against real data
 
 `POST /api/v1/applications/{postingId}` writes a tailored CV and cover letter, renders them to
