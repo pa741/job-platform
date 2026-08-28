@@ -463,9 +463,38 @@ missing-not-at-random problem in recommender evaluation (Schnabel et al., ICML 2
 number here therefore describes ranking **only within the top decile of deterministic score**.
 That is a coverage problem, not a variance problem: no interval widens to cover it.
 
-The fix costs nothing extra. **Spend the next night's 40 assessments on a stratified sample
-across the score range instead of the top 40.** Same budget, and it is the only way any of
-these correlations become statements about the corpus rather than about its top decile.
+The fix costs nothing extra. **Spend the assessment budget on a stratified sample across the
+score range instead of the top 40.** Same budget, and it is the only way any of these
+correlations become statements about the corpus rather than about its top decile.
+
+**Done - `SweepRequest` now takes `MinScore` and `MaxScore`.** Triggering more sweeps used to
+just walk further down the same ranked list; a band makes a stratified sample reachable. The
+timer is unchanged.
+
+A band changes the *ordering* as well as the filter, and it has to. Without one the shortlist
+takes the highest-scoring unassessed pairs, which is right - the budget should go where the
+arithmetic is most hopeful. With one, taking the top of the band would reproduce the same
+restriction a level down (ask for 80-89, get forty 89s), so the order falls back to posting id,
+which is scrape order and uncorrelated with score.
+
+**The first ten band assessments already changed the picture:**
+
+| sample | n | score SD | Spearman vs the model |
+| --- | --- | --- | --- |
+| top band only | 70 | 2.98 | -0.198 |
+| with 60-69 added | 80 | 10.93 | **-0.014**, CI [-0.25, +0.22] |
+
+Widening the range 3.7x moved the correlation to essentially zero, as the range-restriction
+argument predicted. **The verdict split is the real evidence though:** 90-100 holds 18 Strong,
+30 Possible, 22 Weak; 60-69 holds **zero Strong**, 4 Possible, 6 Weak.
+
+So the deterministic score is not anti-correlated with quality - **every Strong match lives in
+its top band.** It is doing its job as a first-stage filter, which is what the raw -0.198
+obscured and what a hundred more top-decile labels would never have shown. Ten labels in an
+unsampled band did.
+
+**And an assessment costs 716 tokens, measured** - so a 150-label stratified sample is about
+110k tokens. The sizing question is not a cost question.
 
 #### Mean-centring: tested, and the mechanism worked without the ranking improving
 
@@ -502,6 +531,10 @@ effect of this size could hide in it.
 
 #### Other findings worth not rediscovering
 
+- **The ledger records tokens now**, split so reasoning is visible on its own. Duration is not
+  cost: a batch of ten adverts and a batch of one differ by an order of magnitude in tokens and
+  barely at all in wall clock. First reading: 20 assessments cost 14,314 tokens, 11% of it
+  reasoning. Zero means not reported, which is not the same as free.
 - **`RoleFamily` is already computed, stored, indexed - and unread by the scorer.** Measured
   earlier and rejected because `Unknown` is 38% of the corpus and holds the residue and the
   best matches alike. The research adds the part that resolves it: `Unknown` conflates "no
