@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using JobPlatform.Core.Ai;
 using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Matching;
 using JobPlatform.Core.Profiles;
@@ -33,8 +34,14 @@ namespace JobPlatform.Ai.Matching;
 public sealed class KernelCandidacyAssessor(
     Kernel kernel,
     IOptions<AzureOpenAiOptions> options,
-    ILogger<KernelCandidacyAssessor>? logger = null) : ICandidacyAssessor
+    ILogger<KernelCandidacyAssessor>? logger = null,
+    IAiCallLog? callLog = null,
+    TimeProvider? time = null) : ICandidacyAssessor
 {
+    /// <summary>Names this pass in the AI call ledger.</summary>
+    public const string LedgerOperation = "candidacy-assessment";
+
+    private readonly TimeProvider _time = time ?? TimeProvider.System;
     private readonly AzureOpenAiOptions _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
 
     /// <summary>How much of an advert to send. Requirements are front-loaded; boilerplate is not.</summary>
@@ -127,13 +134,71 @@ public sealed class KernelCandidacyAssessor(
         return results;
     }
 
+    /// <summary>
+    /// One batch, timed and recorded to the ledger whatever happens to it.
+    /// </summary>
+    /// <remarks>
+    /// The recording wraps the call rather than sitting inside it because every exit has to be
+    /// accounted for - a throw, a timeout, an unparseable body and a partially usable answer are
+    /// all things somebody needs to be able to see, and it was the last of those that went
+    /// unnoticed for a night.
+    /// </remarks>
     private async Task<CandidacyAssessment?[]> AssessOneBatchAsync(
         string profileText,
         string declared,
         CandidacyRequest[] batch,
         CancellationToken ct)
     {
+        var started = _time.GetTimestamp();
+        var (results, reason) = await RunOneBatchAsync(profileText, declared, batch, ct);
+
+        if (callLog is null)
+        {
+            return results;
+        }
+
+        var returned = results.Count(r => r is not null);
+
+        var outcome = returned == batch.Length
+            ? AiCallOutcome.Succeeded
+            : returned == 0 ? AiCallOutcome.Failed : AiCallOutcome.PartiallyDiscarded;
+
+        // Guarded even though IAiCallLog says implementations must not throw. A comment saying
+        // "must not" is the kind of guarantee this session spent a day disproving, and the cost
+        // of being wrong here is losing the assessment the call just paid for.
+        try
+        {
+            await callLog.RecordAsync(
+                AiCallRecord.Create(
+                    _time.GetUtcNow(),
+                    LedgerOperation,
+                    _options.BulkDeployment,
+                    outcome,
+                    batch.Length,
+                    returned,
+                    (long)_time.GetElapsedTime(started).TotalMilliseconds,
+                    reason,
+                    // The postings that went unassessed, which is what a reader needs in order
+                    // to know what was lost rather than merely that something was.
+                    [.. batch.Where((_, i) => results[i] is null).Select(r => r.PostingId)]),
+                ct);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Could not record the candidacy assessment to the AI ledger.");
+        }
+
+        return results;
+    }
+
+    private async Task<(CandidacyAssessment?[] Results, string? Reason)> RunOneBatchAsync(
+        string profileText,
+        string declared,
+        CandidacyRequest[] batch,
+        CancellationToken ct)
+    {
         var results = new CandidacyAssessment?[batch.Length];
+        string? reason = null;
         var roles = new StringBuilder(8_000);
 
         for (var i = 0; i < batch.Length; i++)
@@ -176,14 +241,14 @@ public sealed class KernelCandidacyAssessor(
             logger?.LogWarning(
                 "Candidacy assessment of {Count} role(s) timed out after {Seconds}s.",
                 batch.Length, _options.TimeoutSeconds);
-            return results;
+            return (results, $"timed out after {_options.TimeoutSeconds}s");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // The deterministic score is already stored and is what the UI falls back to, so a
             // failure here degrades the shortlist rather than losing it.
             logger?.LogWarning(ex, "Candidacy assessment failed for {Count} role(s).", batch.Length);
-            return results;
+            return (results, $"{ex.GetType().Name}: {ex.Message}");
         }
 
         var json = AiJson.ExtractJsonObject(response);
@@ -191,19 +256,20 @@ public sealed class KernelCandidacyAssessor(
         if (json is null)
         {
             logger?.LogWarning("Candidacy assessment returned no JSON object.");
-            return results;
+            return (results, "response carried no JSON object");
         }
 
         try
         {
-            Distribute(json, batch, results);
+            reason = Distribute(json, batch, results);
         }
         catch (JsonException ex)
         {
             logger?.LogWarning(ex, "Candidacy assessment returned malformed JSON.");
+            reason = $"malformed JSON: {ex.Message}";
         }
 
-        return results;
+        return (results, reason);
     }
 
     /// <summary>
@@ -215,7 +281,7 @@ public sealed class KernelCandidacyAssessor(
     /// downstream that can catch it. Anything ambiguous is dropped and re-assessed on the next
     /// sweep.
     /// </remarks>
-    private void Distribute(string json, CandidacyRequest[] batch, CandidacyAssessment?[] results)
+    private string? Distribute(string json, CandidacyRequest[] batch, CandidacyAssessment?[] results)
     {
         using var document = JsonDocument.Parse(json);
 
@@ -223,10 +289,11 @@ public sealed class KernelCandidacyAssessor(
             || array.ValueKind != JsonValueKind.Array)
         {
             logger?.LogWarning("Candidacy assessment carried no assessments array.");
-            return;
+            return "response carried no assessments array";
         }
 
         var seen = new HashSet<int>();
+        var rejected = new List<string>();
 
         foreach (var item in array.EnumerateArray())
         {
@@ -235,11 +302,15 @@ public sealed class KernelCandidacyAssessor(
                 // Says which of the three it was. "Unusable" on its own cost a night's
                 // diagnosis: a wrong type, an out-of-range number and a repeat are different
                 // faults with different fixes, and the log could not tell them apart.
+                var described = DescribeIndex(item);
+
                 logger?.LogWarning(
                     "Candidacy assessment returned an unusable role index: {Index} against a "
                     + "batch of {BatchSize}.",
-                    DescribeIndex(item),
+                    described,
                     batch.Length);
+
+                rejected.Add(described);
                 continue;
             }
 
@@ -257,6 +328,13 @@ public sealed class KernelCandidacyAssessor(
                 PayloadJson = item.GetRawText(),
             };
         }
+
+        // Summarised rather than listed one per line: the ledger wants "why", and six identical
+        // rejections are one fault, not six.
+        return rejected.Count == 0
+            ? null
+            : $"{rejected.Count} of {batch.Length} role indices unusable: "
+                + string.Join(", ", rejected.Distinct().Take(5));
     }
 
     /// <summary>

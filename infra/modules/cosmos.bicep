@@ -119,6 +119,62 @@ resource metricsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
   }
 }
 
+// The AI call ledger: one document per model call, so a failure is something somebody can
+// see rather than something a count silently absorbs. Separate from `metrics` because that
+// container is partitioned by search term and a model call has no search term.
+//
+// Partitioned by UTC day. Every question worth asking of this data is "what happened
+// recently", which a day partition answers by reading one partition, and it bounds partition
+// growth without anybody having to think about it.
+//
+// The database's throughput is shared, so this container adds no cost against the free-tier
+// 1000 RU/s ceiling - which is load-bearing, not incidental.
+resource aiCallsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  parent: database
+  name: 'aiCalls'
+  properties: {
+    resource: {
+      id: 'aiCalls'
+      partitionKey: {
+        paths: [
+          '/day'
+        ]
+        kind: 'Hash'
+      }
+      // Operational records, not a system of record. Ninety days is long enough to see a
+      // pattern and short enough that the container never becomes a storage question.
+      defaultTtl: 7776000
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          {
+            path: '/type/?'
+          }
+          {
+            path: '/day/?'
+          }
+          {
+            path: '/occurredAtUtc/?'
+          }
+          {
+            path: '/outcome/?'
+          }
+          {
+            path: '/operation/?'
+          }
+        ]
+        excludedPaths: [
+          // Nothing queries inside the ids or the reason text; indexing them only costs RUs.
+          {
+            path: '/*'
+          }
+        ]
+      }
+    }
+  }
+}
+
 // Checkpoint store for the change-feed processor the realtime piece will need.
 // Provisioned now so adding that function is a code change, not an infrastructure one.
 resource leasesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {

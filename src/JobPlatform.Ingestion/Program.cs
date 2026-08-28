@@ -1,6 +1,7 @@
 using Azure.Identity;
 using Azure.Storage.Blobs;
 using Azure.Storage.Queues;
+using JobPlatform.Core.Ai;
 using JobPlatform.Core.Metrics;
 using JobPlatform.Core.Parsing;
 using JobPlatform.Data.Cosmos;
@@ -165,6 +166,13 @@ builder.Services.AddSingleton<JobCsvParser>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<MetricsCalculator>();
 builder.Services.AddScoped<MetricsRepository>();
+
+// The AI call ledger. Registered here rather than inside AddAiProvider, because it is the
+// consumers of AI that report to it and they resolve it as nullable: a deployment with no
+// provider registers no assessor and simply never calls this, while one with a provider and no
+// Cosmos still makes its model calls. Diagnostics that can take down what they observe are
+// worse than none.
+builder.Services.AddScoped<IAiCallLog, AiCallLogRepository>();
 builder.Services.AddScoped<JobPostingRepository>();
 builder.Services.AddScoped<IngestionPipeline>();
 

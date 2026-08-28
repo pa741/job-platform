@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using JobPlatform.Ai;
+using JobPlatform.Core.Ai;
 using JobPlatform.Ai.Matching;
 using JobPlatform.Core.Matching;
 using JobPlatform.Core.Profiles;
@@ -26,6 +27,9 @@ namespace JobPlatform.Api.Tests;
 public sealed class CandidacyAssessorTests
 {
     private static KernelCandidacyAssessor Assessor(params string[] responses)
+        => Assessor(callLog: null, responses);
+
+    private static KernelCandidacyAssessor Assessor(IAiCallLog? callLog, params string[] responses)
     {
         var builder = Kernel.CreateBuilder();
 
@@ -34,7 +38,9 @@ public sealed class CandidacyAssessorTests
 
         return new KernelCandidacyAssessor(
             builder.Build(),
-            Options.Create(new AzureOpenAiOptions { BulkDeployment = "bulk", BatchSize = 2 }));
+            Options.Create(new AzureOpenAiOptions { BulkDeployment = "bulk", BatchSize = 2 }),
+            logger: null,
+            callLog);
     }
 
     private static CandidateProfile Profile()
@@ -152,6 +158,88 @@ public sealed class CandidacyAssessorTests
         Assert.Null(results[3]);
         Assert.NotNull(results[4]);
         Assert.NotNull(results[5]);
+    }
+
+    [Fact]
+    public async Task Every_call_is_recorded_whether_it_worked_or_not()
+    {
+        // The ledger exists because a discarded batch threw nothing and showed up only as a
+        // count nobody was comparing to anything. Requested against returned is the whole point:
+        // a written count on its own cannot show a loss.
+        var log = new RecordingAiCallLog();
+        var assessor = Assessor(log, Body(Entry("0"), Entry("1")), "not json at all");
+
+        await assessor.AssessAsync(
+            Profile(),
+            [Request(1, "A"), Request(2, "B"), Request(3, "C"), Request(4, "D")]);
+
+        Assert.Equal(2, log.Records.Count);
+
+        var ok = log.Records[0];
+        Assert.Equal(AiCallOutcome.Succeeded, ok.Outcome);
+        Assert.Equal(2, ok.Requested);
+        Assert.Equal(0, ok.Discarded);
+        Assert.Empty(ok.AffectedIds);
+
+        var lost = log.Records[1];
+        Assert.Equal(AiCallOutcome.Failed, lost.Outcome);
+        Assert.Equal(2, lost.Requested);
+        Assert.Equal(2, lost.Discarded);
+        Assert.NotNull(lost.Reason);
+
+        // Names what it lost. "A call failed" is not actionable; these two postings going
+        // unassessed, and being retried next sweep, is.
+        Assert.Equal([3L, 4L], lost.AffectedIds);
+        Assert.Equal(KernelCandidacyAssessor.LedgerOperation, lost.Operation);
+    }
+
+    [Fact]
+    public async Task A_partly_usable_answer_is_recorded_as_partly_discarded()
+    {
+        // The case that actually happened, and the one a success/failure flag cannot express.
+        var log = new RecordingAiCallLog();
+        var assessor = Assessor(log, Body(Entry("0"), Entry("9")));
+
+        await assessor.AssessAsync(Profile(), [Request(1, "A"), Request(2, "B")]);
+
+        var record = Assert.Single(log.Records);
+        Assert.Equal(AiCallOutcome.PartiallyDiscarded, record.Outcome);
+        Assert.Equal(1, record.Returned);
+        Assert.Equal(1, record.Discarded);
+        Assert.Equal([2L], record.AffectedIds);
+
+        // The reason says which fault it was, so a wrong type is distinguishable from an
+        // out-of-range number without another night of guessing.
+        Assert.Contains("unusable", record.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Number", record.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_ledger_that_throws_does_not_cost_an_assessment()
+    {
+        // Diagnostics that can take down the thing they observe are worse than none.
+        var assessor = Assessor(new ThrowingAiCallLog(), Body(Entry("0")));
+
+        var results = await assessor.AssessAsync(Profile(), [Request(1, "A")]);
+
+        Assert.NotNull(results[0]);
+    }
+
+    private sealed class RecordingAiCallLog : IAiCallLog
+    {
+        public List<AiCallRecord> Records { get; } = [];
+
+        public Task RecordAsync(AiCallRecord record, CancellationToken ct = default)
+        {
+            Records.Add(record);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingAiCallLog : IAiCallLog
+    {
+        public Task RecordAsync(AiCallRecord record, CancellationToken ct = default)
+            => throw new InvalidOperationException("the ledger is unavailable");
     }
 
     /// <summary>A chat service that answers each call from a script, so batching can be tested.</summary>
