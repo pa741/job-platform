@@ -138,7 +138,7 @@ public sealed class MatchSweepFunction(
         if (profileIds.Count == 0)
         {
             logger.LogInformation("Match sweep: no profiles to score.");
-            return new SweepSummary(0, 0, 0);
+            return new SweepSummary(0, 0, 0, 0, 0);
         }
 
         // Fetched once for the whole sweep. Every profile is scored against the same slice, and
@@ -151,7 +151,7 @@ public sealed class MatchSweepFunction(
             profileIds.Count, postings.Count, since);
 
         var scored = 0;
-        var assessed = 0;
+        var assessed = AssessmentTally.Empty;
 
         foreach (var id in profileIds)
         {
@@ -159,11 +159,15 @@ public sealed class MatchSweepFunction(
             assessed += await AssessAsync(id, assessmentLimit, ct);
         }
 
+        // Requested is reported beside written, always, because the two diverging is the whole
+        // signal and a written count on its own cannot show it.
         logger.LogInformation(
-            "Match sweep complete: {Scored} score(s) written, {Assessed} assessment(s) written.",
-            scored, assessed);
+            "Match sweep complete: {Scored} score(s) written, {Assessed} assessment(s) written "
+            + "of {Requested} requested ({Discarded} discarded).",
+            scored, assessed.Persisted, assessed.Requested, assessed.Discarded);
 
-        return new SweepSummary(profileIds.Count, scored, assessed);
+        return new SweepSummary(
+            profileIds.Count, scored, assessed.Persisted, assessed.Requested, assessed.Discarded);
     }
 
     private async Task<int> ScoreAsync(
@@ -243,11 +247,14 @@ public sealed class MatchSweepFunction(
         };
     }
 
-    private async Task<int> AssessAsync(long profileId, int assessmentLimit, CancellationToken ct)
+    /// <summary>How many discarded posting ids to name in the warning before truncating.</summary>
+    private const int DiscardedPostingsLogged = 20;
+
+    private async Task<AssessmentTally> AssessAsync(long profileId, int assessmentLimit, CancellationToken ct)
     {
         if (assessor is null)
         {
-            return 0;
+            return AssessmentTally.Empty;
         }
 
         // Bounded by the caller's budget rather than by the nightly ceiling. Anything left
@@ -258,7 +265,7 @@ public sealed class MatchSweepFunction(
 
         if (shortlist.Count == 0)
         {
-            return 0;
+            return AssessmentTally.Empty;
         }
 
         // The assessor needs the whole profile, not the flattened facts: it reads the
@@ -271,33 +278,92 @@ public sealed class MatchSweepFunction(
 
         if (subjectId is null)
         {
-            return 0;
+            return AssessmentTally.Empty;
         }
 
         var view = await profiles.GetAsync(subjectId, ct);
 
         if (view is null)
         {
-            return 0;
+            return AssessmentTally.Empty;
         }
 
         var assessments = await assessor.AssessAsync(view.Profile, shortlist, ct);
 
         var written = new List<(long, CandidacyAssessment)>(shortlist.Count);
+        var discarded = new List<long>();
 
-        for (var i = 0; i < shortlist.Count && i < assessments.Count; i++)
+        for (var i = 0; i < shortlist.Count; i++)
         {
-            if (assessments[i] is { } assessment)
+            if (i < assessments.Count && assessments[i] is { } assessment)
             {
                 written.Add((shortlist[i].PostingId, assessment));
             }
+            else
+            {
+                discarded.Add(shortlist[i].PostingId);
+            }
         }
 
-        return await matches.ApplyAssessmentsAsync(profileId, written, time.GetUtcNow(), ct);
+        // What was paid for against what came back. The assessor drops an answer it cannot
+        // correlate rather than guessing which posting it belongs to, which is right - but it
+        // throws nothing, so without this the loss is indistinguishable from a quiet night.
+        // Measured on 2026-08-28: 90 pairs sent, 50 discarded, and the sweep reported success.
+        //
+        // Warning rather than error: the pairs stay unassessed and the next sweep picks them up,
+        // so this is money and latency lost, not data. The ids are named because "some calls
+        // failed" is not something anybody can act on.
+        if (discarded.Count > 0)
+        {
+            logger.LogWarning(
+                "Candidacy assessment for profile {ProfileId}: {Requested} requested, {Returned} "
+                + "usable, {Discarded} discarded. Affected postings: {Postings}.",
+                profileId,
+                shortlist.Count,
+                written.Count,
+                discarded.Count,
+                string.Join(", ", discarded.Take(DiscardedPostingsLogged))
+                    + (discarded.Count > DiscardedPostingsLogged ? ", ..." : string.Empty));
+        }
+
+        var persisted = await matches.ApplyAssessmentsAsync(profileId, written, time.GetUtcNow(), ct);
+
+        return new AssessmentTally(shortlist.Count, written.Count, persisted);
+    }
+
+    /// <summary>
+    /// What one profile's assessment pass asked for against what survived it.
+    /// </summary>
+    /// <param name="Requested">Pairs sent to the model. This is what the run cost.</param>
+    /// <param name="Returned">Answers the assessor could correlate back to a posting.</param>
+    /// <param name="Persisted">Rows actually written, which a no-op update can make smaller.</param>
+    private readonly record struct AssessmentTally(int Requested, int Returned, int Persisted)
+    {
+        public int Discarded => Requested - Returned;
+
+        public static AssessmentTally Empty => new(0, 0, 0);
+
+        public static AssessmentTally operator +(AssessmentTally left, AssessmentTally right)
+            => new(
+                left.Requested + right.Requested,
+                left.Returned + right.Returned,
+                left.Persisted + right.Persisted);
     }
 
     /// <param name="Profiles">How many profiles the sweep considered.</param>
     /// <param name="Scored">Rows whose score actually moved. Unchanged pairs are not rewritten.</param>
     /// <param name="Assessed">Pairs the model judged this run.</param>
-    public sealed record SweepSummary(int Profiles, int Scored, int Assessed);
+    /// <param name="Requested">
+    /// Pairs sent to the model, which is what the run cost.
+    /// </param>
+    /// <param name="Discarded">
+    /// Pairs paid for whose answer could not be correlated back to a posting.
+    /// </param>
+    /// <remarks>
+    /// <see cref="Requested"/> and <see cref="Discarded"/> are reported rather than inferred
+    /// because a caller cannot derive them: a sweep that assessed forty looks identical whether
+    /// it asked for forty or for ninety. On 2026-08-28 it was ninety.
+    /// </remarks>
+    public sealed record SweepSummary(
+        int Profiles, int Scored, int Assessed, int Requested, int Discarded);
 }
