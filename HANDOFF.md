@@ -308,6 +308,56 @@ neither has to be rediscovered.
 
 #### The result
 
+**Re-measured on the stratified 195. The first version of this section was measured on the 70
+pairs the deterministic score had selected, and the numbers below it are the ones to trust.**
+
+| signal | Spearman vs the model | 95% CI |
+| --- | --- | --- |
+| deterministic score | +0.315 | [+0.174, +0.443] |
+| embedding | +0.296 | [+0.154, +0.426] |
+| **score x embedding** | **+0.476** | [+0.352, +0.583] |
+
+Paired bootstrap, 10,000 resamples:
+
+- **embedding vs score: -0.018, CI [-0.235, +0.196] - not significant.** Across the corpus they
+  are equally good. The +0.501 recorded earlier was the pooling bias flattering the embedding,
+  exactly as the research warned.
+- **score x embedding beats score: +0.161, CI [+0.085, +0.244] - significant.**
+- **score x embedding beats embedding: +0.180, CI [+0.013, +0.339] - significant.**
+
+**The combination beats either signal alone. That is the finding.**
+
+#### And they are complementary in a specific, useful way
+
+Restricted to the top two bands - score >= 80, n=90, which is the band a candidate actually
+looks at and where the score inverts:
+
+| signal | Spearman | 95% CI |
+| --- | --- | --- |
+| deterministic score | **-0.191** | [-0.394, +0.029] |
+| embedding | **+0.448** | [+0.254, +0.608] |
+
+Mean similarity there: Strong 0.508, Possible 0.502, Weak 0.466.
+
+So the two signals fail and succeed in opposite places:
+
+- **The score is a good filter and a bad final sort.** +0.315 across the corpus, -0.191 inside
+  its own top band.
+- **The embedding is a mediocre filter and a good final sort.** No better than the score overall,
+  clearly better exactly where the score gives up.
+
+That is the standard retrieve-then-rank shape arrived at by measurement rather than by
+architecture diagram, and it says what to build: **keep the score as the filter, add the
+embedding as the axis that orders what survives it.**
+
+One caveat on the form. What was measured is the raw product, and the score dominates it by
+scale. The fusion literature (Bruch, ACM TOIS 2023) recommends a convex combination over
+normalised inputs, with the normalisation computed over all ~4,000 pairs rather than the labelled
+ones. That has not been measured yet and may beat the product; the product is what the numbers
+above describe.
+
+#### The original measurement, kept for the record
+
 Cosine similarity between the profile document and each advert, `text-embedding-3-small` at
 512 dimensions, against the model's own assessment score:
 
