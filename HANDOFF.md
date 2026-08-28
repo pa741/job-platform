@@ -1,18 +1,12 @@
 # Handoff
 
-State of the matching work as of 2026-08-27, for whoever picks this up next.
+State of the matching work as of 2026-08-28, for whoever picks this up next.
 
 Conventions, architecture and the standing rules live in [`CLAUDE.md`](CLAUDE.md). This file
 is only the delta and the open work. The previous round of fixes — the `containers`
 vocabulary bug, the enrichment version coupling, each producer clearing only its own rows, the
 withdrawn evidence-count rule, and the bounded admin endpoints — is described in `CLAUDE.md`
 and in the `CurrentVersion` remarks on `EnrichedPosting` and `MatchResult`.
-
-> [!IMPORTANT]
-> **`MatchSweepFunction.MaxAssessments` is temporarily 90 and must go back to 40.**
-> Raised for the 03:30 UTC run on 2026-08-28 only, to build an assessed set big enough to
-> measure §4.1 against. Every further night at 90 costs 2.25x what the design intends.
-> Revert it, commit, and let the deploy carry it — the constant is the only thing to change.
 
 **Deployed and verified.** `main` is at the commit the container app runs, the corpus has been
 re-enriched at `EnrichedPosting` version 5, and the working tree is clean.
@@ -270,9 +264,70 @@ advert. Two directions worth considering, in order:
 - Nothing in ranking reads `Verdict`. A posting the model has already called a poor match still
   sits at rank 2. Surfacing that in `ListAsync`'s ordering is cheap and needs no new signal.
 
+**There is now a real profile and 50 assessed pairs to work from**, and they settle the
+question. The arithmetic and the model disagree hard, and the model is right:
+
+| posting | score | model |
+| --- | --- | --- |
+| Legal Counsel | 92 | **5, Weak** |
+| Product Developer (fixed term) | 100 | **10, Weak** |
+| Research Associate, Cognitive Neuroscience | 92 | 25, Weak |
+| Tax Engineer | 92 | 30, Weak |
+| `.NET Developer` | **90** | **92, Strong** |
+| VoidZero Engineer | 100 | 92, Strong |
+
+The scorer ranks Legal Counsel above `.NET Developer`. Nothing in `ListAsync` reads
+`Verdict`, so it stays there after the model has said 5 out of 100. Across the 50: 14 Strong,
+23 Possible, 13 Weak.
+
+Two things to be careful of before ranking on it. Only 50 of 2,495 pairs over the threshold
+are assessed, so most rows have no verdict at all and the ordering must leave them where they
+are rather than sorting them above or below everything judged. And the sweep spends its budget
+strictly top-down, so a better ranking feeds itself a better shortlist - which is the argument
+for fixing 4.2 first, since over half of what is currently paid for is discarded.
+
 Take a top-60 snapshot before and diff it after, the way this round was done.
 
-### 4.2 Extraction coverage
+### 4.2 Over half the assessment budget is discarded without failing
+
+Found by verifying the run of 2026-08-28, and the most expensive defect currently open.
+
+The nightly ceiling was raised to 90 for one run. **40 assessments were written.** Nothing
+failed: no exception, no error, and the sweep reported success. The assessor packs ten roles
+into one model call and asks for an answer per role index; five of the nine batches came back
+with indices it could not use, and `KernelCandidacyAssessor` drops a whole batch rather than
+guess which answer belongs to which posting:
+
+| batch | outcome |
+| --- | --- |
+| 4 of 9 | usable, 40 assessments written |
+| 5 of 9 | *"Candidacy assessment returned an unusable role index"* x10, all discarded |
+
+**Dropping them is right** - an answer landing against the wrong posting would be wrong,
+self-consistent and undetectable afterwards, which is the same reason
+`KernelDocumentExtractor.Distribute` drops rather than clamps. The defect is that it is paid
+for and silent. The model call is made and billed, the answers are thrown away, and the only
+trace is a warning that reads like noise. `SweepSummary` reports how many were *written* and
+nothing compares that against how many were *asked for*, so a 55% loss looks exactly like a
+small night.
+
+Worth doing in this order:
+
+1. **Make the loss visible before changing anything.** The sweep should log requested against
+   written and warn when they diverge. This is the same class as the stalled backfill that
+   spent its calls on 429s and extracted almost nothing - swallowed by design, so the symptom
+   was a count nobody was comparing to anything.
+2. **Then find out why the indices are unusable.** Whole batches fail, not stray roles, so the
+   answer is structurally misaligned rather than one bad number - a different count, or
+   1-based indices, or the response truncated. Log one rejected payload and it will be obvious.
+3. **Consider whether packing earns its keep here.** It exists to amortise the profile text
+   across ten adverts. Against a 55% loss that trade is currently negative, and the batch API
+   already solved correlation on the extraction side by echoing a `custom_id` per request.
+
+Until this is fixed, a raised ceiling buys much less than it costs, so raise it again only
+after step 1.
+
+### 4.3 Extraction coverage
 
 The previous handoff recorded a graded share of 0.490 and called this the highest-leverage work
 available. Measured directly this round, **92.6% of the corpus (3,775 of 4,078 postings) carries

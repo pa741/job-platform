@@ -67,21 +67,12 @@ public sealed class MatchSweepFunction(
 
     /// <summary>Ceiling on how many pairs one sweep sends to the model, per profile.</summary>
     /// <remarks>
-    /// <b>TEMPORARILY 90, FOR THE RUN AT 03:30 UTC ON 2026-08-28 ONLY. PUT IT BACK TO 40.</b>
-    ///
-    /// Raised once, deliberately and with the spend agreed, to build an assessed set big enough
-    /// to measure a verdict-aware ranking against - see HANDOFF.md 4.1. Ten pairs from an HTTP
-    /// sweep is enough to show the defect and not enough to measure a fix, and at 40 a night the
-    /// 2,495 pairs over the assessment threshold are a 62-night backlog.
-    ///
-    /// 90 fits the timer's window with room to spare: an assessment costs roughly six seconds at
-    /// medium reasoning effort, so this is about ten minutes against a 30-minute default.
-    ///
-    /// Every night this is left at 90 costs 2.25x what the design intends. It is a constant
-    /// rather than a setting because that is the honest place for a number nobody should be able
-    /// to raise without a reviewable diff - which also means reverting it is a diff, so do it.
+    /// Briefly 90, for the run on 2026-08-28, to build an assessed set worth measuring a
+    /// verdict-aware ranking against. Back to 40, and the run is worth recording: 90 pairs went
+    /// out in nine batches of ten, four came back usable and five were discarded whole. 40 of 90
+    /// written, and nothing failed - see HANDOFF.md 4.2.
     /// </remarks>
-    private const int MaxAssessments = 90;
+    private const int MaxAssessments = 40;
 
     /// <summary>
     /// How many pairs one HTTP invocation may send to the model.
