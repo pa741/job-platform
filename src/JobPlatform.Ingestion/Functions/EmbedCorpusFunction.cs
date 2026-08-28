@@ -63,6 +63,26 @@ public sealed class EmbedCorpusFunction(
     /// </remarks>
     private const int MaxPostings = 20_000;
 
+    /// <summary>
+    /// How many batches in a row may come back empty before the pass concludes the provider is
+    /// down rather than merely unreliable.
+    /// </summary>
+    /// <remarks>
+    /// <b>Three, rather than the one this started as, and the difference is what evidence a
+    /// single failure actually carries.</b> Stopping early is right - the extraction backfill
+    /// that spent an hour collecting 429s is why the guard exists - but one failed batch cannot
+    /// tell a provider that is down from one that is flaky, and the first real run of this pass
+    /// proved it: a freshly created deployment answered 404 for roughly one call in three, and a
+    /// pass that gives up on the first empty batch stopped after 32 adverts of 4,668.
+    ///
+    /// Consecutive is the load-bearing word. A batch that exhausts its retries has its ids added
+    /// to <c>failed</c>, so the next iteration fetches <i>different</i> postings - three empty
+    /// batches is therefore three independent samples of the provider rather than one advert
+    /// being asked about three times. That is a real signal where a single batch is not, and it
+    /// still stops well short of burning a ten-minute budget on a dead endpoint.
+    /// </remarks>
+    private const int MaxConsecutiveFailures = 3;
+
     /// <summary>Wall-clock budget for the nightly pass.</summary>
     private static readonly TimeSpan TimerBudget = TimeSpan.FromMinutes(10);
 
@@ -121,7 +141,7 @@ public sealed class EmbedCorpusFunction(
         // head of it and would otherwise be re-fetched every iteration until the budget ran out.
         var failed = new HashSet<long>();
 
-        int requested = 0, written = 0, batches = 0;
+        int requested = 0, written = 0, batches = 0, consecutiveFailures = 0;
 
         while (time.GetElapsedTime(started) < budget && written < MaxPostings)
         {
@@ -163,15 +183,30 @@ public sealed class EmbedCorpusFunction(
 
             if (usable.Count == 0)
             {
-                // The whole batch came back empty. The embedder has already recorded why in the
-                // ledger, and carrying on would mean spending the rest of the budget discovering
-                // the same thing - the backfill that collected HTTP 429s for an hour is exactly
-                // this shape. Stop, and let the next run try again.
+                consecutiveFailures++;
+
+                // The embedder has already recorded why in the ledger, and it has already
+                // retried. What is left to decide is whether this is a provider having a bad
+                // moment or a provider that is gone, and one batch cannot tell those apart -
+                // so the pass moves to the next set of postings and asks again, up to a point.
                 logger.LogWarning(
-                    "Embedding pass: batch of {Count} returned nothing usable; stopping early.",
-                    pending.Count);
-                break;
+                    "Embedding pass: batch of {Count} returned nothing usable "
+                    + "({Failures} in a row). The AI ledger carries why.",
+                    pending.Count, consecutiveFailures);
+
+                if (consecutiveFailures >= MaxConsecutiveFailures)
+                {
+                    logger.LogError(
+                        "Embedding pass: {Failures} consecutive batches returned nothing; "
+                        + "stopping. {Written} vector(s) written this run.",
+                        consecutiveFailures, written);
+                    break;
+                }
+
+                continue;
             }
+
+            consecutiveFailures = 0;
 
             written += await embeddings.UpsertPostingEmbeddingsAsync(
                 usable, embedder.Deployment, time.GetUtcNow(), ct);
