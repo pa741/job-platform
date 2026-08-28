@@ -13,8 +13,8 @@ and has been swept: 4,078 pairs scored, 2,495 over the assessment threshold, 50 
 Nothing about that profile belongs in this repository. It is somebody's employment history, and
 the rule in `CLAUDE.md` covers fixtures, examples and screenshots alike.
 
-**In flight.** 1.1 is three call sites of four, with a dashboard page; 1.2 has a candidate fix.
-Both are marked *Progress* below, with what remains.
+**In flight.** 1.1 has all four call sites, a dashboard page and a replay route; 1.2 has a
+candidate fix. Both are marked *Progress* below, with what remains.
 
 **The next sweep at 03:30 UTC is the test for 1.2.** If the "unusable role index" warnings stop,
 the cause was the quoted index; if they continue, the warning now names which fault it is. Either
@@ -92,17 +92,41 @@ assessor had** - `JsonValueKind.Number` only - so a quoted index or confidence w
 a whole extraction batch just as silently, and had been able to since the file was written. Both
 now read through `AiJson.Int`: one reader, for the reason `TitleTokenizer` gives.
 
-**Remaining, in order:**
+**All four call sites are wired.** The batch path records **at collection**, not at submission:
+collection is the only moment that knows the answer, and the two are up to 24 hours apart, so a
+record written at submission would have to be updated later or left as a question. It is written
+only once a batch actually completes - never on an invocation that deferred work, which would
+report a shortfall the next tick is about to fill - and the counts come from the provider's whole
+result set rather than one invocation's tallies.
 
-1. **The batch extraction path.** `OpenAiBatchExtractor` and `CollectExtractionBatchesFunction`
-   are the last unwired call site, and the awkward one: submission and collection are up to 24
-   hours apart, so "one call" is not one moment. Decide whether a record belongs at submission,
-   at collection, or both, before writing any of it.
-2. **Verify extraction records in production.** The three call sites are unit-tested and only
-   the assessor has been seen writing a real record. Extraction is skipped for unchanged content
-   by design - `PostingExtractions` is keyed on a hash of the text - so it will not be exercised
-   until the next scrape brings new postings. Check `GET /api/v1/ai-calls/summary?days=2` after
-   one, and expect `posting-extraction` to appear beside `candidacy-assessment`.
+**A failed call keeps its prompt, so it can be replayed rather than theorised about.** The
+parsing faults this ledger exists to catch are exactly the kind that need the actual bytes: a
+quoted index and an out-of-range one are indistinguishable from a count, and that cost a day.
+`GET /api/v1/ai-calls/{id}/replay` returns the prompt and a ready-made curl.
+
+Three guards hold it down, **all in the sink rather than at the four call sites**, because a rule
+enforced in four places survives only until somebody adds a fifth:
+
+| guard | why |
+| --- | --- |
+| off unless `AiLedger:RecordPrompts` | a clone stores none; turning it on is a per-deployment decision to store personal data |
+| only for a call that lost something | a success has nothing to reproduce, and successes are where the data would accrue |
+| never on the list response | `Api:AllowAnonymousReads` can open that route; the prompt has its own, behind `AuthenticatedPolicy` |
+
+That last one is the point of the split. These prompts carry employment history, contact details
+and salary expectations, and without it one config flag is the difference between a dashboard and
+a published CV. Verified live: the list carries no prompt field, the replay route answers 401
+without a token and 404 with one while recording is off.
+
+**Remaining:**
+
+1. **Verify extraction and batch records in production.** Only the assessor has been seen writing
+   a real record. Extraction is skipped for unchanged content by design - `PostingExtractions` is
+   keyed on a hash of the text - so it will not be exercised until the next scrape brings new
+   postings. Check `GET /api/v1/ai-calls/summary?days=2` after one and expect
+   `posting-extraction` beside `candidacy-assessment`.
+2. **Turn `AiLedger:RecordPrompts` on when actually debugging, and off afterwards.** It is an app
+   setting on both hosts, so it needs no deploy either way.
 3. **Consider the change feed.** The Realtime component in `../model.md` is still the one piece
    never built, and a failure appearing on the dashboard as it happens is a better reason to
    build it than building it for its own sake.
