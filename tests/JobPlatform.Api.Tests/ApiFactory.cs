@@ -1,3 +1,4 @@
+using JobPlatform.Core.Ai;
 using JobPlatform.Core.Model;
 using JobPlatform.Data.Cosmos;
 using JobPlatform.Data.Sql;
@@ -29,6 +30,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     private readonly SqliteConnection _connection = new("DataSource=:memory:");
 
     public FakeMetricsSource Metrics { get; } = new();
+
+    public FakeAiCallSource AiCalls { get; } = new();
 
     /// <summary>Set before the first request to open read endpoints without a token.</summary>
     public bool AllowAnonymousReads { get; init; } = true;
@@ -84,6 +87,10 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             services.RemoveAll<MetricsQueryRepository>();
             services.RemoveAll<IMetricsSource>();
             services.AddSingleton<IMetricsSource>(Metrics);
+
+            services.RemoveAll<AiCallQueryRepository>();
+            services.RemoveAll<IAiCallSource>();
+            services.AddSingleton<IAiCallSource>(AiCalls);
 
             services.RemoveAll<Microsoft.Extensions.Diagnostics.HealthChecks.IHealthCheck>();
 

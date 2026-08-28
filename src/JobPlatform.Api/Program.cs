@@ -1,6 +1,7 @@
 using Azure.Identity;
 using JobPlatform.Ai;
 using JobPlatform.Api.Configuration;
+using JobPlatform.Core.Ai;
 using JobPlatform.Api.Endpoints;
 using JobPlatform.Api.Infrastructure;
 using JobPlatform.Data.Cosmos;
@@ -83,6 +84,8 @@ builder.Services.AddScoped<CandidateProfileRepository>();
 builder.Services.AddScoped<JobMatchRepository>();
 builder.Services.AddScoped<ApplicationDocumentRepository>();
 builder.Services.AddScoped<MetricsQueryRepository>();
+builder.Services.AddScoped<AiCallQueryRepository>();
+builder.Services.AddScoped<IAiCallSource>(sp => sp.GetRequiredService<AiCallQueryRepository>());
 builder.Services.AddScoped<IMetricsSource>(sp => sp.GetRequiredService<MetricsQueryRepository>());
 
 builder.Services.AddAiProvider(configuration);

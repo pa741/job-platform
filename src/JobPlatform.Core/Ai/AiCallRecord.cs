@@ -181,3 +181,33 @@ public interface IAiCallLog
 {
     Task RecordAsync(AiCallRecord record, CancellationToken ct = default);
 }
+
+/// <param name="Operation">Which pass, as named in the ledger.</param>
+/// <param name="Calls">Model calls made.</param>
+/// <param name="FailedCalls">Calls that lost something, whole or in part.</param>
+/// <param name="Requested">Items sent, which is what was paid for.</param>
+/// <param name="Returned">Items that came back usable.</param>
+public sealed record AiCallTotals(
+    string Operation, int Calls, int FailedCalls, int Requested, int Returned)
+{
+    public int Discarded => Math.Max(0, Requested - Returned);
+}
+
+/// <summary>
+/// Where the ledger is read back from.
+/// </summary>
+/// <remarks>
+/// An interface for the same reason <c>IMetricsSource</c> is one: the API depends on the
+/// question, not on Cosmos, so the endpoints are testable without a storage account. The
+/// write side is <see cref="IAiCallLog"/> and stays separate - the ingest writes and the API
+/// reads, and neither should carry the other's surface into its own process.
+/// </remarks>
+public interface IAiCallSource
+{
+    /// <summary>Recent calls, newest first.</summary>
+    Task<IReadOnlyList<AiCallRecord>> ListAsync(
+        int days, bool failuresOnly, int limit, CancellationToken ct = default);
+
+    /// <summary>What the window cost and what was lost, per pass.</summary>
+    Task<IReadOnlyList<AiCallTotals>> SummariseAsync(int days, CancellationToken ct = default);
+}

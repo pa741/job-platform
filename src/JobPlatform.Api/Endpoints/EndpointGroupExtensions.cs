@@ -1,3 +1,4 @@
+using JobPlatform.Api.Features.AiCalls;
 using JobPlatform.Api.Features.Applications;
 using JobPlatform.Api.Features.Concepts;
 using JobPlatform.Api.Features.Matches;
@@ -21,6 +22,7 @@ public static class EndpointGroupExtensions
         new ProfileEndpoints(),
         new MatchEndpoints(),
         new ApplicationEndpoints(),
+        new AiCallEndpoints(),
     ];
 
     /// <summary>
