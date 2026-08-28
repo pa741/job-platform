@@ -1,3 +1,4 @@
+using System.ClientModel;
 using JobPlatform.Core.Ai;
 using JobPlatform.Core.Matching;
 using Microsoft.Extensions.AI;
@@ -26,6 +27,14 @@ namespace JobPlatform.Ai.Matching;
 /// assessor - the pass that called it writes nothing for those rows and the next one picks them
 /// up. The ledger is what makes that visible rather than silent, which is the whole point of
 /// HANDOFF 1.1.
+///
+/// <b>It retries, and that is not belt-and-braces.</b> A freshly created deployment on this
+/// resource answers <c>404 DeploymentNotFound</c> from some backends and 200 from others for a
+/// while after provisioning - measured at roughly one call in three failing, randomly, for the
+/// same URL and the same api-version. Without a retry the corpus simply never gets embedded:
+/// the pass stops on its first empty batch by design, so a third of a chance of failure is a
+/// near-certainty of stopping within a few batches. The other transient here is the rate limit,
+/// which the extraction backfill has already been lost to once.
 /// </remarks>
 public sealed class KernelTextEmbedder(
     IEmbeddingGenerator<string, Embedding<float>> generator,
@@ -64,7 +73,7 @@ public sealed class KernelTextEmbedder(
 
         try
         {
-            var generated = await generator.GenerateAsync(texts, options: null, ct);
+            var generated = await WithRetryAsync(texts, ct);
 
             usage = Usage(generated);
 
@@ -99,6 +108,76 @@ public sealed class KernelTextEmbedder(
         await RecordAsync(texts.Count, results, reason, usage, started, ct);
 
         return results;
+    }
+
+    /// <summary>How many times one batch is attempted before it is somebody else's problem.</summary>
+    /// <remarks>
+    /// Four, which at the measured failure rate leaves under one batch in a hundred unembedded -
+    /// and those come back on the next pass anyway, because the "needs embedding" query is
+    /// derived from what is stored rather than from what was tried.
+    /// </remarks>
+    private const int MaxAttempts = 4;
+
+    /// <summary>
+    /// One batch, retried through the transient failures this provider actually produces.
+    /// </summary>
+    /// <remarks>
+    /// Only the statuses worth retrying, and each is on the list because it was observed rather
+    /// than imagined. <b>404</b> is the strange one and the reason this method exists: a newly
+    /// provisioned deployment is visible to the control plane and to only some data-plane
+    /// backends, so the same request 404s and then succeeds seconds later. It is safe to retry
+    /// precisely because a genuinely absent deployment fails every attempt and still ends up in
+    /// the ledger. <b>429</b> is the rate limit. <b>5xx</b> and <b>408</b> are the ordinary
+    /// transport failures.
+    ///
+    /// Everything else - a 400 for a malformed request, a 401 for a missing role assignment -
+    /// is thrown straight out to the caller's handler, because retrying a request that is wrong
+    /// only makes it wrong four times.
+    /// </remarks>
+    private async Task<GeneratedEmbeddings<Embedding<float>>> WithRetryAsync(
+        IReadOnlyList<string> texts, CancellationToken ct)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await generator.GenerateAsync(texts, options: null, ct);
+            }
+            catch (ClientResultException ex) when (attempt < MaxAttempts && IsTransient(ex))
+            {
+                var delay = RetryAfter(ex) ?? TimeSpan.FromSeconds(Math.Pow(2, attempt - 1));
+
+                logger?.LogInformation(
+                    "Embedding batch of {Count} got HTTP {Status} on attempt {Attempt}; "
+                    + "retrying in {Delay}.", texts.Count, ex.Status, attempt, delay);
+
+                await Task.Delay(delay, _time, ct);
+            }
+        }
+    }
+
+    private static bool IsTransient(ClientResultException ex)
+        => ex.Status is 404 or 408 or 429 or >= 500 and < 600;
+
+    /// <summary>
+    /// What the provider asked us to wait, where it said so.
+    /// </summary>
+    /// <remarks>
+    /// Preferred over the backoff whenever it is present: a rate limiter that names a window
+    /// knows when its window opens, and guessing shorter is how a retry storm starts. Clamped
+    /// so a header cannot park a nightly pass for an hour.
+    /// </remarks>
+    private static TimeSpan? RetryAfter(ClientResultException ex)
+    {
+        if (ex.GetRawResponse() is not { } response
+            || !response.Headers.TryGetValue("retry-after", out var value)
+            || !int.TryParse(value, out var seconds)
+            || seconds <= 0)
+        {
+            return null;
+        }
+
+        return TimeSpan.FromSeconds(Math.Min(seconds, 60));
     }
 
     private async Task RecordAsync(

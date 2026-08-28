@@ -294,6 +294,24 @@ Each of these cost a red CI run; none of them fail locally.
 - **The GHCR package must stay public** for the credential-free pull to work. It inherits the
   repository's visibility; if that ever changes, the app needs a registry credential and the
   no-secrets property is gone.
+- **A push deploys the code but never the schema, and the gap is a broken endpoint.** The
+  `Apply migrations` job is gated on `github.event_name == 'workflow_dispatch' && inputs.run_migrations`,
+  deliberately - a schema change should not be a side effect of a code push. The consequence is
+  the part to plan for: a commit that adds a column ships code selecting that column against a
+  database that does not have it, and every query touching the table answers **500** until
+  somebody dispatches the migration by hand. Measured, on the change that added `RankScore`:
+  Deploy went green, the smoke test passed because it does not touch `/matches`, and `/matches`
+  returned 500 for the eleven minutes between the two runs.
+  **So a migration-bearing change is two steps, and the second is not optional:**
+  ```bash
+  git push                                        # deploys the code
+  gh workflow run deploy.yml -f run_migrations=true   # then the schema
+  ```
+  Neither ordering is safe on its own - migrating first would have the old code running against
+  a new schema, which is the better failure but still one. The real fix is for a schema change to
+  be additive and for the code to tolerate both shapes; short of that, dispatch the migration
+  immediately after the push and check the endpoint the change touches, because **the smoke test
+  will not catch this.**
 - **`deploy.yml` has a `concurrency:` group, and it is load-bearing.** Without it runs are
   concurrent and land in whatever order the runners free up. During a GitHub Actions outage a
   Deploy for a superseded commit sat queued for hours while a newer commit deployed; had it
