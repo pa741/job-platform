@@ -16,11 +16,14 @@ the rule in `CLAUDE.md` covers fixtures, examples and screenshots alike.
 **In flight.** 1.1 has all four call sites, a dashboard page and a replay route; 1.2 has a
 candidate fix. Both are marked *Progress* below, with what remains.
 
-**1.6 is built, deployed and running on real data.** The corpus is at **4,668 of 4,668**
-embedded and the sweep has ranked every pair. Measured on production against the 195 assessed
-pairs, the top 30 went from 6 Strong / 14 Possible / **10 Weak** under the score to 8 / 19 /
-**3** under the shipped ranking, and the top 10 from 2 Strong / 6 / 2 to **5 / 5 / 0**. Read
-1.6's closing caveat before quoting those: they are in-sample.
+**1.6 is built, deployed, and has been through its first holdout - which moved the floor from
+45 to 80 and cut the headline claim down.** The corpus is at **4,668 of 4,668** embedded. On 154
+labels drawn *after* the ranking shipped, the ranking beats the score by **+0.045, CI
+[-0.015, +0.101] - not significant**, where in-sample it had been a significant +0.123. What did
+replicate, cleanly, is the reason the thing exists: inside the top band the score is flat
+(-0.051, interval containing zero) and the embedding is not (+0.520, interval excluding it).
+**Quote the ranking as better at the top of the list, not as better overall.** Read 1.6 before
+using any earlier number from this file - +0.521 and 68.5% are in-sample and superseded.
 
 **The next sweep at 03:30 UTC is the test for 1.2.** If the "unusable role index" warnings stop,
 the cause was the quoted index; if they continue, the warning now names which fault it is. Either
@@ -492,6 +495,67 @@ Until that lands, a stratified holdout has to be drawn by hand, the way the 115 
 2026-08-28: band-bounded calls to `run-match-sweep`. About 80k tokens for 100 labels, which is
 pennies.
 
+#### The stratified holdout: what replicated, what did not, and what changed because of it
+
+Drawn by hand on 2026-08-29 - 40 from the nightly sweep plus 114 across the bands below 90 via
+band-bounded `run-match-sweep` calls, because the nightly sweep cannot produce a stratified sample
+(see above). **154 labels, spanning 45-100, none of which existed when α was chosen.**
+
+**Under an identical equal-weight-per-band scheme, fitted against holdout:**
+
+| | fitted (n=194) | holdout (n=154) |
+| --- | --- | --- |
+| deterministic score | +0.390 | +0.523 |
+| embedding similarity | +0.288 | **+0.186** |
+| shipped rank | +0.513 | +0.568 |
+| **rank - score** | **+0.123, significant** | **+0.045, CI [-0.015, +0.101], NOT significant** |
+| embedding - score | -0.100, not significant | **-0.337, significant (embedding is worse)** |
+
+**So the corpus-wide claim did not replicate.** The gain shrank by roughly two thirds and its
+interval now contains zero, and the embedding alone went from "as good as the score" to
+"significantly worse than it". That is textbook optimism in a figure fitted and scored on the same
+labels, and the earlier +0.521 should be read as such.
+
+**What did replicate is the claim the design actually rests on.** Per band, on the holdout:
+
+| band | score vs model | embedding vs model |
+| --- | --- | --- |
+| 45-59 | +0.352 | +0.119 |
+| 60-69 | +0.161 | +0.148 |
+| 70-79 | +0.153 | +0.205 |
+| 80-89 | +0.282 | +0.087 |
+| **90-100** | **-0.051** | **+0.520** (interval excludes zero) |
+
+The two are near-perfect complements: the embedding's interval excludes zero only in the top band,
+and the score's contains zero only in the top band. Mean similarity is correctly ordered by
+verdict in 90-100 (0.5249 / 0.5149 / 0.4763) and is not ordered at all in 45-59, 60-69 or 80-89.
+
+**Which is why the floor moved.** At 45 the embedding was taking 0.6 of the weight across 45-79
+while contributing nothing there, diluting a score that was working - and that, not the top band,
+is where the whole-range gain went. Re-running the shipped arithmetic over the holdout at several
+floors:
+
+| floor | Spearman | vs score alone | top 10 (S/P/W) |
+| --- | --- | --- | --- |
+| none | +0.504 | - | 4/2/4 |
+| **45 (was shipped)** | +0.565 | +0.061, CI [-0.061, +0.185] | 5/5/0 |
+| 70 | +0.592 | +0.088, CI [+0.023, +0.156] | 7/3/0 |
+| **80 (now)** | +0.575 | +0.071, CI [+0.025, +0.125] | 7/3/0 |
+| 90 | +0.540 | +0.036, CI [+0.009, +0.073] | 5/3/2 |
+| 95 | +0.506 | +0.002, CI [-0.006, +0.011] | 4/3/3 |
+
+Everything from 70 to 92 beats the score significantly and 45 does not, so the finding is
+**"restrict the fusion"**, not "restrict it to exactly here". 80 was taken from inside that range
+rather than at its argmax because it is not a new free parameter - it is the boundary the original
+research already named, the "top two bands" where the score measured -0.191 and the embedding
++0.448. Choosing 70 would be fitting the floor to the data meant to test it.
+
+**This choice is in-sample for this holdout, and the next batch of labels is its test.** The
+honest status of `MatchRanker` is: the axis is validated out of sample, the floor is fitted to one
+holdout, and α has never been tested at all - at a floor of 80 the score barely varies inside the
+fused pool, so α is close to irrelevant there and the sweep that chose it was measuring something
+else.
+
 #### Cost, measured rather than estimated
 
 71 documents cost 54,271 tokens, so about 764 per posting after truncation to 6,000 chars.
@@ -773,13 +837,13 @@ Done, on 2026-08-28:
 
 Left:
 
-4. **A stratified holdout, because the nightly one cannot be.** Done in part: the 40 labels of
-   2026-08-29 confirm the embedding axis out of sample (+0.520, CI excluding zero) and confirm
-   the score is flat in its own top band (-0.051, CI straddling zero). What they cannot confirm
-   is α or the corpus-wide figure, because they span 92-100 only. Draw ~100 across the bands
-   below 90 with band-bounded `run-match-sweep` calls - about 80k tokens - and re-run the top-N
-   table on those. **Until then the corpus-wide +0.521 is in-sample and should be quoted that
-   way.**
+4. **Done, and it changed the design.** 154 stratified labels; the axis replicated, the
+   corpus-wide gain did not, and `FusionFloor` moved 45 -> 80 as a result. See the holdout
+   section above. What is left from it: **the floor is now fitted to that holdout and needs its
+   own confirmation**, and **α has still never been tested** - at a floor of 80 the score hardly
+   varies inside the fused pool, so the weight is close to inert there. If α is worth revisiting
+   it should be re-swept at the new floor, on labels drawn after this change, and the honest
+   prior is that anything from 0.6 to 1.0 will look the same.
 4b. **Split the nightly assessment budget so this stops being a manual job.** 30 top-down for the
    shortlist, 10 stratified for measurement. See the section above: the band machinery already
    exists on the HTTP path and the timer simply does not use it.

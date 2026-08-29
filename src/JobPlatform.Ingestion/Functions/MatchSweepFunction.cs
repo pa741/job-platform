@@ -69,7 +69,19 @@ public sealed class MatchSweepFunction(
     /// precisely to catch that. A threshold tuned to look efficient would filter out the cases
     /// worth judging.
     /// </remarks>
-    private const int AssessmentThreshold = MatchRanker.FusionFloor;
+    /// <remarks>
+    /// <b>Not <c>MatchRanker.FusionFloor</c>, and tying it to that was a mistake.</b> The two
+    /// were briefly one constant on the reasoning that "the band the model is spent on and the
+    /// band the embedding re-orders are the same band". They are not the same question. This one
+    /// asks where a judgement is worth buying, and the answer is "wherever the arithmetic might
+    /// be wrong", which is low by design. The other asks where the embedding carries signal, and
+    /// the holdout put that at 80 - so coupling them would have silently stopped the model from
+    /// ever looking at anything below 80, and with it the only source of labels that can show
+    /// whether the score works down there.
+    ///
+    /// Two constants that happened to share a value are not one constant.
+    /// </remarks>
+    private const int AssessmentThreshold = 45;
 
     /// <summary>Ceiling on how many pairs one sweep sends to the model, per profile.</summary>
     /// <remarks>

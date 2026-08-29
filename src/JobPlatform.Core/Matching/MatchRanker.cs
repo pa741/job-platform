@@ -57,8 +57,11 @@ public static class MatchRanker
     /// concept graph and the assertions, a ranker change needs nothing but the rows already
     /// stored. Sharing one constant would mean every tuning of the weight paid for a full
     /// re-score - and a re-score clears assessments, so it would also cost the labels.
+    ///
+    /// 2: <see cref="FusionFloor"/> raised from 45 to 80, after the first out-of-sample test
+    /// said the embedding contributes nothing below it. See that constant.
     /// </remarks>
-    public const int CurrentVersion = 1;
+    public const int CurrentVersion = 2;
 
     /// <summary>
     /// What share of the ordering the embedding carries where both axes are present.
@@ -76,20 +79,46 @@ public static class MatchRanker
     /// The score at or above which the embedding is allowed to re-order.
     /// </summary>
     /// <remarks>
-    /// <b>The bound on where the measurement applies, and it is not decoration.</b> The
-    /// stratified sample was drawn from bands 45-59 upward, so nothing was ever labelled below
-    /// 45 and the +0.521 says nothing about that range. Fusing globally would let a posting the
-    /// scorer floored at zero - no readable requirements, or none that discriminate - climb the
-    /// list on textual resemblance alone, which is precisely the failure the concept floor
-    /// exists to prevent and which cost 44 of the top 60 matches once already.
+    /// <b>80, and it was 45 until a holdout said 45 was wrong.</b> The first version reasoned
+    /// that the floor should sit at the edge of the labelled range, which bounded the claim
+    /// honestly but assumed the embedding contributed everywhere inside it. On 154 labels
+    /// assessed after this shipped - a stratified draw the weight was never fitted to - it does
+    /// not:
     ///
-    /// Below this the score orders on its own and nothing can climb past it: a fused pair never
-    /// lands under the floor and an unfused one never reaches it. Deliberately the same number
-    /// as the sweep's assessment threshold - the band the model is spent on and the band the
-    /// embedding re-orders are the same band, and two constants that must agree are one
-    /// constant.
+    /// <code>
+    /// band     score vs model            embedding vs model
+    /// 45-59    +0.352                    +0.119
+    /// 60-69    +0.161                    +0.148
+    /// 70-79    +0.153                    +0.205
+    /// 80-89    +0.282                    +0.087
+    /// 90-100   -0.051                    +0.520  (interval excludes zero)
+    /// </code>
+    ///
+    /// Only the top band's embedding interval excludes zero, and only the top band's score
+    /// interval contains it. Below 90 the score is the signal and the embedding is noise, so
+    /// giving that noise 0.6 of the weight diluted a signal that was working - which is exactly
+    /// what the whole-range result showed: at a floor of 45 the ranking beat the score by +0.061
+    /// with an interval of [-0.061, +0.185], not significant, where in-sample it had been a
+    /// significant +0.123.
+    ///
+    /// Re-run over the same holdout at several floors, every value from 70 to 92 beats the score
+    /// significantly and 45 and 95 do not, so the finding is "restrict the fusion", not "restrict
+    /// it to exactly here". 80 is chosen from inside that range rather than at its best point
+    /// because it is not a new free parameter: <b>it is the boundary the original research
+    /// already named</b> - the "top two bands" where the score was measured at -0.191 and the
+    /// embedding at +0.448. Taking 70, the holdout's argmax, would be fitting the floor to the
+    /// data that is meant to test it.
+    ///
+    /// <b>This choice is nonetheless in-sample for the holdout, and the next batch of labels is
+    /// its test.</b> At a floor of 80 the measured gain is +0.071, CI [+0.025, +0.125].
+    ///
+    /// The original reason for having a floor at all is unchanged and still binding: fusing
+    /// globally would let a posting the scorer floored at zero - no readable requirements, or
+    /// none that discriminate - climb the list on textual resemblance alone, which is the failure
+    /// that once cost 44 of the top 60 matches. Below this the score orders on its own and
+    /// nothing can climb past it.
     /// </remarks>
-    public const int FusionFloor = 45;
+    public const int FusionFloor = 80;
 
     /// <summary>
     /// Decimal places the ordering key is rounded to.

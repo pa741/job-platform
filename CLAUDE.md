@@ -546,24 +546,42 @@ Each of these cost a red CI run; none of them fail locally.
   correctly leaves it alone. What separates them is what the *role* is, and that is not a fact
   the assertions carry.
 - **So the list is ordered by something other than the score, and that is `MatchRanker`.**
-  Measured against the model's judgement on a stratified 195 spanning scores 45 to 100: the score
-  correlates at **+0.315** across the corpus and at **-0.191** inside its own top two bands - the
-  90-100 band holds a higher share of Weak verdicts (31%) than the two below it (20%, 17%). A
-  `text-embedding-3-small` cosine between the profile document and the advert does the opposite:
-  **+0.296** overall, no better than the score, and **+0.448** exactly where the score inverts.
-  A convex combination at α=0.6 over pool-normalised inputs scores **+0.521**, and in terms
-  anybody can hold: of every pair of postings the model has a preference between, the score alone
-  orders 61.3% the right way round and the combination orders **68.5%**.
+  The score inverts inside its own top band: measured against the model's judgement, 90-100 holds
+  a higher share of Weak verdicts than the bands below it, and the score's correlation there is
+  **-0.051** on fresh labels, with an interval containing zero. A `text-embedding-3-small` cosine
+  between the profile document and the advert is **+0.520** in exactly that band, interval
+  excluding zero. That is the finding, it replicated out of sample, and it is what the ranking is
+  for.
+- **What did *not* replicate is the corpus-wide claim, and the numbers here are the corrected
+  ones.** In-sample on the 194 labels α was fitted to, the ranking beat the score by +0.123
+  (significant). On 154 labels assessed afterwards it beat it by **+0.045, CI [-0.015, +0.101] -
+  not significant**, and the embedding *alone* went from indistinguishable from the score to
+  **significantly worse** than it (-0.337). Treat the ranking as "better at the top of the list",
+  which is measured and holds, and not as "better overall", which is not established. Any figure
+  quoting +0.521 or 68.5% is the in-sample one and is superseded.
 - **The score is untouched, deliberately, and this is the part not to "simplify".** Folding the
   embedding into `MatchResult.Score` would clear every stored assessment - a moved score is the
   signal that a judgement was made against different arithmetic - and would therefore destroy the
   labels the weight was fitted on. `RankScore` is a separate column with a separate version
   constant, and a moved rank clears nothing.
-- **The fusion is floored at 45 and the floor is the bound on the measurement, not a tuning
-  knob.** The stratified sample was drawn from bands 45-59 upward, so nothing below 45 was ever
-  labelled. Fusing globally would let a posting the concept floor scored at zero climb the list
-  on textual resemblance alone - which is the exact failure that once put 44 of the top 60 matches
-  there. It is the same constant as the sweep's assessment threshold on purpose.
+- **The fusion is floored at 80, because below it the embedding is noise.** Per band, out of
+  sample, the embedding's interval excludes zero only in 90-100 and the score's contains zero only
+  in 90-100 - they are near-perfect complements. At the shipped floor of 45 the embedding was
+  therefore taking 0.6 of the weight across 45-79 while contributing nothing, which is why the
+  whole-range gain was not significant. Re-run at several floors, every value from 70 to 92 beats
+  the score significantly and 45 does not; 80 is chosen from inside that range because it is the
+  boundary the original research already named ("the top two bands"), not because it is the
+  argmax - taking 70 would be fitting the floor to the data meant to test it.
+  The floor also still does its original job: fusing globally would let a posting the concept
+  floor scored at zero climb on textual resemblance alone, the failure that once put 44 of the
+  top 60 matches there.
+- **`MatchRanker.FusionFloor` and the sweep's `AssessmentThreshold` are not the same constant,
+  and briefly making them one was a mistake.** They answer different questions: the threshold is
+  where a model judgement is worth buying, which is deliberately low because that is where the
+  arithmetic might be wrong; the floor is where the embedding earns its weight. Coupling them
+  would have stopped the model from ever assessing below 80 - and with it the only source of
+  labels that can show whether the score works down there. Two constants that happened to share
+  a value are not one constant.
 - **`RankScore` is an ordering key, not a score, and no client may display it.** It is min-maxed
   over one profile's eligible pool, so it is not comparable between candidates or between nights,
   and the top of any pool is always exactly 100. `Similarity` is the durable half - the same pair
