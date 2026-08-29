@@ -346,10 +346,7 @@ two rows are describing the same thing the research described.
 
 1. **This is in-sample.** α=0.6 was fitted on these 195 labels and is now being scored against
    them. It confirms the implementation does what the analysis said; it does **not** establish
-   that the gain generalises. A held-out check needs labels drawn *after* the ranking shipped -
-   which the nightly sweep now produces for free, because it assesses whatever is unassessed.
-   **Re-run this table in a week against pairs assessed since 2026-08-28 and the number is
-   honest.**
+   that the gain generalises. See the holdout below, which settles part of it and not all.
 2. The shipped ranking normalises over the production pool (4,668 postings at score >= 45) where
    the offline fusion normalised similarity over the assessed 195. Different bounds, slightly
    different ordering - which is why the top-30 here is 8/19/3 against the 11/16/3 predicted.
@@ -442,6 +439,58 @@ high - and the model called them 20/Weak. `Delivery Solutions Engineer` (0.449) 
 Mean by verdict is Strong 0.503, Possible 0.493, Weak 0.459: the right order, with heavy
 overlap. **This is a better prior, not an oracle**, and it belongs beside the concept axes
 rather than instead of them.
+
+#### The first holdout: the central claim replicates, the weight is still unvalidated
+
+The nightly sweep of **2026-08-29** produced 40 assessments that did not exist when α was chosen,
+so they are honest in a way the 194 are not.
+
+| signal | Spearman vs the model | 95% CI |
+| --- | --- | --- |
+| deterministic score | **-0.051** | [-0.407, +0.297] |
+| embedding similarity | **+0.520** | [+0.267, +0.714] |
+| shipped rank | **+0.531** | [+0.267, +0.729] |
+
+Mean similarity runs monotone with the verdict - Strong 0.5249, Possible 0.5149, Weak 0.4763 -
+and the top 10 goes from 4 Strong / 2 Possible / **4 Weak** under the score to 7 / 3 / **0** under
+the shipped rank.
+
+**What this settles.** The score carries no signal inside its own top band: its interval straddles
+zero, out of sample, on fresh labels. The embedding does, and the +0.448 measured in-sample for
+the top two bands came back as **+0.520**. That is the claim the whole design rests on and it
+replicated.
+
+**What it does not settle, and this is the part not to overstate.**
+
+- **It does not validate α=0.6.** These 40 span scores 92-100, so the score axis barely varies and
+  the fusion is effectively all-embedding - which is exactly why `shipped rank` and `embedding
+  only` come out identical here. The holdout tests the *axis*, not the *weight*.
+- **It says nothing corpus-wide.** The +0.521 headline remains in-sample only.
+- n=40. The intervals are wide and one more night will not fix that.
+
+#### The sweep cannot produce the sample that would settle it
+
+**`GetUnassessedAsync` orders by score descending**, so the nightly budget goes to the top of the
+range every night - the 40 above span 92 to 100 and nothing else. The standing process therefore
+generates top-band labels in perpetuity and **can never produce the stratified sample the
+corpus-wide claim needs**. That is the pooling bias this whole section began with, now built into
+the mechanism that produces the evidence.
+
+It is also not simply a bug to fix, because top-down is *right* for the product: the model budget
+should go where the arithmetic is most hopeful, and those are the rows a candidate actually reads.
+The two purposes genuinely conflict.
+
+**The fix is to split the budget rather than to choose.** Something like 30 of the 40 top-down,
+unchanged, and 10 drawn across the bands below - which costs about 7k tokens a night, produces an
+unbiased sample at roughly 300 labels a month, and leaves the shortlist essentially as it is. The
+band machinery already exists: `SweepRequest` takes `MinScore` and `MaxScore`, and
+`GetUnassessedAsync` already switches to posting-id order when a ceiling is given, precisely so a
+band sample is not itself top-restricted. Nothing new has to be built - the nightly path just has
+to use what the HTTP path already has.
+
+Until that lands, a stratified holdout has to be drawn by hand, the way the 115 were on
+2026-08-28: band-bounded calls to `run-match-sweep`. About 80k tokens for 100 labels, which is
+pennies.
 
 #### Cost, measured rather than estimated
 
@@ -724,11 +773,16 @@ Done, on 2026-08-28:
 
 Left:
 
-4. **The out-of-sample check, and it is the only one that settles anything.** Everything measured
-   so far is scored against the labels α was fitted on. The nightly sweep assesses whatever is
-   unassessed, so pairs judged after 2026-08-28 are a clean holdout that costs nothing to
-   collect. Re-run the top-N table restricted to those and the +0.521 either survives or it does
-   not. **Until then, quote the ranking as implemented-as-designed, not as validated.**
+4. **A stratified holdout, because the nightly one cannot be.** Done in part: the 40 labels of
+   2026-08-29 confirm the embedding axis out of sample (+0.520, CI excluding zero) and confirm
+   the score is flat in its own top band (-0.051, CI straddling zero). What they cannot confirm
+   is α or the corpus-wide figure, because they span 92-100 only. Draw ~100 across the bands
+   below 90 with band-bounded `run-match-sweep` calls - about 80k tokens - and re-run the top-N
+   table on those. **Until then the corpus-wide +0.521 is in-sample and should be quoted that
+   way.**
+4b. **Split the nightly assessment budget so this stops being a manual job.** 30 top-down for the
+   shortlist, 10 stratified for measurement. See the section above: the band machinery already
+   exists on the HTTP path and the timer simply does not use it.
 5. **Then revisit 1.3.** The embedding now has 100% coverage, so the question is whether the top
    of the list still needs the verdict to be tolerable. On the evidence above it needs it less -
    zero Weak in the top 10 - but "less" is not "not at all", and this is the in-sample number.
