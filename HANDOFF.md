@@ -588,6 +588,44 @@ by neither alone; the floor is fitted to one holdout and has not yet been tested
 tested at all, and at a floor of 80 the score barely varies inside the fused pool, so the weight
 is close to inert there and the sweep that chose it was measuring something else.
 
+#### Validating it immediately found a bug that would have hidden for weeks
+
+Worth recording as a method as much as a fix: the split was validated by triggering
+`run-match-sweep` straight after deploying, rather than waiting for 03:30. The first run returned
+its ten as **three from 45-59, two from 70-79 and nothing from 60-69**, where round-robin should
+give roughly 2/1/1/1.
+
+The band was not empty. `GetUnassessedAsync` applied `Take(limit)` and then filtered out postings
+with no description **in memory**, so a request for five rows could return none - and because a
+band is ordered by posting id ascending, the same unusable rows sit at its head permanently. They
+are never assessed, so they never leave the unassessed set, so the next draw fetches exactly the
+same dead rows. Probed against the live database: the 60-69 band returned **nothing at a limit of
+five and five usable rows at a limit of ten**, from the same starved head.
+
+Two things made it land precisely here:
+
+- **They concentrate in the low bands.** A posting with no description resolves no concepts, so it
+  cannot clear the concept floor, so it scores low - and the stratified sample lives exactly where
+  they are.
+- **The top-down path could never have noticed.** Nothing reaches 80+ without a description. The
+  bug was invisible for as long as the sample was top-band-only, which is to say for as long as
+  the thing that made the sample worth fixing.
+
+Same class as the embedding pass starvation of 2026-08-28, and the rule is worth stating plainly:
+**a filter applied after a bound is not a filter, it is a silent reduction of the bound.** That is
+now three times in this codebase - `BoundedWalk`'s page boundary, the embedding pass's failed
+head, and this - so treat `Take(...).Where(...)` as a defect on sight.
+
+After the fix, the same call returned 6 in 80-89 (five of them the top-down shortlist), 1 in
+70-79, 1 in 60-69 and 2 in 45-59: the measurement half spread 2/1/1/1 across the four bands,
+exactly as designed.
+
+**A note on the test.** The first version of it was vacuous - the usable rows sorted first, so
+`Take` never reached the unusable ones and it passed with or without the fix. It was corrected by
+putting the description-less postings at the head of the band, and then checked properly by
+reverting the fix and watching it fail. **A test written for a bug that has already been fixed
+should be run against the unfixed code once**, or it is only evidence that the code compiles.
+
 #### Cost, measured rather than estimated
 
 71 documents cost 54,271 tokens, so about 764 per posting after truncation to 6,000 chars.
@@ -877,15 +915,14 @@ Left:
    4b, and it is now the highest-value item in this file. Nothing else about the ranking can be
    settled until the sample stops being top-band-only: not the floor, not α, and not the
    corpus-wide figure.
-4b. **Split the nightly assessment budget. This is now the highest-value change in this file.**
-   30 top-down for the shortlist, 10 stratified for measurement, about 7k extra tokens a night.
-   Every measurement question left about the ranking is blocked on sample shape rather than on
-   analysis, and three consecutive nights have produced three batches of top-band-only labels -
-   2026-08-29 spanned 92-100, 2026-08-30 spanned 89-100. Drawing the stratified half by hand
-   works and costs an afternoon; the timer doing it costs nothing and compounds.
-   The machinery exists: `SweepRequest` already takes `MinScore`/`MaxScore` and
-   `GetUnassessedAsync` already switches to posting-id order when a ceiling is given, precisely so
-   a band sample is not itself top-restricted. The timer path simply passes neither.
+4b. **Done on 2026-08-30, and validated by triggering a sweep rather than waiting for the
+   timer.** 30 of the 40 go to the shortlist, 10 are drawn round-robin across 45-59, 60-69,
+   70-79 and 80-89. **It costs nothing** - the measurement rows are merged into the same batches
+   and the assessor sends the profile once per batch, so they cost ten adverts' worth of tokens
+   rather than a second pass; a night is four batches of ten either way. The estimate of 7k extra
+   tokens in the previous version of this line was wrong.
+   `StratifiedShortlist` holds the merge, pure and tested for the reason `BoundedWalk` is.
+   A band-bounded request stratifies nothing, so the hand-drawn band route is unchanged.
 5. **Then revisit 1.3.** The embedding now has 100% coverage, so the question is whether the top
    of the list still needs the verdict to be tolerable. On the evidence above it needs it less -
    zero Weak in the top 10 - but "less" is not "not at all", and this is the in-sample number.
