@@ -550,11 +550,43 @@ rather than at its argmax because it is not a new free parameter - it is the bou
 research already named, the "top two bands" where the score measured -0.191 and the embedding
 +0.448. Choosing 70 would be fitting the floor to the data meant to test it.
 
-**This choice is in-sample for this holdout, and the next batch of labels is its test.** The
-honest status of `MatchRanker` is: the axis is validated out of sample, the floor is fitted to one
-holdout, and α has never been tested at all - at a floor of 80 the score barely varies inside the
-fused pool, so α is close to irrelevant there and the sweep that chose it was measuring something
-else.
+**This choice is in-sample for this holdout, and the next batch of labels is its test.**
+
+#### The second holdout, 2026-08-30: underpowered, and that is the finding
+
+The first sweep after the floor moved produced 40 more labels - cohort C, drawn while
+`FusionFloor` was already 80, so out of sample for both α and the floor. Three cohorts now exist,
+separated by when they were labelled:
+
+| cohort | n | scores | rank - score |
+| --- | --- | --- | --- |
+| A - fitted, <= 2026-08-28 | 194 | 45-100 | +0.091, CI [+0.048, +0.142] |
+| B - first holdout, 2026-08-29 | 154 | 46-100 | +0.065, CI [+0.023, +0.115] |
+| C - second holdout, 2026-08-30 | 40 | 89-100 | **+0.110, CI [-0.269, +0.467]** |
+| **B+C inside the fused region (>= 80)** | **110** | 80-100 | **+0.202, CI [+0.044, +0.360]** |
+
+**C on its own settles nothing, and could not have.** At n=40 every interval in it contains zero -
+including the deterministic score's, which is not a claim anybody wants to make. Its embedding
+figure is +0.162, CI [-0.162, +0.460], against B's top-band +0.520, CI [+0.264, +0.710]; the two
+intervals overlap across [+0.264, +0.460], so C is a wide estimate consistent with a smaller
+effect, not a failure to replicate. **One night of labels cannot test a ranking. Do not read a
+single cohort as a verdict.**
+
+**Pooled, the fused region holds up.** Across B and C together, restricted to score >= 80 where
+the ranking now acts: the score is flat (+0.107, interval containing zero), the embedding is not
+(+0.298, excluding it), and the ranking beats the score by **+0.202, CI [+0.044, +0.360]**. B was
+used to choose the floor so this is not fully clean, but it is 110 rows and it points the same way
+as everything else.
+
+**The floor change did what it was supposed to.** On cohort B the gain went from +0.075, CI
+[-0.030, +0.183] under floor 45 to +0.065, CI [+0.023, +0.115] under floor 80. The point estimate
+barely moved and the interval halved - which is the signature of removing noise rather than adding
+signal, and is exactly what dropping a non-contributing axis should look like.
+
+**Honest status of `MatchRanker`:** the axis is supported by two out-of-sample cohorts pooled and
+by neither alone; the floor is fitted to one holdout and has not yet been tested; α has never been
+tested at all, and at a floor of 80 the score barely varies inside the fused pool, so the weight
+is close to inert there and the sweep that chose it was measuring something else.
 
 #### Cost, measured rather than estimated
 
@@ -837,16 +869,23 @@ Done, on 2026-08-28:
 
 Left:
 
-4. **Done, and it changed the design.** 154 stratified labels; the axis replicated, the
-   corpus-wide gain did not, and `FusionFloor` moved 45 -> 80 as a result. See the holdout
-   section above. What is left from it: **the floor is now fitted to that holdout and needs its
-   own confirmation**, and **α has still never been tested** - at a floor of 80 the score hardly
-   varies inside the fused pool, so the weight is close to inert there. If α is worth revisiting
-   it should be re-swept at the new floor, on labels drawn after this change, and the honest
-   prior is that anything from 0.6 to 1.0 will look the same.
-4b. **Split the nightly assessment budget so this stops being a manual job.** 30 top-down for the
-   shortlist, 10 stratified for measurement. See the section above: the band machinery already
-   exists on the HTTP path and the timer simply does not use it.
+4. **Done twice, and the second time said the sample is the bottleneck.** 154 stratified labels
+   moved `FusionFloor` from 45 to 80; the 40 that followed could not confirm or deny it, because
+   40 rows in one band cannot. Pooled across both holdouts inside the fused region the ranking
+   beats the score by +0.202, CI [+0.044, +0.360], on 110 rows.
+   **The remaining work is not more analysis, it is more labels of the right shape** - which is
+   4b, and it is now the highest-value item in this file. Nothing else about the ranking can be
+   settled until the sample stops being top-band-only: not the floor, not α, and not the
+   corpus-wide figure.
+4b. **Split the nightly assessment budget. This is now the highest-value change in this file.**
+   30 top-down for the shortlist, 10 stratified for measurement, about 7k extra tokens a night.
+   Every measurement question left about the ranking is blocked on sample shape rather than on
+   analysis, and three consecutive nights have produced three batches of top-band-only labels -
+   2026-08-29 spanned 92-100, 2026-08-30 spanned 89-100. Drawing the stratified half by hand
+   works and costs an afternoon; the timer doing it costs nothing and compounds.
+   The machinery exists: `SweepRequest` already takes `MinScore`/`MaxScore` and
+   `GetUnassessedAsync` already switches to posting-id order when a ceiling is given, precisely so
+   a band sample is not itself top-restricted. The timer path simply passes neither.
 5. **Then revisit 1.3.** The embedding now has 100% coverage, so the question is whether the top
    of the list still needs the verdict to be tolerable. On the evidence above it needs it less -
    zero Weak in the top 10 - but "less" is not "not at all", and this is the in-sample number.
