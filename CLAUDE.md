@@ -623,6 +623,20 @@ Each of these cost a red CI run; none of them fail locally.
   leaving every verdict null with nothing saying why. Scoring is deliberately *not* bounded the
   same way - it is arithmetic over rows already in memory, and stopping half way would rank a
   profile against an arbitrary subset, which is worse than not ranking it.
+- **The nightly assessment budget is split 30/10, and the ten are not for the candidate.**
+  Selecting top-down by score is right for the product and produces labels that describe only the
+  top of the range - three consecutive nights returned 92-100, then 89-100 - which is the same
+  pooling bias that made the score look anti-correlated at -0.198 when it is really +0.31, built
+  into the mechanism that produces the evidence. So ten of the forty are drawn across 45-59,
+  60-69, 70-79 and 80-89 instead. **It costs nothing**: they are merged into the same batches, and
+  the assessor sends the profile once per batch, so they cost ten adverts' worth of tokens rather
+  than a second pass. A band-bounded request stratifies nothing - it is already a sample, and
+  adding rows from outside the requested band would silently corrupt a hand-drawn draw.
+  `StratifiedShortlist` holds the merge, kept pure and tested exactly for the reason `BoundedWalk`
+  is: the round robin and the deduplication are the parts that are quietly wrong. In particular a
+  band whose next row is already in the shortlist **advances rather than forfeiting its turn** -
+  collisions land almost entirely on 80-89, because that is the band the shortlist is drawn from,
+  so forfeiting would under-sample the band nearest where the ranking acts.
 - **The sweep is a timer, not a page load.** `MatchSweepFunction` runs at 03:30 UTC, after the
   ingest and extraction queues have drained. A shortlist that costs model calls to look at is one
   nobody can afford to browse. `run-match-sweep` exists for the case the timer cannot serve -

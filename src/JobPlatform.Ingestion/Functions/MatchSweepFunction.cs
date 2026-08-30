@@ -89,8 +89,58 @@ public sealed class MatchSweepFunction(
     /// verdict-aware ranking against. Back to 40, and the run is worth recording: 90 pairs went
     /// out in nine batches of ten, four came back usable and five were discarded whole. 40 of 90
     /// written, and nothing failed - see HANDOFF.md 4.2.
+    ///
+    /// <see cref="MeasurementAssessments"/> of these are spent on the sample rather than on the
+    /// shortlist, so the total cost of a night has not moved.
     /// </remarks>
     private const int MaxAssessments = 40;
+
+    /// <summary>
+    /// How many of the budget go to the measurement sample instead of to the shortlist.
+    /// </summary>
+    /// <remarks>
+    /// <b>A quarter, and it buys the only thing that can settle any remaining question about the
+    /// ranking.</b> Selecting top-down is right for the product and produces a labelled set that
+    /// describes the top of the score range and nothing else: three consecutive nights returned
+    /// 92-100, then 89-100, and every correlation computed from labels like those is
+    /// range-restricted in exactly the way that made the score look anti-correlated at -0.198 when
+    /// it is really +0.31. No quantity of further top-down labels fixes that; a different shape
+    /// does.
+    ///
+    /// <b>It is free, which is the reason it is ten and not two.</b> These rows are merged into
+    /// the same batches as the shortlist, and the assessor sends the candidate's profile once per
+    /// batch - the profile being the larger half of the prompt. So ten rows riding along cost ten
+    /// adverts' worth of tokens; a separate stratified pass would have paid for the profile again.
+    /// Measured against the last three nights, a night is four batches of ten either way.
+    ///
+    /// The cost that is real is the shortlist losing ten of its forty. That is affordable because
+    /// the shortlist is not a queue that empties - it is the top of a ranking that is re-drawn
+    /// nightly, so a row not judged tonight is judged tomorrow unless something better arrives,
+    /// in which case judging the better one first was correct.
+    /// </remarks>
+    private const int MeasurementAssessments = 10;
+
+    /// <summary>
+    /// The bands the measurement sample is drawn from, below the shortlist's usual reach.
+    /// </summary>
+    /// <remarks>
+    /// Stops at 89 deliberately: the top band is what the shortlist already covers every night, so
+    /// spending measurement budget there buys a fourth copy of the only evidence the system has.
+    /// The floor matches <see cref="AssessmentThreshold"/> - below it no pair is a candidate for
+    /// judgement at all, so a band down there would return nothing and quietly waste its slot.
+    /// </remarks>
+    private static readonly (int Min, int Max)[] MeasurementBands =
+        [(45, 59), (60, 69), (70, 79), (80, 89)];
+
+    /// <summary>
+    /// How many rows to ask each band for before the merge trims to the budget.
+    /// </summary>
+    /// <remarks>
+    /// More than <see cref="MeasurementAssessments"/> divided by the band count, so that a band
+    /// which is exhausted or whose rows all lack a description does not silently shrink the
+    /// sample - the merge takes what it can from the bands that do answer.
+    /// </remarks>
+    private const int MeasurementPerBand = 5;
 
     /// <summary>
     /// How many pairs one HTTP invocation may send to the model.
@@ -391,6 +441,56 @@ public sealed class MatchSweepFunction(
     /// <summary>How many discarded posting ids to name in the warning before truncating.</summary>
     private const int DiscardedPostingsLogged = 20;
 
+    /// <summary>
+    /// The pairs this pass will spend the model on: the shortlist, plus a stratified sample.
+    /// </summary>
+    /// <remarks>
+    /// <b>An explicit ceiling means the caller is already drawing a sample, so nothing is added.</b>
+    /// That is the band-bounded HTTP route, which exists precisely to draw one by hand; stratifying
+    /// a stratified draw would silently return rows from outside the band that was asked for.
+    ///
+    /// Otherwise the budget splits. The merge is in <see cref="StratifiedShortlist"/> rather than
+    /// here, because interleaving with a deduplication is the part that is easy to get subtly
+    /// wrong and it is only assertable exactly while it needs nothing but lists.
+    /// </remarks>
+    private async Task<IReadOnlyList<CandidacyRequest>> BuildShortlistAsync(
+        long profileId, int limit, int minScore, int? maxScore, CancellationToken ct)
+    {
+        if (maxScore is not null)
+        {
+            return await matches.GetUnassessedAsync(profileId, minScore, limit, maxScore, ct);
+        }
+
+        // Never more than half, so a small budget - the HTTP route's ten - stays mostly a
+        // shortlist rather than becoming mostly an experiment.
+        var measurement = Math.Min(MeasurementAssessments, limit / 2);
+
+        var topDown = await matches.GetUnassessedAsync(
+            profileId, minScore, limit - measurement, null, ct);
+
+        if (measurement <= 0)
+        {
+            return topDown;
+        }
+
+        var bands = new List<IReadOnlyList<CandidacyRequest>>(MeasurementBands.Length);
+
+        foreach (var (low, high) in MeasurementBands)
+        {
+            // A band entirely below the caller's floor has nothing to offer and is skipped
+            // rather than queried, so the pass does not wake the database for an empty answer.
+            if (high < minScore)
+            {
+                continue;
+            }
+
+            bands.Add(await matches.GetUnassessedAsync(
+                profileId, Math.Max(low, minScore), MeasurementPerBand, high, ct));
+        }
+
+        return StratifiedShortlist.Combine(topDown, bands, limit, r => r.PostingId);
+    }
+
     private async Task<AssessmentTally> AssessAsync(
         long profileId, int assessmentLimit, int minScore, int? maxScore, CancellationToken ct)
     {
@@ -402,8 +502,7 @@ public sealed class MatchSweepFunction(
         // Bounded by the caller's budget rather than by the nightly ceiling. Anything left
         // over stays unassessed and is picked up next time - the shortlist query selects on
         // exactly that, so a partial pass resumes rather than restarting.
-        var shortlist = await matches.GetUnassessedAsync(
-            profileId, minScore, assessmentLimit, maxScore, ct);
+        var shortlist = await BuildShortlistAsync(profileId, assessmentLimit, minScore, maxScore, ct);
 
         if (shortlist.Count == 0)
         {
