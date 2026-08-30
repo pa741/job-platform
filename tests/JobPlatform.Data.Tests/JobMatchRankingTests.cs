@@ -48,7 +48,14 @@ public sealed class JobMatchRankingTests : IDisposable
             UpdatedUtc = Now,
         });
 
-        for (var id = 1; id <= 3; id++)
+        // Ids 1-3 have NO description; 4-6 do. The order matters: a band is drawn by posting id
+        // ascending, so putting the unusable rows at the head is what reproduces the starvation -
+        // with them anywhere else, Take() never reaches them and the bug is invisible.
+        //
+        // A posting with no description cannot be assessed, and the low score bands are full of
+        // them: no description means no concepts resolved, which means the concept floor scores
+        // it at zero.
+        for (var id = 1; id <= 6; id++)
         {
             db.JobPostings.Add(new JobPostingEntity
             {
@@ -58,8 +65,8 @@ public sealed class JobMatchRankingTests : IDisposable
                 ExternalId = id.ToString(),
                 ContentHash = new string((char)('a' + id), 64),
                 Title = $"Role {id}",
-                Description = $"Advert {id}",
-                DescriptionLength = 9,
+                Description = id <= 3 ? null : $"Advert {id}",
+                DescriptionLength = id <= 3 ? 0 : 9,
                 FirstSeenUtc = Now,
                 LastSeenUtc = Now,
             });
@@ -202,6 +209,35 @@ public sealed class JobMatchRankingTests : IDisposable
 
             Assert.Equal(CandidacyVerdict.Strong, row!.Verdict);
             Assert.Equal(88, row.AssessmentScore);
+        }
+    }
+
+    [Fact]
+    public async Task A_band_draw_skips_postings_with_no_description_rather_than_returning_fewer()
+    {
+        // The starvation this fixes. A band is ordered by posting id, so the unusable rows sit at
+        // its head; filtering them after the Take means a request for two rows returns none, and
+        // because they are never assessed they never leave the unassessed set - so the next draw
+        // fetches exactly the same dead rows. Measured in production on 2026-08-30, the 60-69
+        // band returned nothing at a limit of five and five usable rows at a limit of ten.
+        //
+        // Ids 1, 2 and 3 have no description and are the lowest ids in this band, so a query
+        // that filters after the Take returns an empty list here.
+        await using (var db = CreateContext())
+        {
+            await WriteAsync(
+                db,
+                Scores((1, 65), (2, 65), (3, 65), (4, 62), (5, 61)),
+                MatchRanker.Rank([]));
+        }
+
+        await using (var db = CreateContext())
+        {
+            var shortlist = await new JobMatchRepository(db)
+                .GetUnassessedAsync(ProfileId, minimumScore: 60, limit: 2, maximumScore: 69);
+
+            Assert.Equal(2, shortlist.Count);
+            Assert.All(shortlist, r => Assert.False(string.IsNullOrWhiteSpace(r.Text)));
         }
     }
 

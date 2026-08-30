@@ -326,7 +326,20 @@ public sealed class JobMatchRepository(JobsDbContext db)
             .AsNoTracking()
             .Where(m => m.ProfileId == profileId
                 && m.Score >= minimumScore
-                && (m.AssessedAtUtc == null || m.AssessmentVersion != CandidacyAssessment.CurrentVersion));
+                && (m.AssessedAtUtc == null || m.AssessmentVersion != CandidacyAssessment.CurrentVersion)
+                // In the query rather than after the Take, and the difference is not cosmetic.
+                // A posting with no description cannot be assessed, so filtering afterwards means
+                // asking for five rows and getting none - and because a band is ordered by posting
+                // id, the same unusable rows sit at the head of it forever. They are never
+                // assessed, so they never leave the unassessed set, so the next draw fetches them
+                // again. Measured on 2026-08-30: the 60-69 band returned nothing at a limit of
+                // five and five usable rows at a limit of ten, from the same starved head.
+                //
+                // These rows concentrate in the low bands, which is what made this expensive: a
+                // posting with no description resolves no concepts, so it cannot clear the concept
+                // floor, so it scores low. The stratified sample lives exactly where they are.
+                && m.Posting!.Description != null
+                && m.Posting.Description != "");
 
         if (maximumScore is { } ceiling)
         {
@@ -355,6 +368,9 @@ public sealed class JobMatchRepository(JobsDbContext db)
             .ToListAsync(ct);
 
         return rows
+            // Belt and braces: the query excludes null and empty, this also excludes whitespace,
+            // which SQL Server's comparison semantics would not. It can no longer starve a band,
+            // because a row of pure whitespace is rare where an empty one is not.
             .Where(r => !string.IsNullOrWhiteSpace(r.Description))
             .Select(r => new CandidacyRequest(
                 r.PostingId,
