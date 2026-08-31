@@ -551,6 +551,15 @@ Each of these cost a red CI run; none of them fail locally.
   dashboard already carries an Entra token for the API. It is behind `AuthenticatedPolicy` and
   **must never move to `PublicReadPolicy`** — `Api:AllowAnonymousReads` would then let anyone mint
   tokens against a service with a connection budget. `RealtimeEndpointTests` pins that.
+- **On Flex Consumption the Cosmos trigger runs in its own function group, and a cold one takes
+  minutes.** Per-function scaling means each instance serves one group, so an instance handling
+  HTTP logs `Stopped the listener 'FunctionGroupListenerDecorator+NoOpListener' for function
+  'AiFailureFeedFunction'` - which reads exactly like a broken trigger and is not. Measured on
+  2026-08-31: a document written at 14:10:56 was delivered at 14:13:48, about three minutes, while
+  the scale controller started an instance for that group. Warm it is seconds.
+  **So "live" means within a few minutes of a cold start, not instantly**, and the dashboard's
+  tail should never be described as instantaneous. Check for invocations before concluding the
+  trigger is dead: `requests | where name contains 'AiFailure'`.
 - **Failures only on the wire.** The container carries every successful call too, and the free
   tier allows 20,000 messages a day — one per successful extraction would exhaust it on a single
   backfill and take the failures down with it.
