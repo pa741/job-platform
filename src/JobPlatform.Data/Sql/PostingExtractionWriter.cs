@@ -30,6 +30,18 @@ public sealed class PostingExtractionWriter(
     /// here, because the batch path submits and collects a day apart and the posting may have
     /// been re-listed with different text in between.
     /// </param>
+    /// <remarks>
+    /// <b>The caller must save, and the asymmetry is dangerous.</b> The deletes below run through
+    /// <c>ExecuteDelete</c> and commit immediately; the inserts wait for a <c>SaveChanges</c> the
+    /// caller owns, so that a batch can be written in one round trip. A caller that applies and
+    /// then throws before saving has therefore <i>removed</i> the model-sourced rows of every
+    /// posting it touched and written none of them back - silently, and with no exception naming
+    /// the loss. The reparse pass did exactly that on its first run.
+    ///
+    /// Applying the same posting twice on one context is also a collision: the first apply's
+    /// entities are still tracked as Added, and the second names the same
+    /// <c>(PostingId, ConceptId, Source)</c>. Save and clear between them, or do not do it.
+    /// </remarks>
     public async Task ApplyAsync(
         long postingId,
         string inputHash,

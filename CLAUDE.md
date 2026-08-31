@@ -179,6 +179,11 @@ worked around.
   warns and names the keys and the command, but the ordering is the actual fix:
   `gh workflow run deploy.yml -f run_migrations=true`, then `reparse-extractions`, then
   `reprocess` for the enrichment bump.
+  **Dispatch that run after the last push, not before it.** The concurrency group cancels the
+  *pending* run when a newer commit queues behind it, and a dispatched migration run is pending
+  while the push ahead of it deploys - so a dispatch followed by any push is silently cancelled.
+  It shows in `gh run list` as `cancelled` with no jobs at all, which reads like a platform
+  glitch rather than the group working as designed.
 - **Run `dbadmin seed-concepts` after any migration.** The concept tables are a projection of
   the vocabulary shipped in the build; a schema that has moved without them silently stops
   recording assertions for anything new. `deploy.yml` runs it in the same job as `migrate`,

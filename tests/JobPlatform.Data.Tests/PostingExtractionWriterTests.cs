@@ -115,6 +115,44 @@ public sealed class PostingExtractionWriterTests : IDisposable
     }
 
     [Fact]
+    public async Task Two_extractions_for_one_posting_on_one_context_do_not_collide()
+    {
+        // The production failure that stopped the first reparse pass. PostingExtractions is keyed
+        // on (PostingId, ExtractorVersion, InputHash), so an advert re-listed with edited text
+        // holds several rows at the same version - and a corpus pass that reads rows rather than
+        // postings applies the same posting twice on one DbContext. ExecuteDelete does not touch
+        // the change tracker, so the second Add collides with the first still tracked as
+        // Unchanged, and the exception names PostingConceptEntity rather than the loop that
+        // caused it.
+        //
+        // The pass now takes the newest extraction per posting, so this should not arise. It is
+        // pinned anyway, because a writer that cannot be called twice is a sharp edge for the
+        // queue consumer and the batch collector too, and nothing else says so.
+        var postingId = await SeedPostingAsync();
+
+        await using var db = Context();
+        var writer = new PostingExtractionWriter(db);
+        var conceptIds = await writer.GetConceptIdsAsync();
+
+        DocumentExtraction Extraction(string form) => new()
+        {
+            Concepts = [new ConceptAssertion("skill.sharepoint", AssertionSource.Model)],
+            Mentions = [new UnresolvedMention(form, MentionReason.UnknownModelSkill)],
+        };
+
+        await writer.ApplyAsync(postingId, Hash, Extraction("first"), conceptIds, Now);
+        await db.SaveChangesAsync();
+
+        await writer.ApplyAsync(postingId, "b" + Hash[1..], Extraction("second"), conceptIds, Now);
+        await db.SaveChangesAsync();
+
+        await using var read = Context();
+
+        // The later apply wins outright: its delete removed the earlier model rows first.
+        Assert.Equal("second", (await read.PostingMentions.SingleAsync()).SurfaceForm);
+    }
+
+    [Fact]
     public async Task A_response_naming_one_form_twice_does_not_collide_with_itself()
     {
         var postingId = await SeedPostingAsync();

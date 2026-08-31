@@ -91,24 +91,46 @@ public sealed class ReparseExtractionsFunction(
 
         while (time.GetElapsedTime(started) < RequestBudget)
         {
-            // Ordered by posting id so the cursor is a real resume point. Only the current
-            // extractor version is considered: an older row is superseded evidence, and
-            // re-parsing it would write assertions from an answer nobody would ask for today.
-            var page = await db.PostingExtractions
+            // Posting ids first, then their extractions. Two queries rather than one because
+            // a posting can hold SEVERAL rows at the current extractor version - the key is
+            // (PostingId, ExtractorVersion, InputHash), so an advert re-listed with edited text
+            // has one row per text - and taking a page of rows would process such a posting
+            // twice. That is not merely wasteful: the second pass through would rewrite its
+            // assertions from whichever InputHash came last in the page, which may be the older
+            // reading of older text.
+            var ids = await db.PostingExtractions
                 .AsNoTracking()
                 .Where(e => e.PostingId > cursor
                     && e.PayloadJson != null
                     && e.ExtractorVersion == DocumentExtraction.CurrentVersion)
-                .OrderBy(e => e.PostingId)
+                .Select(e => e.PostingId)
+                .Distinct()
+                .OrderBy(id => id)
                 .Take(PageSize)
-                .Select(e => new { e.PostingId, e.InputHash, e.PayloadJson, e.Model })
                 .ToListAsync(ct);
 
-            if (page.Count == 0)
+            if (ids.Count == 0)
             {
                 exhausted = true;
                 break;
             }
+
+            var rows = await db.PostingExtractions
+                .AsNoTracking()
+                .Where(e => ids.Contains(e.PostingId)
+                    && e.PayloadJson != null
+                    && e.ExtractorVersion == DocumentExtraction.CurrentVersion)
+                .Select(e => new { e.PostingId, e.InputHash, e.PayloadJson, e.Model, e.ExtractedAtUtc })
+                .ToListAsync(ct);
+
+            // The newest reading of the newest text, one per posting. Ordered in memory: the
+            // grouping is over a page of a hundred rows, and EF's translation of a grouped
+            // First() is the kind of thing that compiles and then fails at runtime.
+            var page = rows
+                .GroupBy(r => r.PostingId)
+                .Select(g => g.OrderByDescending(r => r.ExtractedAtUtc).First())
+                .OrderBy(r => r.PostingId)
+                .ToList();
 
             foreach (var row in page)
             {
@@ -129,6 +151,20 @@ public sealed class ReparseExtractionsFunction(
 
                 await writer.ApplyAsync(
                     row.PostingId, row.InputHash, extraction, conceptIds, time.GetUtcNow(), ct);
+
+                // Saved per posting, not per page, and this is not a style choice. The writer's
+                // delete runs through ExecuteDelete and commits immediately while its inserts wait
+                // for a save - so a pass that batches the save and then throws has deleted every
+                // touched posting's model rows and written none of them back. That is exactly what
+                // the first run of this pass did before it was fixed. Per posting the window is
+                // one row wide, and the pass is idempotent, so re-running closes it.
+                await db.SaveChangesAsync(ct);
+
+                // The tracker would otherwise accumulate every row written - tens of thousands by
+                // the end of a budget - and a key collision between two postings' entities then
+                // surfaces as an exception naming PostingConceptEntity, a long way from the loop
+                // that caused it. Nothing here reads back what it wrote.
+                db.ChangeTracker.Clear();
 
                 rewritten++;
             }
