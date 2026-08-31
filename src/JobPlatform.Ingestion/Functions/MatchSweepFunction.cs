@@ -461,9 +461,12 @@ public sealed class MatchSweepFunction(
             return await matches.GetUnassessedAsync(profileId, minScore, limit, maxScore, ct);
         }
 
-        // Never more than half, so a small budget - the HTTP route's ten - stays mostly a
-        // shortlist rather than becoming mostly an experiment.
-        var measurement = Math.Min(MeasurementAssessments, limit / 2);
+        // Never more than a quarter of the budget. The nightly forty is unaffected - a quarter of
+        // it is exactly the ten this wants - but the HTTP route's ten drops to two, and that
+        // matters: that route exists for somebody who has just filled in their profile and has
+        // nothing to look at until tomorrow morning. Spending half of their one call on a
+        // measurement sample would be taking the shortlist away from the only person it was for.
+        var measurement = Math.Min(MeasurementAssessments, limit / 4);
 
         var topDown = await matches.GetUnassessedAsync(
             profileId, minScore, limit - measurement, null, ct);

@@ -626,6 +626,47 @@ putting the description-less postings at the head of the band, and then checked 
 reverting the fix and watching it fail. **A test written for a bug that has already been fixed
 should be run against the unfixed code once**, or it is only evidence that the code compiles.
 
+#### The floor, tested on labels it was not chosen from
+
+The first full night of the 30/10 split ran on 2026-08-31: 40 assessed of 40 requested, nothing
+discarded, and the measurement half spread **3/3/2/2** across 45-59, 60-69, 70-79 and 80-89
+exactly as designed. That gives a cohort D - everything labelled from 2026-08-30 onward, n=110 -
+which is clean for both α and the floor, because the floor changes `RankScore` and not which pairs
+get selected.
+
+| floor | Spearman | vs score alone (95% CI) | top 10 (S/P/W) |
+| --- | --- | --- | --- |
+| none | +0.237 | - | 4/3/3 |
+| 45 (previous) | +0.367 | +0.130, CI [-0.105, +0.362] | 7/3/0 |
+| 70 | +0.415 | +0.178, CI [-0.015, +0.368] | 7/3/0 |
+| **80 (shipped)** | +0.404 | **+0.168, CI [+0.002, +0.340]** | 7/3/0 |
+| 90 | +0.259 | +0.023, CI [-0.008, +0.062] | 5/4/1 |
+
+**80 is the only setting whose gain over the score is significant out of sample.** But
+`floor 80 - floor 45` is +0.038, CI [-0.054, +0.134] - **not significant**. So the change is
+vindicated rather than proven: 80 works and 45 does not quite reach significance, and the direct
+comparison cannot separate them. That is the same shape as the original finding, which was
+"restrict the fusion" rather than "restrict it to exactly here".
+
+**The core claim now has three independent cohorts behind it.** Inside the fused region of cohort
+D (score >= 80, n=88) the score is flat at **-0.016**, CI [-0.249, +0.223], and the embedding is
+**+0.244**, CI [+0.027, +0.434]. With B's top band (+0.520) and C's (+0.162, wide), every cohort
+points the same way and the two that are large enough exclude zero.
+
+#### What is left on this topic, honestly
+
+**The engineering is done. What remains is accumulation, and it now happens by itself.**
+
+- **The corpus-wide claim is still open**, and cannot be closed yet: cohort D holds only 22 rows
+  below score 80. At ten stratified labels a night it will hold roughly 150 in a fortnight, which
+  is when re-running `balanced.py` becomes worth doing. Until then the honest line is unchanged -
+  **better at the top of the list, not established as better overall.**
+- **α has still never been tested and probably cannot be, at this floor.** Above 80 the score
+  barely varies, so the weight is close to inert - which is itself the answer: it is not worth
+  re-sweeping until something moves the floor back down.
+- **Nothing else here needs code.** Re-running the analysis on more of the same data is not a next
+  step, it is the same step with a larger n.
+
 #### Cost, measured rather than estimated
 
 71 documents cost 54,271 tokens, so about 764 per posting after truncation to 6,000 chars.
@@ -923,6 +964,12 @@ Left:
    tokens in the previous version of this line was wrong.
    `StratifiedShortlist` holds the merge, pure and tested for the reason `BoundedWalk` is.
    A band-bounded request stratifies nothing, so the hand-drawn band route is unchanged.
+   The measurement share is capped at a **quarter** of the budget, not a half. The nightly forty
+   is unaffected - a quarter of it is the ten this wants - but the HTTP route's ten drops to two,
+   which matters because that route exists for somebody who has just filled in their profile and
+   has nothing to look at until morning. Spending half their single call on a measurement sample
+   would take the shortlist away from the only person it was for.
+   Verified in production on 2026-08-31: 3/3/2/2 across the four bands, plus thirty top-down.
 5. **Then revisit 1.3.** The embedding now has 100% coverage, so the question is whether the top
    of the list still needs the verdict to be tolerable. On the evidence above it needs it less -
    zero Weak in the top 10 - but "less" is not "not at all", and this is the in-sample number.
