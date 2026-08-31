@@ -1,4 +1,5 @@
 using System.Text.Json;
+using JobPlatform.Core.Enrichment;
 using JobPlatform.Data.Cosmos;
 using JobPlatform.Data.Sql;
 using Microsoft.Azure.Cosmos;
@@ -32,6 +33,7 @@ internal static class Program
                   dbadmin grant-migrator  "<connection-string>" <principal-name>
                   dbadmin seed-concepts   "<connection-string>"
                   dbadmin status          "<connection-string>"
+                  dbadmin coverage        "<connection-string>" [top-mentions]
                   dbadmin metrics         "<cosmos-account-endpoint>" [search-term]
 
                 The connection string must authenticate as the server's Entra admin, e.g.
@@ -54,6 +56,9 @@ internal static class Program
                 "grant-migrator" => Fail("grant-migrator needs the principal name."),
                 "seed-concepts" => await SeedConceptsAsync(connectionString),
                 "status" => await StatusAsync(connectionString),
+                "coverage" => await CoverageAsync(
+                    connectionString,
+                    args.Length >= 3 && int.TryParse(args[2], out var top) ? top : 40),
                 // Second positional argument is the Cosmos endpoint, not a SQL connection.
                 "metrics" => await MetricsAsync(connectionString, args.Length >= 3 ? args[2] : null),
                 _ => Fail($"Unknown command '{command}'."),
@@ -213,6 +218,102 @@ internal static class Program
     }
 
     /// <summary>Prints what actually landed in the database, for verifying an ingest.</summary>
+    /// <summary>
+    /// How much of the corpus the model has actually read, and what it could not name.
+    /// </summary>
+    /// <remarks>
+    /// <b>Two numbers that are easy to confuse and justify very different work.</b> The share of
+    /// <i>assertions</i> that are model-sourced is already on the dashboard, through
+    /// <c>/concepts/source-composition</c>. This is the share of <i>postings</i> the model has
+    /// read at all, which that figure cannot tell you: one advert with forty model assertions and
+    /// forty adverts with none look identical in it.
+    ///
+    /// <b>And the unresolved-mention log, which is the growth mechanism with no reader.</b>
+    /// <c>PostingMentions</c> exists because the previous vocabulary handled ambiguous names by
+    /// refusing to match them, which meant the data was wrong with no way to find out by how
+    /// much. It is where the next concepts come from - the most frequent unresolved forms - and
+    /// until this command there was no way to see it except one posting at a time.
+    ///
+    /// A console command rather than an endpoint, for now, because it is a full-table aggregate
+    /// over two large tables and the API's rule is that SQL is for browse, search and detail.
+    /// If it earns a place on the Vocabulary page it should follow <c>/concepts/source-composition</c>:
+    /// one round trip, cached hard, never on a bootstrap path.
+    /// </remarks>
+    private static async Task<int> CoverageAsync(string connectionString, int topMentions)
+    {
+        await using var db = new JobsDbContext(Options(connectionString));
+
+        var postings = await db.JobPostings.CountAsync();
+        var withText = await db.JobPostings.CountAsync(p => p.DescriptionLength > 0);
+
+        // Distinct postings rather than rows: a posting with forty assertions is one posting.
+        var withAnyConcept = await db.PostingConcepts.Select(c => c.PostingId).Distinct().CountAsync();
+        var withModelConcept = await db.PostingConcepts
+            .Where(c => c.Source == AssertionSource.Model)
+            .Select(c => c.PostingId).Distinct().CountAsync();
+
+        // "Read by the model" is asked of PostingExtractions rather than inferred from whether
+        // any assertion came back, because an advert the model read and found nothing in is read.
+        var everExtracted = await db.PostingExtractions.Select(e => e.PostingId).Distinct().CountAsync();
+        var currentExtraction = await db.PostingExtractions
+            .Where(e => e.ExtractorVersion == DocumentExtraction.CurrentVersion)
+            .Select(e => e.PostingId).Distinct().CountAsync();
+
+        Console.WriteLine("Postings");
+        Console.WriteLine($"  total                        {postings,7}");
+        Console.WriteLine($"  with a description           {withText,7}  {Share(withText, postings)}");
+        Console.WriteLine();
+        Console.WriteLine("Coverage, by posting - not by assertion");
+        Console.WriteLine($"  with any concept             {withAnyConcept,7}  {Share(withAnyConcept, postings)}");
+        Console.WriteLine($"  with a model concept         {withModelConcept,7}  {Share(withModelConcept, postings)}");
+        Console.WriteLine($"  read by the model, ever      {everExtracted,7}  {Share(everExtracted, postings)}");
+        Console.WriteLine($"  read at the current version  {currentExtraction,7}  {Share(currentExtraction, postings)}");
+        Console.WriteLine();
+        Console.WriteLine($"  no concepts at all           {postings - withAnyConcept,7}");
+        Console.WriteLine($"  never read by the model      {postings - everExtracted,7}");
+
+        // The growth mechanism. Ranked by how many postings say it rather than by total
+        // occurrences: one advert repeating a word twenty times is one employer's habit, where
+        // twenty adverts saying it once is a gap in the vocabulary.
+        var mentions = await db.PostingMentions
+            .GroupBy(m => new { m.SurfaceForm, m.Reason })
+            .Select(g => new
+            {
+                g.Key.SurfaceForm,
+                g.Key.Reason,
+                Postings = g.Select(m => m.PostingId).Distinct().Count(),
+                Occurrences = g.Sum(m => m.Occurrences),
+            })
+            .OrderByDescending(x => x.Postings)
+            .Take(topMentions)
+            .ToListAsync();
+
+        Console.WriteLine();
+        Console.WriteLine($"Unresolved mentions, top {topMentions} by how many postings name them");
+        Console.WriteLine($"  {"surface form",-34} {"postings",8} {"occurrences",11}  reason");
+
+        foreach (var mention in mentions)
+        {
+            Console.WriteLine(
+                $"  {Truncate(mention.SurfaceForm, 34),-34} {mention.Postings,8} "
+                + $"{mention.Occurrences,11}  {mention.Reason}");
+        }
+
+        return 0;
+    }
+
+    private static string Share(int part, int total)
+        => total == 0 ? "" : $"{(double)part / total:P1}";
+
+    private static DbContextOptions<JobsDbContext> Options(string connectionString)
+        => new DbContextOptionsBuilder<JobsDbContext>()
+            .UseSqlServer(connectionString, sql =>
+            {
+                sql.EnableRetryOnFailure(maxRetryCount: 5, TimeSpan.FromSeconds(20), null);
+                sql.CommandTimeout(120);
+            })
+            .Options;
+
     private static async Task<int> StatusAsync(string connectionString)
     {
         var options = new DbContextOptionsBuilder<JobsDbContext>()
