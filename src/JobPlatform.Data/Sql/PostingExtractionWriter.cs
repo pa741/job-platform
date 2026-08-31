@@ -61,6 +61,15 @@ public sealed class PostingExtractionWriter(
             .Where(m => m.PostingId == postingId && m.Reason == MentionReason.UnknownModelSkill)
             .ExecuteDeleteAsync(ct);
 
+        // ExecuteDelete removes the rows from the database and leaves the change tracker holding
+        // stale copies of them. That is invisible until the same posting is applied twice on one
+        // context - a corpus pass, or any caller that retries - and then the second Add finds the
+        // first still tracked and EF throws about PostingConceptEntity rather than about the
+        // posting or the key. Detaching mirrors what the delete already did, and makes this method
+        // safe to call again on the same context, which its callers reasonably assume.
+        Detach<PostingConceptEntity>(e => e.PostingId == postingId);
+        Detach<PostingMentionEntity>(e => e.PostingId == postingId);
+
         // What survived that delete: forms recorded by another pass, which own the same primary
         // key this one is about to insert into.
         //
@@ -111,11 +120,28 @@ public sealed class PostingExtractionWriter(
         // reason, and it has a one-line fix.
         List<string>? unseeded = null;
 
+        // The same guard the mention loop below has had all along, and its absence here was the
+        // asymmetry that broke the first reparse: PostingConcepts is keyed on
+        // (PostingId, ConceptId, Source), so two assertions reaching the same concept collide -
+        // not with a constraint violation the database explains, but with an EF tracking error
+        // naming PostingConceptEntity and nothing about which key or which posting.
+        //
+        // Two assertions can reach one concept without either being wrong. The parser dedupes by
+        // key, so this is about keys that differ and resolve alike - which the vocabulary permits
+        // and the extractor cannot see, because it checks keys against the graph one at a time.
+        // First wins, matching the mention loop and the resolver's own "first spelling wins".
+        var placed = new HashSet<int>();
+
         foreach (var assertion in extraction.Concepts)
         {
             if (!conceptIds.TryGetValue(assertion.ConceptKey, out var conceptId))
             {
                 (unseeded ??= []).Add(assertion.ConceptKey);
+                continue;
+            }
+
+            if (!placed.Add(conceptId))
+            {
                 continue;
             }
 
@@ -167,6 +193,15 @@ public sealed class PostingExtractionWriter(
                 unseeded.Count,
                 string.Join(", ", unseeded.Take(UnseededKeysLogged))
                     + (unseeded.Count > UnseededKeysLogged ? ", ..." : string.Empty));
+        }
+    }
+
+    /// <summary>Drops this context's tracked copies of rows a bulk delete has already removed.</summary>
+    private void Detach<T>(Func<T, bool> matches) where T : class
+    {
+        foreach (var entry in db.ChangeTracker.Entries<T>().Where(e => matches(e.Entity)).ToList())
+        {
+            entry.State = EntityState.Detached;
         }
     }
 

@@ -115,6 +115,49 @@ public sealed class PostingExtractionWriterTests : IDisposable
     }
 
     [Fact]
+    public async Task A_response_naming_one_concept_twice_does_not_collide_with_itself()
+    {
+        // PostingConcepts is keyed on (PostingId, ConceptId, Source), so two assertions reaching
+        // the same concept collide - and not with a constraint violation the database explains,
+        // but with an EF tracking error naming PostingConceptEntity and nothing about which key
+        // or which posting. That is what stopped the first reparse pass, and it cost an
+        // afternoon to locate because the message points at the entity rather than the loop.
+        //
+        // The mention loop has always guarded against exactly this shape. The concept loop did
+        // not, and the asymmetry was the whole defect.
+        var postingId = await SeedPostingAsync();
+
+        await using (var db = Context())
+        {
+            var writer = new PostingExtractionWriter(db);
+
+            await writer.ApplyAsync(
+                postingId,
+                Hash,
+                new DocumentExtraction
+                {
+                    Concepts =
+                    [
+                        new ConceptAssertion("skill.python", AssertionSource.Model,
+                            AssertionPolarity.Required),
+                        new ConceptAssertion("skill.python", AssertionSource.Model,
+                            AssertionPolarity.Mentioned),
+                    ],
+                },
+                await writer.GetConceptIdsAsync(),
+                Now);
+
+            await db.SaveChangesAsync();
+        }
+
+        await using var read = Context();
+        var concept = Assert.Single(await read.PostingConcepts.ToListAsync());
+
+        // First wins, matching the mention loop and the resolver's own "first spelling wins".
+        Assert.Equal(AssertionPolarity.Required, concept.Polarity);
+    }
+
+    [Fact]
     public async Task Two_extractions_for_one_posting_on_one_context_do_not_collide()
     {
         // The production failure that stopped the first reparse pass. PostingExtractions is keyed
@@ -136,7 +179,7 @@ public sealed class PostingExtractionWriterTests : IDisposable
 
         DocumentExtraction Extraction(string form) => new()
         {
-            Concepts = [new ConceptAssertion("skill.sharepoint", AssertionSource.Model)],
+            Concepts = [new ConceptAssertion("skill.python", AssertionSource.Model)],
             Mentions = [new UnresolvedMention(form, MentionReason.UnknownModelSkill)],
         };
 
