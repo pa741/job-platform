@@ -348,6 +348,16 @@ Each of these cost a red CI run; none of them fail locally.
   be additive and for the code to tolerate both shapes; short of that, dispatch the migration
   immediately after the push and check the endpoint the change touches, because **the smoke test
   will not catch this.**
+- **A resource provider namespace new to the subscription must be registered before first use,
+  and the failure does not say so clearly.** Adding the SignalR resource failed the deploy with
+  `MissingSubscriptionRegistration: The subscription is not registered to use namespace
+  'Microsoft.SignalRService'` - nested four levels deep inside a `DeploymentFailed` whose outer
+  message is the generic "at least one resource deployment operation failed", so it reads as a
+  Bicep problem. It is not; the template was correct and deployed unchanged afterwards.
+  `az provider register --namespace <Namespace>` fixes it, takes a couple of minutes, and is a
+  one-off per subscription - which also means a fresh clone into a new subscription hits it for
+  every namespace this repo uses that the subscription has not seen. Check
+  `az provider show -n <Namespace> --query registrationState` before blaming the template.
 - **`deploy.yml` has a `concurrency:` group, and it is load-bearing.** Without it runs are
   concurrent and land in whatever order the runners free up. During a GitHub Actions outage a
   Deploy for a superseded commit sat queued for hours while a newer commit deployed; had it
