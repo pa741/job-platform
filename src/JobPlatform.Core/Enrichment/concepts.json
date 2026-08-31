@@ -1,5 +1,5 @@
 {
-  "version": 6,
+  "version": 7,
   "notes": [
     "The concept key is the identity; the label is an attribute. Renaming a label is an",
     "edit, renaming a key is a data migration.",
@@ -208,7 +208,9 @@
         "ml",
         "artificial-intelligence",
         "artificial intelligence",
-        "deep-learning"
+        "deep-learning",
+        "data-science",
+        "data science"
       ],
       "tagOnly": true
     },
@@ -233,7 +235,9 @@
       "aliases": [
         "cloud",
         "cloud-computing",
-        "cloud computing"
+        "cloud computing",
+        "cloud-native",
+        "cloud native"
       ],
       "tagOnly": true
     },
@@ -1838,7 +1842,8 @@
       "kind": "skill",
       "label": "GitLab CI",
       "aliases": [
-        "gitlab ci/cd"
+        "gitlab ci/cd",
+        "gitlab"
       ],
       "broader": [
         "type.tool",
@@ -3216,6 +3221,349 @@
       ],
       "related": [
         "skill.power-bi"
+      ]
+    },
+    {
+      "key": "skill.crewai",
+      "kind": "skill",
+      "label": "CrewAI",
+      "broader": [
+        "type.framework",
+        "area.ml"
+      ],
+      "implies": [
+        "skill.python"
+      ],
+      "related": [
+        "skill.langgraph",
+        "skill.autogen"
+      ]
+    },
+    {
+      "key": "skill.autogen",
+      "kind": "skill",
+      "label": "AutoGen",
+      "broader": [
+        "type.framework",
+        "area.ml"
+      ],
+      "implies": [
+        "skill.python"
+      ],
+      "related": [
+        "skill.langgraph",
+        "skill.crewai"
+      ]
+    },
+    {
+      "key": "skill.gemini",
+      "kind": "skill",
+      "label": "Gemini",
+      "requiresCapital": true,
+      "broader": [
+        "type.platform",
+        "area.ml"
+      ],
+      "related": [
+        "skill.openai",
+        "skill.anthropic"
+      ]
+    },
+    {
+      "key": "skill.vllm",
+      "kind": "skill",
+      "label": "vLLM",
+      "broader": [
+        "type.framework",
+        "area.ml"
+      ],
+      "implies": [
+        "skill.python",
+        "skill.llms"
+      ]
+    },
+    {
+      "key": "skill.langsmith",
+      "kind": "skill",
+      "label": "LangSmith",
+      "broader": [
+        "type.tool",
+        "area.ml"
+      ],
+      "related": [
+        "skill.langchain",
+        "skill.langgraph"
+      ]
+    },
+    {
+      "key": "skill.vertex-ai",
+      "kind": "skill",
+      "label": "Vertex AI",
+      "aliases": [
+        "vertex"
+      ],
+      "broader": [
+        "type.platform",
+        "area.ml",
+        "area.cloud"
+      ],
+      "implies": [
+        "skill.google-cloud"
+      ]
+    },
+    {
+      "key": "skill.ray",
+      "kind": "skill",
+      "label": "Ray",
+      "matchLabel": false,
+      "aliases": [
+        "ray.io"
+      ],
+      "ambiguous": [
+        "ray"
+      ],
+      "broader": [
+        "type.framework",
+        "area.ml"
+      ],
+      "implies": [
+        "skill.python"
+      ]
+    },
+    {
+      "key": "skill.delta-lake",
+      "kind": "skill",
+      "label": "Delta Lake",
+      "broader": [
+        "type.platform",
+        "area.data"
+      ],
+      "related": [
+        "skill.databricks"
+      ]
+    },
+    {
+      "key": "skill.microsoft-fabric",
+      "kind": "skill",
+      "label": "Microsoft Fabric",
+      "broader": [
+        "type.platform",
+        "area.data",
+        "area.analytics"
+      ],
+      "related": [
+        "skill.power-bi"
+      ]
+    },
+    {
+      "key": "skill.sqs",
+      "kind": "skill",
+      "label": "SQS",
+      "requiresCapital": true,
+      "aliases": [
+        "simple queue service"
+      ],
+      "broader": [
+        "type.platform",
+        "area.cloud",
+        "area.backend"
+      ],
+      "implies": [
+        "skill.aws"
+      ],
+      "related": [
+        "skill.azure-service-bus"
+      ]
+    },
+    {
+      "key": "skill.azure-service-bus",
+      "kind": "skill",
+      "label": "Azure Service Bus",
+      "aliases": [
+        "service bus"
+      ],
+      "broader": [
+        "type.platform",
+        "area.cloud",
+        "area.backend"
+      ],
+      "implies": [
+        "skill.azure"
+      ],
+      "related": [
+        "skill.sqs"
+      ]
+    },
+    {
+      "key": "skill.maven",
+      "kind": "skill",
+      "label": "Maven",
+      "requiresCapital": true,
+      "broader": [
+        "type.tool",
+        "area.backend"
+      ],
+      "implies": [
+        "skill.java"
+      ]
+    },
+    {
+      "key": "skill.jest",
+      "kind": "skill",
+      "label": "Jest",
+      "requiresCapital": true,
+      "broader": [
+        "type.framework",
+        "area.quality"
+      ],
+      "implies": [
+        "skill.javascript"
+      ]
+    },
+    {
+      "key": "skill.redux",
+      "kind": "skill",
+      "label": "Redux",
+      "broader": [
+        "type.framework",
+        "area.frontend"
+      ],
+      "implies": [
+        "skill.javascript"
+      ],
+      "related": [
+        "skill.react"
+      ]
+    },
+    {
+      "key": "skill.n8n",
+      "kind": "skill",
+      "label": "n8n",
+      "broader": [
+        "type.tool",
+        "area.software-development"
+      ],
+      "related": [
+        "skill.power-automate"
+      ]
+    },
+    {
+      "key": "skill.temporal",
+      "kind": "skill",
+      "label": "Temporal",
+      "requiresCapital": true,
+      "broader": [
+        "type.platform",
+        "area.backend"
+      ]
+    },
+    {
+      "key": "skill.excel",
+      "kind": "skill",
+      "label": "Excel",
+      "requiresCapital": true,
+      "broader": [
+        "type.tool",
+        "area.analytics"
+      ]
+    },
+    {
+      "key": "skill.windows",
+      "kind": "skill",
+      "label": "Windows",
+      "requiresCapital": true,
+      "broader": [
+        "type.platform",
+        "area.infrastructure"
+      ]
+    },
+    {
+      "key": "skill.ios",
+      "kind": "skill",
+      "label": "iOS",
+      "broader": [
+        "type.platform",
+        "area.mobile"
+      ],
+      "related": [
+        "skill.android",
+        "skill.swift"
+      ]
+    },
+    {
+      "key": "skill.power-platform",
+      "kind": "skill",
+      "label": "Power Platform",
+      "aliases": [
+        "power platform"
+      ],
+      "broader": [
+        "type.platform",
+        "area.software-development"
+      ],
+      "related": [
+        "skill.power-automate",
+        "skill.power-bi",
+        "skill.power-apps"
+      ]
+    },
+    {
+      "key": "skill.power-apps",
+      "kind": "skill",
+      "label": "Power Apps",
+      "aliases": [
+        "powerapps"
+      ],
+      "broader": [
+        "type.tool",
+        "area.software-development"
+      ],
+      "related": [
+        "skill.power-automate",
+        "skill.power-platform"
+      ]
+    },
+    {
+      "key": "skill.event-driven",
+      "kind": "skill",
+      "label": "Event-Driven Architecture",
+      "aliases": [
+        "event-driven-architecture",
+        "event driven architecture",
+        "event-driven"
+      ],
+      "broader": [
+        "type.concept",
+        "area.backend"
+      ],
+      "related": [
+        "skill.apache-kafka"
+      ]
+    },
+    {
+      "key": "skill.data-quality",
+      "kind": "skill",
+      "label": "Data Quality",
+      "aliases": [
+        "data-quality"
+      ],
+      "broader": [
+        "type.practice",
+        "area.data"
+      ]
+    },
+    {
+      "key": "skill.sdlc",
+      "kind": "skill",
+      "label": "SDLC",
+      "tagOnly": true,
+      "aliases": [
+        "software development lifecycle",
+        "software development life cycle"
+      ],
+      "broader": [
+        "type.practice",
+        "area.software-development"
       ]
     }
   ]

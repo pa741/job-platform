@@ -122,6 +122,59 @@ public sealed class VocabularyAdditionsTests
         // so the capital rule - which exists to stop false hits in prose - does not apply.
         => Assert.Equal(key, Resolve(form, fromStructuredField: true));
 
+    // -----------------------------------------------------------------------
+    // Round two, 2026-08-31, from reading the log again once round one had cleared its top
+    // -----------------------------------------------------------------------
+
+    [Theory]
+    [InlineData("CrewAI", "skill.crewai")]
+    [InlineData("AutoGen", "skill.autogen")]
+    [InlineData("Gemini", "skill.gemini")]
+    [InlineData("vLLM", "skill.vllm")]
+    [InlineData("LangSmith", "skill.langsmith")]
+    [InlineData("Vertex AI", "skill.vertex-ai")]
+    [InlineData("Delta Lake", "skill.delta-lake")]
+    [InlineData("Microsoft Fabric", "skill.microsoft-fabric")]
+    [InlineData("Azure Service Bus", "skill.azure-service-bus")]
+    [InlineData("Redux", "skill.redux")]
+    [InlineData("n8n", "skill.n8n")]
+    [InlineData("iOS", "skill.ios")]
+    [InlineData("Power Platform", "skill.power-platform")]
+    [InlineData("Power Apps", "skill.power-apps")]
+    [InlineData("event-driven-architecture", "skill.event-driven")]
+    public void Round_two_resolves_the_form_the_corpus_uses(string form, string key)
+        => Assert.Equal(key, Resolve(form));
+
+    [Fact]
+    public void An_existing_concept_can_absorb_a_form_instead_of_a_new_concept_being_added()
+    {
+        // Cheaper and more honest than a new concept: "cloud-native" is the cloud domain a board
+        // tagged, not a technology of its own, and "gitlab" in a skills field means the platform
+        // this vocabulary already knows through its CI. These are domains, so they resolve only
+        // from a structured field - which is exactly where a board tag comes from.
+        Assert.Equal("area.cloud", Resolve("cloud-native", fromStructuredField: true));
+        Assert.Equal("area.ml", Resolve("data-science", fromStructuredField: true));
+        Assert.Equal("skill.gitlab-ci", Resolve("gitlab"));
+    }
+
+    [Fact]
+    public void The_two_that_were_measured_and_declined_are_still_absent()
+    {
+        // Restraint, pinned so a later reader does not "fix" it.
+        //
+        // Triton names two unrelated technologies - NVIDIA's inference server and OpenAI's GPU
+        // kernel language - and nothing in an advert says which. Asserting either would invent
+        // evidence; the mention log records it honestly instead.
+        //
+        // skill.observability is a KEY the model proposed, mirroring the area.observability
+        // domain that already exists and is tagOnly because in prose the word means nothing.
+        // That is the model guessing at the key scheme, not a gap.
+        Assert.False(Graph.TryGet("skill.triton", out _));
+        Assert.False(Graph.TryGet("skill.observability", out _));
+        Assert.True(Graph.TryGet("area.observability", out var area));
+        Assert.False(area.IsDiscriminating);
+    }
+
     [Fact]
     public void The_additions_did_not_disturb_the_names_already_refused()
     {

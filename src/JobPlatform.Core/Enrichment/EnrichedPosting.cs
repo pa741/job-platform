@@ -34,6 +34,13 @@ public sealed record EnrichedPosting
     /// the rest. Every one of them was chosen from a measured count of postings naming the form,
     /// not from a guess about what a board might say: Claude Code 248, RAG 155, Cursor 136,
     /// MCP 117, LangGraph 111, GitHub Copilot 101. Read `dbadmin coverage` for the full list.
+    /// 7: twenty-four more, from reading the same log again once version 6 had cleared its top -
+    /// CrewAI 38, AutoGen 38, Jest 37, Gemini 37, Delta Lake 34, SQS 34, Maven 34, Redux 33,
+    /// Ray 33, n8n 32, vLLM 31, Excel 31, LangSmith 30, Vertex AI 30, iOS 27. Gemini is the one
+    /// to note: version 6 added OpenAI and Anthropic and no Google, because a log nobody had
+    /// read yet emphasised what it emphasised. **One pass over the mention log does not finish
+    /// the job.** Plus aliases onto concepts that already existed - cloud-native and data-science
+    /// and gitlab - which are cheaper and more honest than new concepts for the same ideas.
     ///
     /// <b>A change to <c>concepts.json</c> is a change to what the classifiers produce, so it
     /// belongs here too.</b> The vocabulary carries its own version, but nothing reads that when
@@ -43,7 +50,7 @@ public sealed record EnrichedPosting
     /// stale so a reprocess, or simply the next day the posting is re-scraped, rebuilds its
     /// assertions.
     /// </remarks>
-    public const int CurrentVersion = 6;
+    public const int CurrentVersion = 7;
 
     public required JobPosting Posting { get; init; }
 
