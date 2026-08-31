@@ -171,6 +171,14 @@ worked around.
   or the next re-scrape rebuilds the assertions. It also needs `seed-concepts` re-run, because
   the SQL label tables are a projection of the file - resolution reads the embedded copy, so
   matching is right either way, but the projection would drift.
+- **Seed before reparsing, and reparse before reprocessing.** `deploy.yml` runs `seed-concepts`
+  in the same job as `migrate`, which is **skipped on an ordinary push** - so a commit that adds
+  concepts deploys a build whose vocabulary is ahead of the SQL projection. `PostingExtractionWriter`
+  resolves keys through that table and drops what it cannot find, having already deleted the
+  posting's model rows, so a reparse run first would strip assertions and report success. It now
+  warns and names the keys and the command, but the ordering is the actual fix:
+  `gh workflow run deploy.yml -f run_migrations=true`, then `reparse-extractions`, then
+  `reprocess` for the enrichment bump.
 - **Run `dbadmin seed-concepts` after any migration.** The concept tables are a projection of
   the vocabulary shipped in the build; a schema that has moved without them silently stops
   recording assertions for anything new. `deploy.yml` runs it in the same job as `migrate`,

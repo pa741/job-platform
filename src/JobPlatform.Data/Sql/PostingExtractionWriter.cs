@@ -1,6 +1,7 @@
 using JobPlatform.Core.Enrichment;
 using JobPlatform.Data.Sql.Entities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace JobPlatform.Data.Sql;
 
@@ -18,7 +19,8 @@ namespace JobPlatform.Data.Sql;
 /// no business overwriting them - the same separation that puts <c>Source</c> in
 /// <c>PostingConcepts</c>' primary key.
 /// </remarks>
-public sealed class PostingExtractionWriter(JobsDbContext db)
+public sealed class PostingExtractionWriter(
+    JobsDbContext db, ILogger<PostingExtractionWriter>? logger = null)
 {
     /// <summary>
     /// Records the extraction and rewrites this posting's model-sourced rows.
@@ -90,10 +92,18 @@ public sealed class PostingExtractionWriter(JobsDbContext db)
             });
         }
 
+        // Keys the model returned that the SQL projection has no row for. Counted rather than
+        // merely skipped: the vocabulary ships in the build and these tables are a projection of
+        // it, so this is not "the model invented a key" - KernelDocumentExtractor already refuses
+        // those - it is "concepts.json is ahead of the database". That happens for exactly one
+        // reason, and it has a one-line fix.
+        List<string>? unseeded = null;
+
         foreach (var assertion in extraction.Concepts)
         {
             if (!conceptIds.TryGetValue(assertion.ConceptKey, out var conceptId))
             {
+                (unseeded ??= []).Add(assertion.ConceptKey);
                 continue;
             }
 
@@ -130,7 +140,26 @@ public sealed class PostingExtractionWriter(JobsDbContext db)
                 ResolverVersion = extraction.Version,
             });
         }
+
+        // Warned rather than swallowed, because the failure is silent in the worst way: the
+        // model-sourced rows are deleted above and then simply not rewritten, so the posting
+        // loses assertions it had and the pass reports success. A corpus-wide reparse run before
+        // seeding would do that to every posting naming a newly added concept.
+        if (unseeded is { Count: > 0 })
+        {
+            logger?.LogWarning(
+                "Posting {PostingId}: {Count} concept key(s) the model returned have no row in "
+                + "the Concepts table and were dropped: {Keys}. concepts.json is ahead of the "
+                + "database - run `dbadmin seed-concepts` and apply this extraction again.",
+                postingId,
+                unseeded.Count,
+                string.Join(", ", unseeded.Take(UnseededKeysLogged))
+                    + (unseeded.Count > UnseededKeysLogged ? ", ..." : string.Empty));
+        }
     }
+
+    /// <summary>How many unseeded keys to name before truncating. Enough to see the pattern.</summary>
+    private const int UnseededKeysLogged = 10;
 
     /// <summary>Concept keys to their ids, for resolving what the model returned.</summary>
     /// <remarks>
