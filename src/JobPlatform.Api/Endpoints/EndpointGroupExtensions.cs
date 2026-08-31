@@ -23,6 +23,7 @@ public static class EndpointGroupExtensions
         new MatchEndpoints(),
         new ApplicationEndpoints(),
         new AiCallEndpoints(),
+        new Features.Realtime.RealtimeEndpoints(),
     ];
 
     /// <summary>

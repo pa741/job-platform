@@ -46,6 +46,9 @@ param openAiWritingDeployment string = ''
 @description('Deployment name for the embedding pass: the profile and every advert, as vectors.')
 param openAiEmbeddingDeployment string = ''
 
+@description('Realtime service endpoint. Not a secret - the identity is what authenticates.')
+param signalRServiceUri string = ''
+
 @description('Key Vault secret URI holding the OpenAI API key. Empty leaves the batch extraction path unregistered.')
 param openAiApiKeySecretUri string = ''
 
@@ -225,6 +228,27 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'Cosmos__MetricsContainerName'
           value: 'metrics'
         }
+        // The change-feed trigger's connection, identity-based like every other one here. The
+        // Cosmos extension reads a *group* of settings under one name rather than a connection
+        // string - endpoint, credential kind, and which identity - and the account runs with
+        // disableLocalAuth, so the key path those settings replace does not work at all.
+        //
+        // Deliberately a second name rather than reusing `Cosmos`: that one is read by
+        // CosmosOptions as plain configuration for the SDK client, and the binding's group has a
+        // shape of its own. One name serving both would make a change to either silently
+        // reinterpret the other.
+        {
+          name: 'CosmosFeed__accountEndpoint'
+          value: cosmosAccountEndpoint
+        }
+        {
+          name: 'CosmosFeed__credential'
+          value: 'managedidentity'
+        }
+        {
+          name: 'CosmosFeed__clientId'
+          value: identityClientId
+        }
         {
           // `Active Directory Default` cannot guess which identity to use when the app has
           // a user-assigned one, and fails with "Unable to load the proper Managed
@@ -273,7 +297,12 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'Ai__AzureOpenAi__EmbeddingDeployment'
           value: openAiEmbeddingDeployment
         }
-      ] : [])
+      ] : [], [
+        {
+          name: 'Realtime__ServiceUri'
+          value: signalRServiceUri
+        }
+      ])
     }
   }
   dependsOn: [

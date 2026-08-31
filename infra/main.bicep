@@ -197,6 +197,26 @@ module cosmos 'modules/cosmos.bicep' = {
   }
 }
 
+// The realtime transport. Provisioned unconditionally: it is free-tier, it carries no data of
+// its own, and making it optional would mean the dashboard has to handle a missing feed as well
+// as a quiet one - two states that look identical to a user and behave differently in code.
+module signalR 'modules/signalr.bicep' = {
+  name: 'signalR'
+  params: {
+    location: location
+    namePrefix: namePrefix
+    resourceToken: resourceToken
+    tags: tags
+    callerPrincipalId: identity.outputs.principalId
+    // Same origin list the API gets, and for the same reason: the browser negotiates against
+    // this service directly, so its CORS must match the API's or the connection is refused
+    // after a negotiate that looked fine.
+    allowedOrigins: deployWeb
+      ? union(apiAllowedOrigins, [staticWebApp!.outputs.url])
+      : apiAllowedOrigins
+  }
+}
+
 module sql 'modules/sql.bicep' = {
   name: 'sql'
   params: {
@@ -309,6 +329,7 @@ module containerApp 'modules/containerapp.bicep' = {
     openAiBulkDeployment: aiProvider == 'azureopenai' ? openAi!.outputs.bulkDeployment : ''
     openAiWritingDeployment: aiProvider == 'azureopenai' ? openAi!.outputs.writingDeployment : ''
     openAiEmbeddingDeployment: aiProvider == 'azureopenai' ? openAi!.outputs.embeddingDeployment : ''
+    signalRServiceUri: signalR.outputs.serviceUri
   }
 }
 
@@ -369,6 +390,9 @@ output aiWritingDeployment string = aiProvider == 'azureopenai' ? openAi!.output
 
 @description('Deployment name for the embedding pass. Empty where no AI provider is configured.')
 output aiEmbeddingDeployment string = aiProvider == 'azureopenai' ? openAi!.outputs.embeddingDeployment : ''
+
+@description('What the API and the ingest function reach the realtime service on. Not a secret.')
+output signalRServiceUri string = signalR.outputs.serviceUri
 output keyVaultName string = aiOpenAiBatchEnabled ? keyVault!.outputs.vaultName : ''
 output openAiSecretName string = aiOpenAiBatchEnabled ? keyVault!.outputs.openAiSecretName : ''
 output webName string = deployWeb ? staticWebApp!.outputs.name : ''

@@ -5,6 +5,7 @@ using JobPlatform.Core.Ai;
 using JobPlatform.Core.Metrics;
 using JobPlatform.Core.Parsing;
 using JobPlatform.Data.Cosmos;
+using JobPlatform.Data.Realtime;
 using JobPlatform.Data.Sql;
 using JobPlatform.Ai;
 using JobPlatform.Core.Enrichment;
@@ -192,6 +193,10 @@ builder.Services.AddScoped<IngestionPipeline>();
 builder.Services.AddScoped<CandidateProfileRepository>();
 builder.Services.AddScoped<JobMatchRepository>();
 builder.Services.AddScoped<EmbeddingRepository>();
+
+// The realtime feed. Registers nothing when no endpoint is configured, so every consumer
+// resolves IRealtimeFeed as nullable and the dashboard falls back to polling.
+builder.Services.AddRealtimeFeed(builder.Configuration);
 builder.Services.AddScoped<ExtractionBatchRepository>();
 builder.Services.AddScoped<PostingExtractionWriter>();
 

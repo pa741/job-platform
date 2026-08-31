@@ -28,6 +28,15 @@
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 
+  <ItemGroup Label="Realtime">
+    <!-- The push half of the dashboard. The Management SDK rather than the Functions SignalR
+         binding, because there are two callers: the ingest function broadcasts and the API
+         negotiates, and a binding serves only the first. One library authenticated one way
+         beats a binding and a library authenticated two ways. -->
+    <PackageVersion Include="Microsoft.Azure.SignalR.Management" Version="1.29.0" />
+    <PackageVersion Include="Microsoft.Azure.Functions.Worker.Extensions.CosmosDB" Version="4.11.0" />
+  </ItemGroup>
+
   <ItemGroup Label="Azure SDK">
     <PackageVersion Include="Azure.Identity" Version="1.13.1" />
     <PackageVersion Include="Azure.Storage.Blobs" Version="12.23.0" />

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { JobPlatformApi } from '../api/client';
 import type { AiCallResponse, AiCallTotalsResponse } from '../api/types';
 import { Card, ErrorNote, StatTile } from '../components/Primitives';
+import { useAiFailures } from '../feed/useAiFailures';
 
 /**
  * What the model was asked to do, and what came back.
@@ -18,13 +19,73 @@ import { Card, ErrorNote, StatTile } from '../components/Primitives';
  *
  * No chart. The question here is "what broke and what did it cost", which is a number and a
  * list; a time series would be decoration over ten rows.
+ *
+ * **The live tail is the point of the realtime piece.** The two passes that matter run at 03:00
+ * and 03:30, and until now the only way to learn that a sweep had lost batches was to open this
+ * page later and compare two numbers. A failure now arrives while it is still happening. The
+ * page works identically without it — the feed is optional, `unavailable` is a normal state, and
+ * everything below the tail is the same authenticated read it always was.
  */
 export function AiCalls({ api }: { api: JobPlatformApi }) {
   return (
     <div className="grid">
+      <LiveTail api={api} />
       <Totals api={api} />
       <Failures api={api} />
     </div>
+  );
+}
+
+/**
+ * Failures as they are recorded, over the change feed.
+ *
+ * Renders nothing at all when there is no feed and nothing has arrived. A card saying "no live
+ * failures" is a card that is right 99% of the time and therefore never read — and worse, it
+ * would make a deployment with no realtime service look broken rather than simply quieter.
+ */
+function LiveTail({ api }: { api: JobPlatformApi }) {
+  const { state, failures } = useAiFailures(api, true);
+
+  if (failures.length === 0) {
+    return null;
+  }
+
+  return (
+    <Card
+      title="Live"
+      subtitle={state === 'live'
+        ? 'Pushed as each call is recorded'
+        : 'Connection lost — the list below is still accurate'}
+    >
+      <div className="scroll-x">
+        <table>
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Pass</th>
+              <th>Outcome</th>
+              <th className="num">Asked</th>
+              <th className="num">Back</th>
+              <th className="num">Lost</th>
+              <th>Why</th>
+            </tr>
+          </thead>
+          <tbody>
+            {failures.map((f, i) => (
+              <tr key={`${f.occurredAtUtc}-${i}`}>
+                <td>{new Date(f.occurredAtUtc).toLocaleTimeString()}</td>
+                <td>{f.operation}</td>
+                <td><span className="pill critical">{f.outcome}</span></td>
+                <td className="num">{f.requested}</td>
+                <td className="num">{f.returned}</td>
+                <td className="num">{f.discarded}</td>
+                <td title={f.reason ?? undefined}>{f.reason ?? '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
   );
 }
 

@@ -57,6 +57,9 @@ param openAiWritingDeployment string = ''
 @description('Deployment name for the embedding pass: the profile and every advert, as vectors.')
 param openAiEmbeddingDeployment string = ''
 
+@description('Realtime service endpoint. Not a secret - the identity is what authenticates.')
+param signalRServiceUri string = ''
+
 var useAzureOpenAi = aiProvider == 'azureopenai' && !empty(openAiEndpoint)
 
 // Array-typed configuration binds by index, so each origin becomes its own variable. Hoisted
@@ -221,7 +224,14 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'Ai__AzureOpenAi__EmbeddingDeployment'
               value: openAiEmbeddingDeployment
             }
-          ] : [])
+          ] : [], [
+            {
+              // Configuration, not a credential: the identity above is what mints client tokens
+              // against this service. disableLocalAuth means its keys cannot be used at all.
+              name: 'Realtime__ServiceUri'
+              value: signalRServiceUri
+            }
+          ])
           probes: [
             {
               // Points at /health, which touches nothing. The readiness endpoint checks

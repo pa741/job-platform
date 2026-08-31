@@ -5,6 +5,7 @@ using JobPlatform.Core.Ai;
 using JobPlatform.Api.Endpoints;
 using JobPlatform.Api.Infrastructure;
 using JobPlatform.Data.Cosmos;
+using JobPlatform.Data.Realtime;
 using JobPlatform.Data.Sql;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
@@ -91,6 +92,10 @@ builder.Services.AddDbContext<JobsDbContext>(options =>
 builder.Services.AddScoped<JobPostingQueryRepository>();
 builder.Services.AddScoped<CandidateProfileRepository>();
 builder.Services.AddScoped<JobMatchRepository>();
+
+// The realtime feed. Registers nothing when no endpoint is configured, so every consumer
+// resolves IRealtimeFeed as nullable and the dashboard falls back to polling.
+builder.Services.AddRealtimeFeed(builder.Configuration);
 builder.Services.AddScoped<ApplicationDocumentRepository>();
 builder.Services.AddScoped<MetricsQueryRepository>();
 builder.Services.AddScoped<AiCallQueryRepository>();

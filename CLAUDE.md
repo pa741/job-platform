@@ -520,6 +520,50 @@ Each of these cost a red CI run; none of them fail locally.
   needs it in `AiPrompt`, so the next experimental API somebody reaches for still fails the
   build.
 
+### Realtime
+
+- **The Realtime row of `../model.md` is built, and it is the last one that was not.** A Cosmos
+  change-feed trigger over the `aiCalls` container pushes failed model calls to the dashboard
+  through Azure SignalR. It exists because every AI path here degrades silently by design and
+  that cost real work three times: the ledger made those losses readable afterwards, this makes
+  them visible while the 03:00 and 03:30 passes are still running.
+- **Serverless mode, and the mode is not a detail.** Default mode expects an ASP.NET Core app
+  hosting the hub and holding connections; Serverless is the one where everything reaches the
+  service over its REST API, which is the shape here. Get it wrong and negotiate returns a URL no
+  hub is listening on — a client that connects and never hears anything.
+- **`ServiceTransportType.Transient` for the same reason.** The default, Persistent, opens a
+  websocket back to the service and holds it, which on Flex Consumption means one opened and
+  abandoned per invocation — against a free tier capped at 20 connections that exhausts the quota
+  the dashboard's own clients need.
+- **Negotiate lives on the API, not the Function app**, even though the Functions SignalR binding
+  is what every serverless sample uses. A Function route is protected by a function key, and a
+  browser holding one holds a credential that also opens reprocess, backfill and sweep. The
+  dashboard already carries an Entra token for the API. It is behind `AuthenticatedPolicy` and
+  **must never move to `PublicReadPolicy`** — `Api:AllowAnonymousReads` would then let anyone mint
+  tokens against a service with a connection budget. `RealtimeEndpointTests` pins that.
+- **Failures only on the wire.** The container carries every successful call too, and the free
+  tier allows 20,000 messages a day — one per successful extraction would exhaust it on a single
+  backfill and take the failures down with it.
+- **The notification is a projection, never `AiCallRecord`.** That type carries an optional prompt
+  holding employment history and salary expectations; the three guards keeping it off the list
+  endpoint would have to be reproduced to keep it off a socket. `AiFailureNotice` has no field for
+  it, so it cannot leak one.
+- **`MetricsFeed` stays polling, deliberately.** It was built as the seam for exactly this
+  conversion, but its data changes once a day when the scraper runs, so a socket there would
+  mostly deliver silence — and the honest "polling" label the UI shows would become a lie. A
+  failed model call is an event; a daily rollup is not. Different data, different transport.
+- **The feed is optional everywhere.** No `Realtime:ServiceUri` registers nothing, `IRealtimeFeed`
+  resolves null, the trigger returns early, and the negotiate route answers 503 rather than 500 —
+  "not here" invites a fallback, "broken" invites a retry loop.
+- **`CosmosFeed__*` is a second connection name on purpose.** `Cosmos:*` is plain configuration
+  read by `CosmosOptions` for the SDK client; the trigger binding wants a settings *group*
+  (`__accountEndpoint`, `__credential`, `__clientId`). One name serving both would make a change
+  to either silently reinterpret the other.
+- **The `leases` container is provisioned by Bicep and `CreateLeaseContainerIfNotExists` is
+  false.** Created by the extension it would arrive with its own throughput charged against the
+  free tier's 1000 RU/s. `LeaseContainerPrefix` is set so a second change-feed function later
+  cannot steal these checkpoints and leave the two taking turns missing documents.
+
 ### Matching
 
 - **The arithmetic runs on everything; the model runs on what survives it.** A corpus-wide pass

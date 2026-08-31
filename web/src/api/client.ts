@@ -133,6 +133,20 @@ export class JobPlatformApi {
       `/api/v1/ai-calls/summary${JobPlatformApi.query({ days })}`);
 
   /**
+   * Mints this client's access to the live feed.
+   *
+   * A POST because it has an effect - it issues a short-lived token against a service with a
+   * connection budget - and because SignalR's own negotiate is a POST, so a reader comparing the
+   * two is not left wondering whether this is a different kind of handshake.
+   *
+   * Rejects with a 503 where the deployment has no realtime service, which is a normal state
+   * rather than an error: the feed is optional, and the caller falls back to what it already has.
+   */
+  negotiateRealtime = () =>
+    this.request<{ url: string; accessToken: string }>(
+      '/api/v1/realtime/negotiate', { method: 'POST' });
+
+  /**
    * Everything concluded about one posting, with the evidence behind each conclusion.
    *
    * A second call rather than more fields on `posting`: it pulls six collections and a
