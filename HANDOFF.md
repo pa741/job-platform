@@ -323,24 +323,106 @@ so this path has never been exercised outside its unit tests.
 the writer respected the gap list rather than claiming skills the profile does not show, is a
 question for the person whose CV it is. The machinery is proven; the output is not reviewed.
 
-### 1.5 Extraction coverage
+### 1.5 Extraction coverage - measured 2026-08-31, and the coverage half is done
 
-**The figures below are from 2026-08-28 and are stale.** The corpus has grown - the embedding
-pass counts 4,668 postings carrying a description within the 45-day window against the 4,078 here
-- and the ledger records **1,171 documents extracted in the last seven days alone**. Both the
-numerator and the denominator have moved, so recompute before acting on any of it. There is no
-endpoint for this: it wants a query against `PostingConcepts` grouped by posting, which means a
-temporary SQL firewall rule that has to be removed afterwards.
+Read it with `dbadmin coverage "<connection-string>" [top-mentions]`, which is what this section
+previously had no way to answer. It needs a temporary SQL firewall rule; the invocation below
+adds and removes one with a shell trap so the removal survives a failure.
 
-92.6% of the corpus (3,775 of 4,078 postings) carries at least one model assertion. The 0.490
-figure an earlier revision called the graded share is the share of *assertions* that are
-model-sourced, not the share of postings read. The two are easy to confuse and justify very
-different work.
+**Coverage is effectively complete and needs no work.**
 
-What is left is thinner than it looked: 168 postings carry no concepts at all, and 303 have
-never been read by the model. The unresolved-mention log remains where the next vocabulary fix
-comes from — it is what surfaced `containers`, though `agile` came from reading the ranking
-rather than the log, which suggests the log is not the only place worth looking.
+| | postings | share |
+| --- | --- | --- |
+| total | 5,909 | |
+| with a description | 5,837 | 98.8% |
+| with any concept | 5,662 | 95.8% |
+| with a model concept | 5,470 | 92.6% |
+| **read by the model, ever** | **5,822** | **98.5%** |
+| read at the current extractor version | 5,822 | 98.5% |
+
+87 postings have never been read, and 72 of those have no description to read - so the real
+backlog is about fifteen. The old "303 never read" is gone. Note the corpus grew from 4,078 to
+5,909 while the model-concept share stayed at 92.6%, which is extraction keeping pace rather than
+a coincidence.
+
+**The 0.490 figure an earlier revision called the graded share is the share of *assertions* that
+are model-sourced, not the share of postings read.** That distinction is why this command reports
+distinct postings and says so in its output.
+
+#### The mention log, read for the first time, and it says one thing loudly
+
+Ranked by how many postings name a form - one advert repeating a word twenty times is one
+employer's habit, twenty adverts saying it once is a gap:
+
+| form | postings | reason |
+| --- | --- | --- |
+| Go / C / R | 979 / 325 / 310 | Ambiguous - deliberate, and now quantified |
+| Claude Code | 248 | UnknownModelSkill |
+| RAG | 155 | UnknownModelSkill |
+| Claude | 141 | UnknownModelSkill |
+| Cursor | 136 | UnknownModelSkill |
+| MCP | 117 | UnknownModelSkill |
+| LangGraph | 111 | UnknownModelSkill |
+| GitHub Copilot | 101 | UnknownModelSkill |
+| AI | 89 | UnknownModelSkill |
+| vector databases / JAX / S3 / Salesforce | 78 / 66 / 63 / 61 | UnknownModelSkill |
+| cloud-native / data-science / stakeholder-management | 55 / 50 / 47 | UnknownBoardSkill |
+| Android / CUDA / Codex / NoSQL / machine learning / CSS | 55 / 54 / 54 / 53 / 52 / 52 | UnknownModelSkill |
+| Copilot / HTML / LlamaIndex / Anthropic / prompt engineering | 51 / 50 / 46 / 46 / 45 | UnknownModelSkill |
+
+**The vocabulary is missing the entire AI-engineering cluster**, which is the one thing this
+corpus is full of. Claude Code, RAG, MCP, LangGraph, Cursor, Copilot, LlamaIndex, vector
+databases, prompt engineering, OpenAI, Anthropic, Codex - roughly 1,400 posting-mentions between
+them, none of which the matcher can see. Alongside it a plainer gap: S3, ECS, IAM, CUDA, JAX,
+NoSQL, CSS, HTML, Android, Salesforce, ServiceNow, Power Automate.
+
+`Go` at 979 postings is the cost of the ambiguity rule, now measured rather than assumed. It is
+still the right call - a false spike in demand for Go is worse than undercounting it - but 979 is
+the number to weigh against any proposal to resolve it from context.
+
+#### And a defect the log exposed: forms the vocabulary already knows are recorded as unknown
+
+`machine learning` appears 52 times as `UnknownModelSkill` while `area.ml` carries the alias
+`machine learning`. `AI` appears 89 times and `area.ml` carries `ai`. `generative AI` appears 43
+times and `skill.llms` carries `generative ai`.
+
+The cause is a seam, not a vocabulary gap. `ExtractionPrompt.BuildVocabulary` sends the model
+`key = label` and **no aliases**, so a model reading "generative AI" sees only `skill.llms = LLMs`
+and quite reasonably puts it in `unknownSkills`. And `ExtractionPrompt.Parse` records everything
+in `unknownSkills` verbatim **without ever consulting the graph**. The resolver already knows
+these forms; nothing asks it.
+
+**The fix is to resolve `unknownSkills` through `ConceptGraph.TryResolve` before recording a
+mention**, rather than to send the aliases and pay for them in every prompt. It reuses the
+judgement already encoded instead of asking the model to re-derive it, and it inherits the
+ambiguity refusal for free - `Go`, `C` and `R` stay unresolved, correctly. `fromStructuredField:
+true` is the right mode: the model naming a technology is a deliberate act, much closer to a
+board's curated skills field than to a regex hit in prose, and that flag is what lets a domain
+like `area.ml` resolve at all.
+
+#### Applying any of this to the corpus is cheaper than it looks
+
+**`PostingExtractions.PayloadJson` stores the raw model response per posting.** So a change to
+`ExtractionPrompt.Parse` - the fix above, or any future one - can be applied to the whole corpus
+by **re-parsing stored payloads at zero model cost**. Re-extracting 5,822 postings would be
+roughly 10M tokens on the measured rate of 1,700 per document; re-parsing is a query and some
+CPU. That pass does not exist yet and is the single highest-leverage thing to build here, because
+it turns every future parser and vocabulary change from an expensive decision into a cheap one.
+
+Vocabulary additions reach the deterministic path through a `EnrichedPosting.CurrentVersion` bump
+and a reprocess, which also costs no model calls. Only the model's own key choices need
+re-extraction, and those are the part the re-parse cannot fix.
+
+#### What to do, in order
+
+1. **Resolve `unknownSkills` through the graph.** Small, principled, testable. Recovers at least
+   AI (89), machine learning (52) and generative AI (43) with no new vocabulary at all.
+2. **Add the AI-engineering cluster to `concepts.json`**, plus the infrastructure gaps. This is
+   taxonomy work and wants a considered diff - `CLAUDE.md` is explicit that the vocabulary is
+   curated deliberately and that changing it is a reviewable change. Bump
+   `EnrichedPosting.CurrentVersion` with it and re-run `seed-concepts`.
+3. **Build the re-parse pass**, so 1 and 2 reach the existing corpus without re-extraction.
+4. Only then consider whether anything needs re-extracting at all.
 
 ### 1.6 Embeddings are the axis 1.3 was missing - measured, then built
 
