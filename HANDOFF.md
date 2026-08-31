@@ -413,16 +413,73 @@ Vocabulary additions reach the deterministic path through a `EnrichedPosting.Cur
 and a reprocess, which also costs no model calls. Only the model's own key choices need
 re-extraction, and those are the part the re-parse cannot fix.
 
-#### What to do, in order
+#### Done, 2026-08-31, and here is the corpus before and after
 
-1. **Resolve `unknownSkills` through the graph.** Small, principled, testable. Recovers at least
-   AI (89), machine learning (52) and generative AI (43) with no new vocabulary at all.
-2. **Add the AI-engineering cluster to `concepts.json`**, plus the infrastructure gaps. This is
-   taxonomy work and wants a considered diff - `CLAUDE.md` is explicit that the vocabulary is
-   curated deliberately and that changing it is a reviewable change. Bump
-   `EnrichedPosting.CurrentVersion` with it and re-run `seed-concepts`.
-3. **Build the re-parse pass**, so 1 and 2 reach the existing corpus without re-extraction.
-4. Only then consider whether anything needs re-extracting at all.
+All three shipped: the `unknownSkills` resolution, 24 concepts, and `ReparseExtractionsFunction`.
+Applied in the order seed -> reparse -> reprocess. **The whole application cost zero model calls.**
+
+| | before | after |
+| --- | --- | --- |
+| with any concept | 5,662 (95.8%) | **5,687 (96.2%)** |
+| with a model concept | 5,470 (92.6%) | **5,551 (93.9%)** |
+| read by the model, ever | 5,822 (98.5%) | **5,837 (98.8%)** |
+| postings with no concepts at all | 247 | **222** |
+| never read by the model | 87 | **72** |
+
+5,822 postings reparsed, **0 unparseable**. 72 unread against 73 with no description: essentially
+every advert carrying text has now been read.
+
+**The mention log is the clearest evidence.** Gone from it entirely: Claude Code (248 postings),
+RAG (155), MCP (117), LangGraph (111), GitHub Copilot (101), AI (89), vector databases (78), JAX
+(66), S3 (63), Salesforce (61), Android (55), CUDA (54), Codex (54), NoSQL (53), machine learning
+(52), CSS (52), HTML (50), LlamaIndex (46), Anthropic (46), prompt engineering (45), generative AI
+(43), ECS (43), ServiceNow (40), IAM (39). Roughly 1,700 posting-mentions the matcher could not
+see, and can now.
+
+What remains at the top is exactly what should: `Go` 979, `C` 324, `R` 310, `containers` 84 - the
+ambiguity rule, unchanged - joined by `Claude` and `Cursor` and `Copilot`, which are the three
+this round deliberately added as ambiguous. They are recorded and never asserted, which is the
+design working rather than a gap.
+
+#### And the log has already produced the next round
+
+Unprompted, which is the point of it. Ranked as before, by postings naming the form:
+
+| form | postings | note |
+| --- | --- | --- |
+| CrewAI | 38 | agent framework, sits beside LangGraph |
+| AutoGen | 38 | the same |
+| Gemini | 37 | **the omission worth noting** - OpenAI and Anthropic were added and Google was not |
+| Jest | 37 | JavaScript testing; `area.quality` has no JS entry |
+| Triton | 36 | ambiguous - the inference server and the GPU language share the name |
+| Power platform | 36 | probably an alias of the Power Automate concept rather than its own |
+
+Gemini is the useful lesson: the additions were drawn from a log that had never been read, so the
+first pass inherited whatever that log happened to emphasise. A second reading finds what the
+first crowded out. **Do not treat one pass over the mention log as having finished the job** -
+run `dbadmin coverage` again after any vocabulary change and expect a new top ten.
+
+#### The two defects this shipped with, and what they cost
+
+Both were mine and both were caught in production rather than in review.
+
+**The reparse pass deleted without writing.** `PostingExtractionWriter.ApplyAsync` deletes through
+`ExecuteDelete`, which commits immediately, and leaves its inserts for a `SaveChanges` the caller
+owns so a batch can go in one round trip. The new pass never called it. Every posting it touched
+on its first run lost its model concepts and mentions - recoverable only because the pass rebuilds
+from `PayloadJson`, which is luck rather than design. The asymmetry is now documented on
+`ApplyAsync` itself, because a caller cannot see it from the signature.
+
+**`ExecuteDelete` leaves the change tracker holding what it deleted.** So applying one posting
+twice on a context collided, and EF's message named `PostingConceptEntity` and neither the posting
+nor the key. The writer now detaches what it bulk-deleted, and its concept loop dedupes by
+resolved id - the guard the mention loop beside it always had.
+
+**Both tests written for these passed on their first run while testing nothing**, because each
+used a concept key that is not in the vocabulary, so nothing resolved, nothing was added, and
+nothing could collide. That is twice in two days. **A test written for a known bug that passes
+first time deserves suspicion, not a tick** - run it against the unfixed code before believing
+it.
 
 ### 1.6 Embeddings are the axis 1.3 was missing - measured, then built
 
