@@ -127,16 +127,28 @@ and salary expectations, and without it one config flag is the difference betwee
 a published CV. Verified live: the list carries no prompt field, the replay route answers 401
 without a token and 404 with one while recording is off.
 
+**Verified in production, 2026-08-31.** All four call sites now appear in
+`GET /api/v1/ai-calls/summary?days=7`, which was the outstanding check:
+
+| operation | calls | failed | requested | returned | tokens |
+| --- | --- | --- | --- | --- | --- |
+| posting-extraction | 127 | 1 | 1,171 | 1,170 | 2.01M |
+| candidacy-assessment | 34 | 0 | 264 | 264 | 410k |
+| text-embedding | 38 | 0 | 1,172 | 1,172 | 911k |
+| application-writing | 1 | 0 | 1 | 1 | 5.1k |
+
+**The ledger has now caught three real failures it was built for**, and each is the shape the
+section predicted: one `posting-extraction` partial, recorded as *"1 of 7 documents missing from
+the response"* with the affected posting named; and four `text-embedding` batches lost to
+`404 DeploymentNotFound` on a freshly provisioned deployment, which is what produced the retry in
+`KernelTextEmbedder`. None of them threw. Without the ledger all five would have been a count
+nobody was comparing to anything.
+
 **Remaining:**
 
-1. **Verify extraction and batch records in production.** Only the assessor has been seen writing
-   a real record. Extraction is skipped for unchanged content by design - `PostingExtractions` is
-   keyed on a hash of the text - so it will not be exercised until the next scrape brings new
-   postings. Check `GET /api/v1/ai-calls/summary?days=2` after one and expect
-   `posting-extraction` beside `candidacy-assessment`.
-2. **Turn `AiLedger:RecordPrompts` on when actually debugging, and off afterwards.** It is an app
+1. **Turn `AiLedger:RecordPrompts` on when actually debugging, and off afterwards.** It is an app
    setting on both hosts, so it needs no deploy either way.
-3. **Consider the change feed.** The Realtime component in `../model.md` is still the one piece
+2. **Consider the change feed.** The Realtime component in `../model.md` is still the one piece
    never built, and a failure appearing on the dashboard as it happens is a better reason to
    build it than building it for its own sake.
 
@@ -161,10 +173,14 @@ heading — and copying it as text is a reasonable reading. `Int` now accepts a 
 an integer, and the schema line says "integer, unquoted" to discourage it at the source. Six
 tests in `CandidacyAssessorTests`, the first of which fails against the old parser.
 
-**This is a hypothesis, not a confirmation**, and the confirmation ships with it: the warning
-used to say only "unusable" and could not tell a wrong type from an out-of-range number from a
-repeat. It now names the `JsonValueKind` and the value. **Check the next run.** If the warnings
-stop, it was the type. If they continue, the log now says which of the three it is.
+**Confirmed, 2026-08-31. The hypothesis was right and this is closed.** Over the seven days
+since the fix the ledger records **34 assessment calls, 264 requested, 264 returned, 0
+discarded** - including four consecutive nightly sweeps at the full budget of forty. Before the
+fix, five of nine batches were lost in a single night. Nothing has been discarded since, and the
+warning that would have named a `JsonValueKind` has not fired once.
+
+The diagnostic added alongside it stays: if this ever recurs the log now names the kind and the
+value, so the next reader does not have to re-derive which of the three faults it is.
 
 The range and duplicate checks are untouched and now pinned by tests. Accepting `"3"` as 3 is
 parsing; clamping an out-of-range index would be guessing, and is still refused.
@@ -290,14 +306,31 @@ PDF on demand, and **refuses to generate without an existing match** — the gap
 writer is told it must not claim. Until a profile existed there was nothing to run it against,
 so this path has never been exercised outside its unit tests.
 
-It is now unblocked, it is the most demonstrable thing in the system for a portfolio repository,
-and one call would tell you whether it works. It is also the only consumer of the `writing`
-deployment, which is the one place a missing registration shows up as CVs quietly written by the
-cheap model — `AiRegistrationTests` asserts both resolve, but nothing has exercised it live.
+**Run, and it works. Verified 2026-08-31 against the call made on 2026-08-29.**
 
-Cheapest interesting thing available.
+- The ledger carries one `application-writing` record: **deployment `writing`**, Succeeded, 1 of 1,
+  26.6s, 2,126 in / 3,017 out / 1,664 reasoning tokens. That deployment name is the important
+  half - it is the one place a missing registration would show up as a CV quietly written by the
+  cheap model, and Semantic Kernel would have fallen back silently rather than thrown.
+- One document exists, revision 1, against posting 379.
+- **Both PDFs render**: `cv.pdf` 49,057 bytes and `cover-letter.pdf` 18,717 bytes, both valid
+  `%PDF-1.7` with `application/pdf`. That exercises `MarkdownPdfRenderer`'s AST walk and
+  `EmbeddedFontResolver` in the Linux container, which is where PDFsharp's platform-independent
+  build throws on its first call if no resolver is registered - the failure this design was
+  chosen to avoid, never previously seen not to happen.
+
+**What is left here is a judgement, not a verification.** Whether the CV is any good, and whether
+the writer respected the gap list rather than claiming skills the profile does not show, is a
+question for the person whose CV it is. The machinery is proven; the output is not reviewed.
 
 ### 1.5 Extraction coverage
+
+**The figures below are from 2026-08-28 and are stale.** The corpus has grown - the embedding
+pass counts 4,668 postings carrying a description within the 45-day window against the 4,078 here
+- and the ledger records **1,171 documents extracted in the last seven days alone**. Both the
+numerator and the denominator have moved, so recompute before acting on any of it. There is no
+endpoint for this: it wants a query against `PostingConcepts` grouped by posting, which means a
+temporary SQL firewall rule that has to be removed afterwards.
 
 92.6% of the corpus (3,775 of 4,078 postings) carries at least one model assertion. The 0.490
 figure an earlier revision called the graded share is the share of *assertions* that are
