@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "notes": [
     "The concept key is the identity; the label is an attribute. Renaming a label is an",
     "edit, renaming a key is a data migration.",
@@ -2838,6 +2838,384 @@
       ],
       "broader": [
         "type.concept"
+      ]
+    },
+    {
+      "key": "skill.claude-code",
+      "kind": "skill",
+      "label": "Claude Code",
+      "aliases": [
+        "claude-code"
+      ],
+      "broader": [
+        "type.tool",
+        "area.software-development"
+      ],
+      "related": [
+        "skill.cursor",
+        "skill.github-copilot",
+        "skill.codex"
+      ]
+    },
+    {
+      "key": "skill.cursor",
+      "kind": "skill",
+      "label": "Cursor",
+      "matchLabel": false,
+      "aliases": [
+        "cursor ide",
+        "cursor editor"
+      ],
+      "ambiguous": [
+        "cursor"
+      ],
+      "broader": [
+        "type.tool",
+        "area.software-development"
+      ],
+      "related": [
+        "skill.claude-code",
+        "skill.github-copilot"
+      ]
+    },
+    {
+      "key": "skill.github-copilot",
+      "kind": "skill",
+      "label": "GitHub Copilot",
+      "ambiguous": [
+        "copilot"
+      ],
+      "broader": [
+        "type.tool",
+        "area.software-development"
+      ],
+      "related": [
+        "skill.claude-code",
+        "skill.cursor"
+      ]
+    },
+    {
+      "key": "skill.codex",
+      "kind": "skill",
+      "label": "Codex",
+      "requiresCapital": true,
+      "broader": [
+        "type.tool",
+        "area.software-development"
+      ],
+      "related": [
+        "skill.claude-code",
+        "skill.cursor"
+      ]
+    },
+    {
+      "key": "skill.rag",
+      "kind": "skill",
+      "label": "RAG",
+      "requiresCapital": true,
+      "aliases": [
+        "retrieval-augmented generation",
+        "retrieval augmented generation"
+      ],
+      "broader": [
+        "type.concept",
+        "area.ml"
+      ],
+      "implies": [
+        "skill.llms"
+      ],
+      "related": [
+        "skill.vector-databases"
+      ]
+    },
+    {
+      "key": "skill.mcp",
+      "kind": "skill",
+      "label": "MCP",
+      "requiresCapital": true,
+      "aliases": [
+        "model context protocol"
+      ],
+      "broader": [
+        "type.concept",
+        "area.ml"
+      ],
+      "implies": [
+        "skill.llms"
+      ]
+    },
+    {
+      "key": "skill.prompt-engineering",
+      "kind": "skill",
+      "label": "Prompt Engineering",
+      "aliases": [
+        "prompt-engineering",
+        "prompting"
+      ],
+      "broader": [
+        "type.practice",
+        "area.ml"
+      ],
+      "implies": [
+        "skill.llms"
+      ]
+    },
+    {
+      "key": "skill.langgraph",
+      "kind": "skill",
+      "label": "LangGraph",
+      "broader": [
+        "type.framework",
+        "area.ml"
+      ],
+      "implies": [
+        "skill.python"
+      ],
+      "related": [
+        "skill.langchain"
+      ]
+    },
+    {
+      "key": "skill.llamaindex",
+      "kind": "skill",
+      "label": "LlamaIndex",
+      "aliases": [
+        "llama index"
+      ],
+      "broader": [
+        "type.framework",
+        "area.ml"
+      ],
+      "implies": [
+        "skill.python"
+      ],
+      "related": [
+        "skill.langchain"
+      ]
+    },
+    {
+      "key": "skill.vector-databases",
+      "kind": "skill",
+      "label": "Vector Databases",
+      "aliases": [
+        "vector database",
+        "vector db",
+        "vector store",
+        "vector search"
+      ],
+      "broader": [
+        "type.database",
+        "area.ml",
+        "area.data"
+      ],
+      "related": [
+        "skill.rag"
+      ]
+    },
+    {
+      "key": "skill.anthropic",
+      "kind": "skill",
+      "label": "Anthropic",
+      "aliases": [
+        "claude api",
+        "claude models"
+      ],
+      "ambiguous": [
+        "claude"
+      ],
+      "broader": [
+        "type.platform",
+        "area.ml"
+      ],
+      "related": [
+        "skill.openai"
+      ]
+    },
+    {
+      "key": "skill.openai",
+      "kind": "skill",
+      "label": "OpenAI",
+      "aliases": [
+        "open ai",
+        "chatgpt",
+        "gpt-4",
+        "gpt-5"
+      ],
+      "broader": [
+        "type.platform",
+        "area.ml"
+      ],
+      "related": [
+        "skill.anthropic"
+      ]
+    },
+    {
+      "key": "skill.cuda",
+      "kind": "skill",
+      "label": "CUDA",
+      "broader": [
+        "type.platform",
+        "area.ml"
+      ],
+      "related": [
+        "skill.pytorch"
+      ]
+    },
+    {
+      "key": "skill.jax",
+      "kind": "skill",
+      "label": "JAX",
+      "requiresCapital": true,
+      "broader": [
+        "type.framework",
+        "area.ml"
+      ],
+      "implies": [
+        "skill.python"
+      ],
+      "related": [
+        "skill.pytorch",
+        "skill.tensorflow"
+      ]
+    },
+    {
+      "key": "skill.html",
+      "kind": "skill",
+      "label": "HTML",
+      "aliases": [
+        "html5"
+      ],
+      "broader": [
+        "type.language",
+        "area.frontend"
+      ],
+      "related": [
+        "skill.css"
+      ]
+    },
+    {
+      "key": "skill.css",
+      "kind": "skill",
+      "label": "CSS",
+      "aliases": [
+        "css3"
+      ],
+      "broader": [
+        "type.language",
+        "area.frontend"
+      ],
+      "related": [
+        "skill.html"
+      ]
+    },
+    {
+      "key": "skill.nosql",
+      "kind": "skill",
+      "label": "NoSQL",
+      "aliases": [
+        "no-sql"
+      ],
+      "broader": [
+        "type.database",
+        "area.data",
+        "area.backend"
+      ],
+      "related": [
+        "skill.sql",
+        "skill.mongodb"
+      ]
+    },
+    {
+      "key": "skill.android",
+      "kind": "skill",
+      "label": "Android",
+      "broader": [
+        "type.platform",
+        "area.mobile"
+      ],
+      "related": [
+        "skill.kotlin"
+      ]
+    },
+    {
+      "key": "skill.s3",
+      "kind": "skill",
+      "label": "S3",
+      "aliases": [
+        "amazon s3"
+      ],
+      "broader": [
+        "type.platform",
+        "area.cloud",
+        "area.data"
+      ],
+      "implies": [
+        "skill.aws"
+      ]
+    },
+    {
+      "key": "skill.ecs",
+      "kind": "skill",
+      "label": "ECS",
+      "requiresCapital": true,
+      "aliases": [
+        "elastic container service"
+      ],
+      "broader": [
+        "type.platform",
+        "area.cloud",
+        "area.devops"
+      ],
+      "implies": [
+        "skill.aws",
+        "skill.containers"
+      ]
+    },
+    {
+      "key": "skill.iam",
+      "kind": "skill",
+      "label": "IAM",
+      "requiresCapital": true,
+      "aliases": [
+        "identity and access management"
+      ],
+      "broader": [
+        "type.concept",
+        "area.security",
+        "area.cloud"
+      ]
+    },
+    {
+      "key": "skill.salesforce",
+      "kind": "skill",
+      "label": "Salesforce",
+      "broader": [
+        "type.platform",
+        "area.software-development"
+      ]
+    },
+    {
+      "key": "skill.servicenow",
+      "kind": "skill",
+      "label": "ServiceNow",
+      "broader": [
+        "type.platform",
+        "area.infrastructure"
+      ]
+    },
+    {
+      "key": "skill.power-automate",
+      "kind": "skill",
+      "label": "Power Automate",
+      "aliases": [
+        "power-automate"
+      ],
+      "broader": [
+        "type.tool",
+        "area.software-development"
+      ],
+      "related": [
+        "skill.power-bi"
       ]
     }
   ]

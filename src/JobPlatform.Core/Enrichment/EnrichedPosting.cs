@@ -29,6 +29,11 @@ public sealed record EnrichedPosting
     /// it in its own skills field still does, which is the whole point of the flag.
     /// 5: ".NET", "ASP.NET" and "Node.js" survive tokenisation, so RoleFamily reads the titles
     /// that name them instead of answering Unknown.
+    /// 6: twenty-four concepts added from the mention log - the AI-engineering cluster the
+    /// corpus is full of and the matcher could not see, plus HTML, CSS, NoSQL, S3, ECS, IAM and
+    /// the rest. Every one of them was chosen from a measured count of postings naming the form,
+    /// not from a guess about what a board might say: Claude Code 248, RAG 155, Cursor 136,
+    /// MCP 117, LangGraph 111, GitHub Copilot 101. Read `dbadmin coverage` for the full list.
     ///
     /// <b>A change to <c>concepts.json</c> is a change to what the classifiers produce, so it
     /// belongs here too.</b> The vocabulary carries its own version, but nothing reads that when
@@ -38,7 +43,7 @@ public sealed record EnrichedPosting
     /// stale so a reprocess, or simply the next day the posting is re-scraped, rebuilds its
     /// assertions.
     /// </remarks>
-    public const int CurrentVersion = 5;
+    public const int CurrentVersion = 6;
 
     public required JobPosting Posting { get; init; }
 

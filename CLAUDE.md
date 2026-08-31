@@ -175,10 +175,33 @@ worked around.
   the vocabulary shipped in the build; a schema that has moved without them silently stops
   recording assertions for anything new. `deploy.yml` runs it in the same job as `migrate`,
   and the ingest logs a warning naming the command when it notices.
+- **Read the mention log with `dbadmin coverage` before adding vocabulary, and add from it.**
+  It is the growth mechanism and it had no reader until 2026-08-31; the first read said the
+  vocabulary was missing the entire AI-engineering cluster the corpus is full of - Claude Code in
+  248 postings, RAG 155, Cursor 136, MCP 117, LangGraph 111 - none of which the matcher could see.
+  Rank by how many postings name a form, not by total occurrences: one advert repeating a word
+  twenty times is one employer's habit, twenty adverts saying it once is a gap. And add nothing
+  for symmetry - iOS is absent because Android appeared in the log and iOS did not.
 - **A surface form that cannot be resolved is recorded, never dropped.** `PostingMentions`
   exists because the previous vocabulary handled ambiguous names — Go, R, C, Julia — by
   refusing to match them, which meant the data was wrong with no way to find out by how much.
   It is also where new vocabulary comes from: the most frequent unresolved forms each month.
+- **`PostingExtractions.PayloadJson` is why a parser change is free, and why you must not bump
+  the extractor version for one.** The stored answer means re-reading the corpus costs a query;
+  re-asking it costs about 10 million tokens at the measured 1,700 per document over 5,822
+  postings. `DocumentExtraction.CurrentVersion` means "the stored answer is stale and must be
+  asked for again" - a change to how an answer is *read* does not make it stale. Bumping it for a
+  parser or vocabulary change marks the whole corpus for re-extraction and leaves that bill for
+  whoever next runs the backfill, to buy nothing. Use `POST /api/reparse-extractions` instead;
+  it is explicit, idempotent and resumable from the `nextPostingId` it returns.
+- **The model's `unknownSkills` list is resolved through the graph before it becomes a mention.**
+  The prompt sends `key = label` and no aliases, so a model reading "generative AI" sees only
+  `skill.llms = LLMs` and reports it unknown - and that list used to be recorded verbatim with
+  nothing ever checking. Measured: "AI" in 89 postings, "machine learning" in 52, "generative AI"
+  in 43, every one an alias the resolver already knew. Resolving here rather than shipping the
+  aliases in the prompt is both cheaper - the vocabulary precedes every extraction call - and
+  safer, because it inherits the ambiguity refusal: Go, C, R and Claude stay unresolved because
+  the graph refuses them, not because this code remembered to.
 - **Never let the model invent a concept key.** `KernelDocumentExtractor` re-checks every key
   against the graph and demotes anything unknown to a mention. A hallucinated key is
   indistinguishable from a real one in SQL and would quietly split a concept in two.

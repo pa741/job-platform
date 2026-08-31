@@ -174,12 +174,54 @@ internal static class ExtractionPrompt
         {
             foreach (var item in unknown.EnumerateArray())
             {
-                if (item.ValueKind == JsonValueKind.String
-                    && item.GetString() is { Length: > 0 } surfaceForm)
+                if (item.ValueKind != JsonValueKind.String
+                    || item.GetString() is not { Length: > 0 } surfaceForm)
                 {
-                    mentions.Add(new UnresolvedMention(
-                        Truncate(surfaceForm, 120)!, MentionReason.UnknownModelSkill));
+                    continue;
                 }
+
+                // Ask the graph before believing the model. The prompt sends key = label and no
+                // aliases, so a model reading "generative AI" sees only `skill.llms = LLMs` and
+                // quite reasonably reports it as unknown - and this list was previously recorded
+                // verbatim without anything ever checking. Measured on 2026-08-31: "AI" 89
+                // postings, "machine learning" 52 and "generative AI" 43, every one of them an
+                // alias the resolver already knew.
+                //
+                // Resolving here rather than sending the aliases in the prompt is the cheaper and
+                // the more honest fix. The vocabulary is several thousand tokens before aliases
+                // and precedes every extraction call, so shipping them would be paid for on every
+                // document forever - and it would ask the model to redo work a lookup does
+                // exactly. It also inherits the ambiguity refusal for free: Go, C, R and Claude
+                // stay unresolved, because the graph refuses them, not because this code
+                // remembered to.
+                //
+                // fromStructuredField, because a model naming a technology is a deliberate act
+                // much closer to a board's curated skills field than to a regex hit in prose -
+                // and that flag is what lets a tagOnly domain like area.ml resolve at all.
+                if (graph.TryResolve(surfaceForm, out var resolved, fromStructuredField: true))
+                {
+                    if (seen.Add(resolved.Key))
+                    {
+                        concepts.Add(new ConceptAssertion(
+                            resolved.Key,
+                            AssertionSource.Model,
+                            // The unknown list carries no polarity, and inventing one would put a
+                            // number on something nobody measured. Unspecified is weighted as
+                            // preferred by the scorer, which is the honest reading of "the model
+                            // saw this technology and did not say how hard it was asked for".
+                            AssertionPolarity.Unspecified,
+                            YearsMin: null,
+                            YearsMax: null,
+                            // The form as the model wrote it, so a reader can see why this
+                            // assertion exists and that it did not come from a key.
+                            Truncate(surfaceForm, 120)));
+                    }
+
+                    continue;
+                }
+
+                mentions.Add(new UnresolvedMention(
+                    Truncate(surfaceForm, 120)!, MentionReason.UnknownModelSkill));
             }
         }
 
