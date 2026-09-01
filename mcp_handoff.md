@@ -301,24 +301,43 @@ Worth stating, because each will look like an omission to whoever reads the tool
 
 ## 4. How a client connects, and how to verify it
 
-**Question 5.1 is answered for Claude Code, and the answer was already three-quarters inside this
-repository.** Entra supports no Dynamic Client Registration, so pre-registration is the only
+**Question 5.1 is answered for Claude Code, and the answer was already three-quarters inside
+this repository.** Entra supports no Dynamic Client Registration, so pre-registration is the only
 official route - and `scripts/setup-api-app.ps1:106-123` already writes
 `preAuthorizedApplications` for the Azure CLI's fixed first-party app id against the `Jobs.Read`
-scope. So a token from the CLI is a valid token for this API, and no OAuth code is needed at all:
+scope. So a token minted by the CLI is a valid token for this API, and **no OAuth code is needed
+at all.**
 
-```bash
-# the appId is printed by scripts/setup-api-app.ps1
-export JOB_PLATFORM_TOKEN=$(az account get-access-token \
-  --scope "api://<appId>/Jobs.Read" --query accessToken -o tsv)
+**Use `headersHelper`, not a static header.** Claude Code runs the helper fresh on every
+connection with no caching, so it mints a new token each time and the hourly expiry stops being a
+problem. A static `--header` works and is one line, but the token is then fixed for the life of
+the process and dies after an hour.
 
-claude mcp add --transport http job-platform https://<api-fqdn>/api/v1/mcp \
-  --header "Authorization: Bearer \${JOB_PLATFORM_TOKEN}"
+The Azure CLI can emit the header object directly - no wrapper script, nothing written to disk:
+
+```jsonc
+// ~/.claude.json, under "mcpServers". User scope, not project: a .mcp.json is
+// version-controlled and this repository is public, so the tenant's client id would be
+// committed - which the hygiene rules forbid.
+{
+  "job-platform": {
+    "type": "http",
+    "url": "https://<api-fqdn>/api/v1/mcp",
+    "headersHelper": "az account get-access-token --scope api://<api-client-id>/Jobs.Read --query \"{Authorization: join(' ', ['Bearer', accessToken])}\" -o json"
+  }
+}
 ```
 
-The `${VAR}` form is expanded at request time, so no token is written into a config file.
-**The token expires hourly and must be re-minted** - the cost of taking the pre-authorised path,
-and the right trade while the surface is read-only.
+`az account get-access-token` returns in well under a second against the helper's 10-second
+timeout, and reuses the refresh token from `az login` - so the only manual step is being logged
+in, and the credential never touches a config file.
+
+**The client id is not a secret** - it is in the container app's environment and an app
+registration is discoverable by anyone in the tenant - but it is a tenant identifier, so keep it
+out of the repository like every other one.
+
+**If the helper fails, Claude Code reports the connection as failed and does not fall back**, so
+`az account show` is the first thing to check when the server will not connect.
 
 **A browser-based client is the upgrade, and it is more work**: a 401 carrying
 `WWW-Authenticate`, a Protected Resource Metadata document, and that client's fixed app id added
