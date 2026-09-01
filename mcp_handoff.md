@@ -295,7 +295,14 @@ Worth stating, because each will look like an omission to whoever reads the tool
   `FormFieldCatalog` carries no date of birth, nationality, address, salary expectation or
   referee. A form will ask for some of those; a person types them, because a field an agent
   cannot fill is a field an agent cannot get wrong on somebody's behalf.
-- **No deletes.** An append-only log with no eraser is the only version worth auditing.
+- **No deletes on the tool surface or the API.** An append-only log with no eraser is the only
+  version worth auditing, and withdrawing is a `Withdrawn` event.
+  `dbadmin delete-submissions` is the single exception, for rows that never described a real
+  application at all - a test of the write path, a client that misfired. A `Withdrawn` event on
+  one of those asserts something equally untrue, so it is removed rather than annotated.
+  **It is a console command and must not become a tool or a route**: either would be reachable
+  with the same token the agent carries, and an agent that can erase real applications is a
+  worse failure than every one this surface was designed to prevent.
 
 ---
 

@@ -362,8 +362,17 @@ mechanism, and it is derived from the corpus rather than guessed at.
 - **`Type` is the phase; `Stage` is a label inside it.** "Tech round 2" is text on an
   `InterviewScheduled` event, not a member of the enum — the enum is what the dashboard groups by
   and what the fold switches on, and it must not grow every time a company invents a round.
-- **No deletes, anywhere on this table.** Withdrawing is a `Withdrawn` event. An append-only log
-  with no eraser is the only version worth auditing.
+- **No deletes, anywhere on this table, with exactly one operator-only exception.** Withdrawing
+  is a `Withdrawn` event; an append-only log with no eraser is the only version worth auditing.
+  `dbadmin delete-submissions` is the exception and it exists for rows that never described a
+  real application - a test of the write path, a client that misfired. Those are not history to
+  preserve, they are noise that makes the history wrong, and a `Withdrawn` event on them asserts
+  something equally untrue.
+  **It must stay a console command.** An HTTP route would be reachable with the same token the
+  MCP client carries, so a misbehaving agent could erase real applications - which inverts the
+  entire argument for the tool surface being safe to expose. Needing a connection string, a
+  database user and a firewall rule is the point, not friction to be removed. It is a dry run
+  unless `--confirm` is passed, because the ids are typed by a person reading a list.
 - **Both unique indexes are the feature, not an optimisation**, and they went in before the write
   path that needs them: retro-fitting a unique index to a table that already holds duplicates is a
   data migration rather than a schema change.
@@ -1010,6 +1019,12 @@ dotnet run --project tools/JobPlatform.DbAdmin -- migrate "<connection-string>"
 # Project the concept vocabulary into SQL. Idempotent; required after any migration and
 # after any change to concepts.json.
 dotnet run --project tools/JobPlatform.DbAdmin -- seed-concepts "<connection-string>"
+
+# Remove submissions that never described a real application - a test of the write path, a
+# client that misfired. The one eraser in an otherwise append-only pipeline, and deliberately a
+# console command: an HTTP route would be reachable with the token the MCP client carries.
+# Dry run unless --confirm.
+dotnet run --project tools/JobPlatform.DbAdmin -- delete-submissions "<connection-string>" 12 13
 
 # Where applications are actually made, per site: how many postings carry no direct apply link.
 # There is no Easy Apply column anywhere - the missing link is the flag - and freehire is excluded

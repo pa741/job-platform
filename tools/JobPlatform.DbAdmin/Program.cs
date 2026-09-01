@@ -3,6 +3,7 @@ using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Searches;
 using JobPlatform.Data.Cosmos;
 using JobPlatform.Data.Sql;
+using JobPlatform.Data.Sql.Entities;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
@@ -36,6 +37,7 @@ internal static class Program
                   dbadmin status          "<connection-string>"
                   dbadmin coverage        "<connection-string>" [top-mentions]
                   dbadmin apply-links     "<connection-string>" [days]
+                  dbadmin delete-submissions "<connection-string>" <id> [<id>...] [--confirm]
                   dbadmin metrics         "<cosmos-account-endpoint>" [search-term]
 
                 The connection string must authenticate as the server's Entra admin, e.g.
@@ -64,6 +66,15 @@ internal static class Program
                 "apply-links" => await ApplyLinksAsync(
                     connectionString,
                     args.Length >= 3 && int.TryParse(args[2], out var days) ? days : 7),
+                // Dry run unless --confirm. The ids are typed by a person from a list, and
+                // the cost of a typo here is somebody's real application history.
+                "delete-submissions" => await DeleteSubmissionsAsync(
+                    connectionString,
+                    [.. args.Skip(2)
+                        .Where(a => !a.StartsWith("--", StringComparison.Ordinal))
+                        .Select(a => long.TryParse(a, out var id) ? id : -1)
+                        .Where(id => id > 0)],
+                    args.Contains("--confirm", StringComparer.Ordinal)),
                 // Second positional argument is the Cosmos endpoint, not a SQL connection.
                 "metrics" => await MetricsAsync(connectionString, args.Length >= 3 ? args[2] : null),
                 _ => Fail($"Unknown command '{command}'."),
@@ -510,6 +521,102 @@ internal static class Program
             "  a link somebody clicks. A large one reorders section 1 of mcp_handoff.md. A share");
         Console.WriteLine(
             "  near 100% on one site is a broken scraper selector, not a change in the market.");
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Removes submissions by id, with their event logs. <b>The one eraser in the system.</b>
+    /// </summary>
+    /// <remarks>
+    /// <b>Everything else about this pipeline is append-only, and that is not being relaxed.</b>
+    /// There is no delete on the API, none on the agent surface, and none in
+    /// <c>SubmissionRepository</c>; withdrawing an application is a <c>Withdrawn</c> event.
+    /// A log with an eraser in it is not one anybody can trust afterwards.
+    ///
+    /// This exists for one thing the append-only rule cannot address: rows that never described
+    /// a real application at all - a test of the write path, a client that misfired. Those are
+    /// not history to preserve, they are noise that makes the history wrong, and a
+    /// <c>Withdrawn</c> event on them asserts something equally untrue.
+    ///
+    /// <b>It is a console command, deliberately, and must not become anything else.</b> An HTTP
+    /// route on the API would be reachable with the same token the MCP client carries, so a
+    /// misbehaving agent could erase real applications - which inverts the entire argument for
+    /// the tool surface being safe. This needs a connection string, a database user, and a
+    /// firewall rule, so only a person at a terminal can run it.
+    ///
+    /// Dry run unless <c>--confirm</c> is passed. It prints exactly what would go, because the
+    /// ids come from a human reading a list and the cost of a typo is somebody's real history.
+    /// </remarks>
+    private static async Task<int> DeleteSubmissionsAsync(
+        string connectionString, IReadOnlyList<long> ids, bool confirm)
+    {
+        if (ids.Count == 0)
+        {
+            return Fail("delete-submissions needs at least one submission id.");
+        }
+
+        await using var db = new JobsDbContext(Options(connectionString));
+
+        var rows = await db.Submissions
+            .Where(s => ids.Contains(s.Id))
+            .Select(s => new
+            {
+                s.Id,
+                s.PostingId,
+                s.Posting!.Title,
+                s.CreatedAtUtc,
+                Events = s.Events.Count,
+                // Named so the operator can see whose row this is before removing it. The
+                // subject id rather than the name: this tool has no business reading a profile.
+                s.Profile!.SubjectId,
+            })
+            .OrderBy(s => s.Id)
+            .ToListAsync();
+
+        var missing = ids.Where(id => rows.All(r => r.Id != id)).ToList();
+
+        foreach (var id in missing)
+        {
+            Console.WriteLine($"  no submission {id}");
+        }
+
+        if (rows.Count == 0)
+        {
+            Console.WriteLine("Nothing to delete.");
+            return missing.Count == ids.Count ? 1 : 0;
+        }
+
+        Console.WriteLine(confirm ? "Deleting:" : "Would delete (dry run):");
+        Console.WriteLine($"  {"id",6} {"posting",8} {"events",7}  {"created",-20} title");
+
+        foreach (var row in rows)
+        {
+            Console.WriteLine(
+                $"  {row.Id,6} {row.PostingId,8} {row.Events,7}  "
+                + $"{row.CreatedAtUtc:yyyy-MM-dd HH:mm:ss}  {Truncate(row.Title, 46)}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"  subjects affected: {rows.Select(r => r.SubjectId).Distinct().Count()}");
+        Console.WriteLine($"  events removed with them: {rows.Sum(r => r.Events)}");
+
+        if (!confirm)
+        {
+            Console.WriteLine();
+            Console.WriteLine("  Dry run. Re-run with --confirm to delete. Nothing was changed.");
+            return 0;
+        }
+
+        // The events go with the submission: SubmissionEvents cascades from Submissions, so
+        // this cannot leave a log orphaned from the thing it described.
+        db.Submissions.RemoveRange(
+            rows.Select(r => new SubmissionEntity { Id = r.Id }).ToList());
+
+        var deleted = await db.SaveChangesAsync();
+
+        Console.WriteLine();
+        Console.WriteLine($"  Deleted. {deleted} rows removed, submissions and events together.");
 
         return 0;
     }
