@@ -333,6 +333,9 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
             || entity.MinAmount != posting.MinAmount
             || entity.MaxAmount != posting.MaxAmount
             || entity.IsRemote != posting.IsRemote
+            // How a job is applied to is a fact about the job, and it changing - or becoming
+            // knowable where it was not - is worth a re-enrichment rather than a silent update.
+            || entity.OffsiteApply != posting.OffsiteApply
             || entity.DatePosted != posting.DatePosted
             || !string.Equals(entity.JobType, posting.JobType, StringComparison.Ordinal)
             // A repost is a real event about the job, so it counts as a change.
@@ -379,6 +382,7 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
         entity.CompanyIndustry = posting.CompanyIndustry;
         entity.JobUrl = posting.JobUrl;
         entity.JobUrlDirect = posting.JobUrlDirect;
+        entity.OffsiteApply = posting.OffsiteApply;
         entity.CompanyUrl = posting.CompanyUrl;
         entity.Description = posting.Description;
         entity.DescriptionLength = posting.DescriptionLength;

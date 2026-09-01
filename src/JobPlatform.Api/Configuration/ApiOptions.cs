@@ -51,5 +51,17 @@ public sealed class RateLimitOptions
 
     public int ReadsPerMinute { get; set; } = 120;
 
+    /// <summary>
+    /// What one MCP client may spend a minute.
+    /// </summary>
+    /// <remarks>
+    /// An order of magnitude below <see cref="ReadsPerMinute"/>, deliberately. A browser makes a
+    /// burst of calls when a page opens and then stops; an agent can loop. The tools read Azure
+    /// SQL, which is billed on wall-clock time online against a monthly grant one daily ingest
+    /// half-consumes, so a client polling every few seconds would exhaust it and pause the
+    /// database for everything else. Asking "what changed" once a day is what this is sized for.
+    /// </remarks>
+    public int McpRequestsPerMinute { get; set; } = 20;
+
     public bool Enabled { get; set; } = true;
 }

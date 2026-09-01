@@ -119,3 +119,22 @@ export function ErrorNote({ error, onRetry }: { error: unknown; onRetry?: () => 
     </div>
   );
 }
+
+/**
+ * One labelled form control.
+ *
+ * Lives here rather than beside the form that first needed it: it is the shared shape of every
+ * input in this dashboard, and a second copy is how two pages start looking different for no
+ * decision anybody made.
+ */
+export function Field({ label, hint, children }: {
+  label: string; hint?: string; children: ReactNode;
+}) {
+  return (
+    <label className="field">
+      <span className="field-label">{label}</span>
+      {children}
+      {hint && <span className="field-hint">{hint}</span>}
+    </label>
+  );
+}

@@ -9,6 +9,16 @@ public static class RateLimitSetup
     public const string ReadPolicy = "reads";
 
     /// <summary>
+    /// The agent surface's own budget, kept apart from the dashboard's.
+    /// </summary>
+    /// <remarks>
+    /// <b>Not <see cref="ReadPolicy"/>, and that is the point.</b> A client polls differently
+    /// from a browser and must not be able to exhaust the budget the dashboard shares - the
+    /// dashboard is what a person uses to find out that something is wrong.
+    /// </remarks>
+    public const string McpPolicy = "mcp";
+
+    /// <summary>
     /// Per-caller rate limits.
     /// </summary>
     /// <remarks>
@@ -36,6 +46,18 @@ public static class RateLimitSetup
                     _ => new FixedWindowRateLimiterOptions
                     {
                         PermitLimit = options.ReadsPerMinute,
+                        Window = TimeSpan.FromMinutes(1),
+                    }));
+
+            // A separate partition as well as a separate limit: keyed on the same principal, so
+            // one person's agent and one person's browser each get their own budget rather than
+            // competing for one.
+            limiter.AddPolicy(McpPolicy, context =>
+                RateLimitPartition.GetFixedWindowLimiter(
+                    $"mcp:{PartitionKey(context)}",
+                    _ => new FixedWindowRateLimiterOptions
+                    {
+                        PermitLimit = options.McpRequestsPerMinute,
                         Window = TimeSpan.FromMinutes(1),
                     }));
         });

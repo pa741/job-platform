@@ -18,6 +18,16 @@ public sealed class CosmosOptions
     /// </summary>
     public string AiCallsContainerName { get; set; } = "aiCalls";
 
+    /// <summary>
+    /// What the agent surface disclosed of the candidate's own data.
+    /// </summary>
+    /// <remarks>
+    /// Separate from the ledger, though the two are the same shape: they answer different
+    /// questions - "did the nightly passes lose anything" against "what of mine has left the
+    /// system" - and their retention is not one decision.
+    /// </remarks>
+    public string DisclosuresContainerName { get; set; } = "mcpDisclosures";
+
     /// <summary>Client id of the user-assigned managed identity. Empty locally, where
     /// <c>DefaultAzureCredential</c> falls back to the signed-in developer.</summary>
     public string? ManagedIdentityClientId { get; set; }

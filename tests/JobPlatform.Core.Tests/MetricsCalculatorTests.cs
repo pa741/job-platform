@@ -1,3 +1,4 @@
+using System.Text;
 using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Metrics;
 using JobPlatform.Core.Parsing;
@@ -277,6 +278,84 @@ public sealed class MetricsCalculatorTests
 
         Assert.Equal(0.0, digest.FieldFillRates["min_amount"]);
         Assert.Equal(1.0, digest.FieldFillRates["site"]);
+    }
+
+    /// <summary>
+    /// The apply-link split, per site, which is the only place a broken selector shows up.
+    /// </summary>
+    /// <remarks>
+    /// Asserted against counts derived from the fixture rather than read back out of the
+    /// calculator, so this is a check on the arithmetic rather than a restatement of it. The
+    /// per-site shape is the point: a whole-run rate would average boards that behave
+    /// differently and would never reach the boundary the digest warns on.
+    /// </remarks>
+    [Fact]
+    public void Apply_links_are_counted_per_site()
+    {
+        var links = Digest().ApplyLinks;
+
+        var linkedin = Assert.Single(links, l => l.Site == "linkedin");
+        Assert.Equal(SampleCsv.LinkedInPostings, linkedin.Postings);
+        Assert.Equal(SampleCsv.LinkedInBoardHosted, linkedin.BoardHosted);
+
+        var indeed = Assert.Single(links, l => l.Site == "indeed");
+        Assert.Equal(SampleCsv.IndeedPostings, indeed.Postings);
+        Assert.Equal(SampleCsv.IndeedBoardHosted, indeed.BoardHosted);
+
+        // Every parsed posting is accounted for on exactly one site, which is what stops a
+        // site being silently dropped from the breakdown the warning reads.
+        Assert.Equal(SampleCsv.ParsedPostings, links.Sum(l => l.Postings));
+
+        // Largest first, so two runs over the same sites produce the same document.
+        Assert.Equal(links.OrderByDescending(l => l.Postings).Select(l => l.Site), links.Select(l => l.Site));
+    }
+
+    /// <summary>
+    /// A share, not a count, because that is what the digest's warning is keyed on.
+    /// </summary>
+    /// <remarks>
+    /// Zero postings has to answer zero rather than throw. An empty site cannot occur in a run
+    /// the parser produced, but the record is public and the digest is read back out of Cosmos
+    /// by code that did not build it.
+    /// </remarks>
+    [Fact]
+    public void Board_hosted_share_is_derived_and_survives_an_empty_site()
+    {
+        Assert.Equal(0.5, new ApplyLinkCount("linkedin", 20, 10).BoardHostedShare);
+        Assert.Equal(0, new ApplyLinkCount("linkedin", 0, 0).BoardHostedShare);
+    }
+
+    /// <summary>
+    /// The same job on two boards, written the way two boards actually write it.
+    /// </summary>
+    /// <remarks>
+    /// <b>The shared fixture cannot catch this and that is why the bug survived.</b> Its one
+    /// cross-board duplicate carries an identical location string on both rows, so the old
+    /// metric - which hashed the raw location - matched it and the assertion passed. Real boards
+    /// are not that tidy: "London, England, United Kingdom" against "London, UK" is the ordinary
+    /// case, and against thirty days of the live corpus the old key matched across boards
+    /// <b>zero</b> times in 5,268 postings.
+    ///
+    /// Inline rather than in the fixture, because adding a row there moves every count the other
+    /// assertions are built on.
+    /// </remarks>
+    [Fact]
+    public void The_same_job_on_two_boards_counts_once_even_when_they_write_the_location_differently()
+    {
+        const string csv = """
+            id,site,title,company,location,job_url
+            li-1,linkedin,Senior Backend Engineer,Northwind Labs,"London, England, United Kingdom",https://li/1
+            in-1,indeed,Senior Backend Engineer,Northwind Labs,"London, UK",https://in/1
+            in-2,indeed,Data Engineer,Contoso,"Manchester, UK",https://in/2
+            """;
+
+        var parsed = new JobCsvParser().Parse(new MemoryStream(Encoding.UTF8.GetBytes(csv)));
+        var context = BlobNameParser.Parse(BlobPath, DateTimeOffset.UnixEpoch);
+
+        var digest = new MetricsCalculator().Calculate(context, parsed, UpsertOutcome.Empty, 0);
+
+        Assert.Equal(3, digest.Counts.Parsed);
+        Assert.Equal(1, digest.Counts.CrossSiteDuplicates);
     }
 
     [Fact]

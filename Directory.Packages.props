@@ -83,6 +83,14 @@
     <PackageVersion Include="OpenAI" Version="2.13.0" />
   </ItemGroup>
 
+  <ItemGroup Label="MCP">
+    <!-- The agent surface. The official C# SDK's ASP.NET Core host: streamable HTTP, stateless
+         by default in the 2.x line, which is what suits a container that scales to zero - there
+         are no sticky sessions to keep. Referenced by JobPlatform.Api alone; nothing in Core,
+         Data or Ingestion knows this exists. -->
+    <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
+  </ItemGroup>
+
   <ItemGroup Label="Documents">
     <!-- BSD-2-Clause. The model writes markdown; this parses it into an AST the renderer
          walks. Nothing here ever runs on model output as HTML. -->

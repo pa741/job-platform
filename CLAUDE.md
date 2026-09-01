@@ -9,9 +9,11 @@ The Azure side of a job-market data pipeline. A separate repository
 and uploads timestamped CSVs to Blob Storage. This repository ingests them: postings into
 Azure SQL, metrics into Cosmos DB, triggered by Event Grid on blob creation.
 
-`../model.md` holds the target architecture for the whole system. Ingestion, Data, the API,
-the Frontend, the candidate profile, matching and generated applications are built; Realtime
-is not.
+`../model.md` holds the target architecture for the whole system, and it is binding: amend it
+before building something it does not name, not after. Every row is built - Ingestion, Data, the
+API, the Frontend, the candidate profile, matching, generated applications, Realtime, Submissions
+and the agent surface - with the agent surface read-only so far. Its write tools and questions
+channel are the open work; see [`mcp_handoff.md`](mcp_handoff.md).
 
 ## Public repo hygiene
 
@@ -118,8 +120,22 @@ worked around.
   `ToDocument()`, which is the exact text the extractor reads and the hash is taken over.
 - `src/JobPlatform.Data/Sql/CandidateProfileRepository.cs` — every profile read and write.
   Takes a subject id and never a profile id; that is the authorisation boundary.
+- `src/JobPlatform.Core/Searches/ScraperConfigDocument.cs` — the contract with the scraper repo,
+  and **the only place in the system that writes a jobspy parameter name**. Read the remarks on
+  `ToParams` before adding a field to a search.
+- `src/JobPlatform.Data/Sql/ScraperSearchRepository.cs` — every search read and write. Takes a
+  subject id like the profile repository, with one named exception for the publisher.
 - `src/JobPlatform.Ingestion/Functions/MatchSweepFunction.cs` — the nightly pass. Scores
   everything, then spends the model budget on what clears the threshold.
+- `src/JobPlatform.Core/Submissions/SubmissionState.cs` — the fold from an event log to a
+  status. Pure and Azure-free like `MatchScorer`, which is what makes its answers assertable
+  exactly. There is no status column anywhere; read the remarks before adding one.
+- `src/JobPlatform.Core/Submissions/FormFieldCatalog.cs` — the only profile data the agent
+  surface will ever answer, one field at a time. What is absent from it is as considered as what
+  is present.
+- `src/JobPlatform.Api/Features/Mcp/SubmissionTools.cs` — the whole agent surface. Four read
+  tools; the `[Description]` on each is the interface a model reads, so it is documentation that
+  changes behaviour.
 - `src/JobPlatform.Documents/MarkdownPdfRenderer.cs` — model output to PDF, through a parsed
   AST and a fixed node mapping. No HTML step exists.
 
@@ -260,6 +276,49 @@ worked around.
 - Metrics changes belong in `MetricsCalculator` with a matching assertion in
   `MetricsCalculatorTests`, against the synthetic fixture's known-by-construction counts.
 
+### Scraper searches
+
+- **The slug is the identity and the name is an attribute**, exactly as `skill.kubernetes` is the
+  identity and "Kubernetes" the label. A search's slug becomes the blob name the scraper writes,
+  which `BlobNameParser` reads back, which keys `JobPostingSearchTerms`, which partitions the
+  Cosmos metrics and names a curated Parquet partition. Renaming a search is an edit;
+  `ScraperSearchRepository.UpdateAsync` will not move a slug, and nothing should teach it to.
+- **`SearchSlug.Slugify` has to agree with `slugify` in the scraper repo's `scrape_jobs.py`,
+  character for character.** The scraper still slugifies on its fallback path, so a name
+  producing two different slugs would attach one search's postings to two search terms with
+  nothing reporting it. That is why the non-ASCII cases are pinned and why nothing here
+  transliterates: agreeing beats being pretty.
+- **The slug namespace is global; a name is unique only per owner.** Two people may both call a
+  search "London backend" and `SearchSlug.Unique` suffixes the second slug. Refusing the save
+  instead would tell one person that another's search exists under that name.
+- **`ScraperConfigDocument.ToParams` is the only code that writes a jobspy parameter name, and
+  that is the security property of the whole feature.** The scraper calls
+  `scrape_jobs(**params)`; a second writer is a second route for an unvalidated key to reach a
+  call whose keyword arguments include `proxies` and `freehire_api_key`. The request contract is
+  typed fields and carries no parameter map — keep it that way.
+- **An option nobody chose is omitted, never sent as null.** The scraper merges the published
+  params over its own `defaults:`, where its operational settings live, so a null would blank one
+  of them. "Did not choose" and "chose nothing" have to be different bytes on the wire.
+- **A failed publish must not fail the save.** `ScraperConfigPublisher` swallows and logs; the
+  response carries the timestamp, the page shows it, and `POST /searches/publish` is the retry.
+  Losing somebody's typing to a role assignment that has not propagated is the worse outcome, and
+  a stale blob is recoverable where typing is not.
+- **The publish is a blob and never an endpoint the scraper calls.** The NAS has no managed
+  identity, so an API would put a client secret or a function key on it — the thing this
+  architecture does not have. If a change here seems to need the scraper to authenticate against
+  the API, that is the signal the design is being worked around.
+- **Nothing under `/searches` may join a client's bootstrap sequence.** It reads SQL, and
+  `/search-terms` is served from Cosmos precisely so opening the dashboard cannot wait on a
+  database that pauses when idle. The Searches page is opened by a person and may wait; the
+  picker every page depends on may not.
+- **Searches are owned; the corpus is not.** `OwnerSubjectId` decides who may edit a search, not
+  who may read the postings it found — `JobPostingSearchTerms` already attributes one advert to
+  every search that turned it up, and an advert is public text. Scoping the browse experience
+  later is a filter over that column, which is why it exists now.
+- **There is no coalescing and no cap.** Two users configuring the same search scrape it twice,
+  and a run costs the sum of every enabled search across every user. That is a deliberate choice,
+  not an oversight; `ScraperSearchValidation` bounds one search and nothing bounds the total.
+
 ### The concept vocabulary
 
 Curated in-house, deliberately. The alternatives were checked rather than assumed:
@@ -281,6 +340,114 @@ Curated in-house, deliberately. The alternatives were checked rather than assume
 At 222 concepts in a slow-moving domain, the "taxonomies go stale" argument that justifies
 Lightcast's model at 34,000 skills does not apply. The unresolved-mention log is the growth
 mechanism, and it is derived from the corpus rather than guessed at.
+
+### Submissions and the agent surface
+
+- **A submission, not an application.** `ApplicationDocuments` already means generated drafts and
+  `Candidacy` is taken by `CandidacyAssessment`. Reusing either would put two meanings on one word
+  in a system whose matching code reads both.
+- **The event log is the record and the status is a fold over it.** Not a mutable `Status` column.
+  These events are written by a client reading recruiter email and deciding what a message means,
+  and that client will sometimes be wrong: a stored status tells you it is wrong *now*, an event
+  log tells you what it saw, when, and from where. That is the lesson the AI ledger taught on the
+  other side of the same problem.
+- **`Stale` is derived, never stored.** Storing it means a timer to write it, a race between that
+  timer and a real event, and a row that is wrong between the two. A closed application is never
+  stale — an employer that stopped replying has gone quiet; one that said no has not.
+- **A terminal event wins outright, and otherwise the furthest-advanced phase wins — never the
+  most recent.** Both rules exist because the obvious implementation is wrong in a specific way:
+  events arrive late and out of order from an inbox reader, so a late `Acknowledged` would walk an
+  `OfferReceived` backwards, and an automated "thanks for applying" after a rejection would reopen
+  a dead application. `SubmissionStateTests` asserts both against the naive versions.
+- **`Type` is the phase; `Stage` is a label inside it.** "Tech round 2" is text on an
+  `InterviewScheduled` event, not a member of the enum — the enum is what the dashboard groups by
+  and what the fold switches on, and it must not grow every time a company invents a round.
+- **No deletes, anywhere on this table.** Withdrawing is a `Withdrawn` event. An append-only log
+  with no eraser is the only version worth auditing.
+- **Both unique indexes are the feature, not an optimisation**, and they went in before the write
+  path that needs them: retro-fitting a unique index to a table that already holds duplicates is a
+  data migration rather than a schema change.
+- **`SubmissionChannel` reads `JobPostings.OffsiteApply` first and the apply URL only as a
+  fallback, and that ordering is a fix rather than a preference.** The design originally had only
+  the URL and read its absence on a board posting as "the board hosts it". Measured on 2026-09-01
+  that was wrong for the whole corpus: all 4,470 LinkedIn postings of the previous week carried no
+  direct link, and the job detail page had been fetched for 98.4% of them - LinkedIn had stopped
+  publishing apply URLs to signed-out clients entirely, and its guest page now contains no
+  non-LinkedIn URL at all. The fork reads LinkedIn's own offsite markers instead and emits
+  `offsite_apply`, so the route survives where the destination does not.
+- **`OffsiteApply` is three-state and the third state is load-bearing.** Null means nothing was
+  established - the detail page was not read, the board does not say, or the posting predates the
+  column - and it is not the same as `false`, which means the board hosts the application.
+  Collapsing them is the fault the column was added to undo. `Ats` can therefore be true with only
+  the board's own URL to offer, which is correct: the employer takes the application and the
+  posting is where you find out how.
+- **Two nulls that share one representation can often be told apart by a second column, and it is
+  worth looking for one.** "No apply URL" meant either "the board hosts it" or "nobody opened the
+  detail page", documented as indistinguishable. They are not: the description comes off the same
+  page, so a posting with one is a posting the scraper read. `dbadmin apply-links` reports both and
+  names which fault it is; the digest warning uses the same pair. That cost one extra
+  `SUM(CASE WHEN ...)`.
+- **There are two fingerprints and merging them is a regression.** `JobFingerprint.ContentHash`
+  answers "did this posting change", is stored on every row, and gates embedding staleness -
+  `EmbeddingRepository` compares it, so widening it marks the whole embedded corpus stale.
+  `JobFingerprint.CrossBoardKey` answers "is this the same job as that one" and parses the city
+  out of the location first. `CountCrossSiteDuplicates` read ContentHash until 2026-09-01 and
+  therefore reported **zero every run since it was written**: the stored hash folds in the raw
+  location string, and boards write it differently - "London, England, United Kingdom" against
+  "London, UK".
+- **The city is required in `CrossBoardKey`, and that is measured rather than cautious.** Title
+  and employer alone matched 285 postings across boards; adding the city left 211. So 74 of them,
+  better than a quarter, were one employer advertising one title in several cities - and merging
+  those hands somebody the apply link for the wrong city's vacancy, which is worse than no link.
+- **A missing apply link is recovered from the same job on another board, and says so.**
+  `ApplyableRow.ApplyUrlSource` distinguishes `Posting` (published by the board it came from)
+  from `MatchedOnAnotherBoard` (an inference) from `BoardPosting` (none known). Roughly 5% of the
+  links LinkedIn stopped publishing come back this way at no request and no risk. **The
+  provenance is not decoration**: a caller that cannot tell an inference from a published fact
+  has no way to notice when the match was wrong.
+- **The posting's own board outranks a title match.** `OffsiteApply == false` means that board
+  says it hosts the application, and it is talking about this listing rather than one that
+  resembles it - so no link is borrowed for those.
+- **The shortlist's channel filter and its projection are written out twice and must agree.** EF
+  translates one and materialises the other, so a shared helper would have to be an expression
+  tree nobody can read. `The_channel_is_projected_from_the_apply_link_and_filters_before_the_bound`
+  is what holds them together, and it has already caught them diverging once.
+- **A synthetic fixture can be too clean to catch a real bug.** The cross-board duplicate in
+  `jobs-sample.csv` carries an identical location string on both rows, so the broken metric
+  matched it and its assertion passed for as long as the metric was wrong. The test that catches
+  it writes the two locations the way two boards actually write them.
+- **The server records that something was submitted; it never submits.** There is no
+  `submit_application` tool and there must never be one — applying is irreversible and
+  outward-facing, so keeping it outside means no bug here can reach an employer. `McpEndpointTests`
+  asserts the tool surface is *exactly* four names, an equality rather than a superset, so adding
+  one is a red build.
+- **There is no `get_profile` either.** A tool result is transcript content wherever the client
+  runs. `get_form_field` is the substitute: one answer, from `FormFieldCatalog`, logged.
+  `get_submission_pack` is the honest exception — a tailored CV is the profile rewritten in prose
+  — and is logged on the same terms rather than treated as a public-text read.
+- **A disclosure record names what was asked for and never the value.** An audit log holding the
+  data it audits has moved the problem rather than solved it. Cosmos, not SQL, for the reason every
+  dashboard read is; its own container rather than `aiCalls`, because the two answer different
+  questions and their retention is not one decision.
+- **`list_applyable` gates on the model's verdict, not on a score cut, and its threshold is a
+  third constant.** `MatchRanker.FusionFloor` and `MatchSweepFunction.AssessmentThreshold` answer
+  different questions and briefly merging those two was already a mistake; do not merge a third
+  into either. The reason it is the verdict is the finding behind `MatchRanker` — the score is a
+  good filter and a bad final sort.
+- **The MCP surface gets its own rate-limit policy**, not `RateLimitSetup.ReadPolicy`. A client
+  polls differently from a browser and must not exhaust the budget the dashboard shares — and
+  these tools read SQL, which is billed on wall-clock time against a monthly grant.
+- **Read the caller from `RequestContext.JsonRpcRequest.Context.User`, not from
+  `IHttpContextAccessor`.** The SDK populates the principal per message; an `AsyncLocal` may not
+  survive the transport's async boundaries.
+- **No tool takes a profile id.** A tool signature is an easier place to get this wrong than a
+  route, because the argument is named by a model rather than by a router — an unused `profileId`
+  parameter is precisely what a model would helpfully fill in.
+- **Pin an authorization policy as endpoint metadata, not only as a 401.** Written after the
+  behavioural version of that test turned out not to pin what it claimed: every handler also calls
+  `CallerIdentity.TryGetSubjectId`, which answers 401 when the token carries no `oid`, so swapping
+  `AuthenticatedPolicy` for `PublicReadPolicy` left the read cases green. Defence in depth working,
+  and a test measuring the second layer while describing the first.
 
 ### Dashboard (`web/`)
 
@@ -567,6 +734,13 @@ Each of these cost a red CI run; none of them fail locally.
   holding employment history and salary expectations; the three guards keeping it off the list
   endpoint would have to be reproduced to keep it off a socket. `AiFailureNotice` has no field for
   it, so it cannot leak one.
+- **The feed broadcasts, and the next consumer is where that stops being free.** `PublishAsync`
+  sends to every connected client, which is correct for an AI failure - that is a fact about the
+  system - and wrong for anything about a person. `NegotiateAsync` already takes a `subjectId` and
+  passes it through unused, so a per-user send is a small addition rather than a redesign, but it
+  *is* an addition: the questions channel in `mcp_handoff.md` section 1.4 was planned on the
+  assumption that reusing this transport was free, and it is not. Sending one candidate's question
+  down the existing channel would deliver it to every signed-in dashboard.
 - **`MetricsFeed` stays polling, deliberately.** It was built as the seam for exactly this
   conversion, but its data changes once a day when the scraper runs, so a socket there would
   mostly deliver silence — and the honest "polling" label the UI shows would become a lie. A
@@ -814,6 +988,12 @@ dotnet run --project tools/JobPlatform.DbAdmin -- migrate "<connection-string>"
 # Project the concept vocabulary into SQL. Idempotent; required after any migration and
 # after any change to concepts.json.
 dotnet run --project tools/JobPlatform.DbAdmin -- seed-concepts "<connection-string>"
+
+# Where applications are actually made, per site: how many postings carry no direct apply link.
+# There is no Easy Apply column anywhere - the missing link is the flag - and freehire is excluded
+# because its scraper sets the field unconditionally. A site at ~100% board-hosted is a broken
+# scraper selector, not a market that moved.
+dotnet run --project tools/JobPlatform.DbAdmin -- apply-links "<connection-string>" 7
 
 # Full provision (idempotent)
 ./scripts/provision.ps1 -ResourceGroup <rg> -LandingStorageAccount <account>

@@ -652,6 +652,9 @@ namespace JobPlatform.Data.Sql.Migrations
                         .HasPrecision(12, 2)
                         .HasColumnType("decimal(12,2)");
 
+                    b.Property<bool?>("OffsiteApply")
+                        .HasColumnType("bit");
+
                     b.Property<int?>("PostingAgeDays")
                         .HasColumnType("int");
 
@@ -754,6 +757,10 @@ namespace JobPlatform.Data.Sql.Migrations
                         .IsUnique();
 
                     b.HasIndex("WorkArrangement");
+
+                    b.HasIndex("Company", "LocationCity");
+
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("Company", "LocationCity"), new[] { "Title", "JobUrlDirect", "Site" });
 
                     b.ToTable("JobPostings", (string)null);
                 });
@@ -1347,6 +1354,189 @@ namespace JobPlatform.Data.Sql.Migrations
                     b.ToTable("ScrapeRuns", (string)null);
                 });
 
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.ScraperSearchEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("CountryIndeed")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateTimeOffset>("CreatedUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("bit");
+
+                    b.Property<int?>("HoursOld")
+                        .HasColumnType("int");
+
+                    b.Property<bool?>("IsRemote")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("JobType")
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.Property<string>("Location")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<string>("OwnerSubjectId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<int?>("ResultsWanted")
+                        .HasColumnType("int");
+
+                    b.Property<string>("SearchTerm")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Slug")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTimeOffset>("UpdatedUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Enabled");
+
+                    b.HasIndex("Slug")
+                        .IsUnique();
+
+                    b.HasIndex("OwnerSubjectId", "Name")
+                        .IsUnique();
+
+                    b.ToTable("ScraperSearches", (string)null);
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.ScraperSearchFilterEntity", b =>
+                {
+                    b.Property<long>("SearchId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Key")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.HasKey("SearchId", "Key");
+
+                    b.ToTable("ScraperSearchFilters", (string)null);
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.ScraperSearchSiteEntity", b =>
+                {
+                    b.Property<long>("SearchId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Site")
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.HasKey("SearchId", "Site");
+
+                    b.ToTable("ScraperSearchSites", (string)null);
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.SubmissionEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("ApplyUrl")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<int>("Channel")
+                        .HasColumnType("int");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<long>("PostingId")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("ProfileId")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PostingId");
+
+                    b.HasIndex("ProfileId", "CreatedAtUtc");
+
+                    b.HasIndex("ProfileId", "PostingId")
+                        .IsUnique();
+
+                    b.ToTable("Submissions", (string)null);
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.SubmissionEventEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset>("AtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<int>("Source")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Stage")
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
+
+                    b.Property<long>("SubmissionId")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("Type")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SubmissionId", "AtUtc");
+
+                    b.HasIndex("SubmissionId", "IdempotencyKey")
+                        .IsUnique();
+
+                    b.ToTable("SubmissionEvents", (string)null);
+                });
+
             modelBuilder.Entity("JobPlatform.Data.Sql.Entities.ApplicationDocumentEntity", b =>
                 {
                     b.HasOne("JobPlatform.Data.Sql.Entities.JobPostingEntity", "Posting")
@@ -1682,6 +1872,58 @@ namespace JobPlatform.Data.Sql.Migrations
                     b.Navigation("Profile");
                 });
 
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.ScraperSearchFilterEntity", b =>
+                {
+                    b.HasOne("JobPlatform.Data.Sql.Entities.ScraperSearchEntity", "Search")
+                        .WithMany("Filters")
+                        .HasForeignKey("SearchId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Search");
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.ScraperSearchSiteEntity", b =>
+                {
+                    b.HasOne("JobPlatform.Data.Sql.Entities.ScraperSearchEntity", "Search")
+                        .WithMany("Sites")
+                        .HasForeignKey("SearchId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Search");
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.SubmissionEntity", b =>
+                {
+                    b.HasOne("JobPlatform.Data.Sql.Entities.JobPostingEntity", "Posting")
+                        .WithMany()
+                        .HasForeignKey("PostingId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("JobPlatform.Data.Sql.Entities.CandidateProfileEntity", "Profile")
+                        .WithMany()
+                        .HasForeignKey("ProfileId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Posting");
+
+                    b.Navigation("Profile");
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.SubmissionEventEntity", b =>
+                {
+                    b.HasOne("JobPlatform.Data.Sql.Entities.SubmissionEntity", "Submission")
+                        .WithMany("Events")
+                        .HasForeignKey("SubmissionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Submission");
+                });
+
             modelBuilder.Entity("JobPlatform.Data.Sql.Entities.CandidateProfileEntity", b =>
                 {
                     b.Navigation("Certifications");
@@ -1726,6 +1968,18 @@ namespace JobPlatform.Data.Sql.Migrations
                     b.Navigation("SearchTerms");
 
                     b.Navigation("Tags");
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.ScraperSearchEntity", b =>
+                {
+                    b.Navigation("Filters");
+
+                    b.Navigation("Sites");
+                });
+
+            modelBuilder.Entity("JobPlatform.Data.Sql.Entities.SubmissionEntity", b =>
+                {
+                    b.Navigation("Events");
                 });
 #pragma warning restore 612, 618
         }

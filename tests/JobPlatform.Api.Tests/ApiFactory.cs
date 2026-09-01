@@ -1,5 +1,6 @@
 using JobPlatform.Core.Ai;
 using JobPlatform.Core.Model;
+using JobPlatform.Core.Submissions;
 using JobPlatform.Data.Cosmos;
 using JobPlatform.Data.Sql;
 using JobPlatform.Data.Sql.Entities;
@@ -95,6 +96,12 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             // Left absent rather than faked: every consumer resolves it as nullable and
             // skips, which is the degraded mode a host without Cosmos is supposed to have.
             services.RemoveAll<IAiCallLog>();
+
+            // The same for the disclosure log the MCP tools write to. Both are Cosmos-backed and
+            // both are optional to their callers, so a host with no Cosmos has neither - and
+            // leaving either registered fails DI validation at startup rather than at first use,
+            // which takes down every test in this suite at once.
+            services.RemoveAll<IDisclosureLog>();
 
             services.RemoveAll<Microsoft.Extensions.Diagnostics.HealthChecks.IHealthCheck>();
 

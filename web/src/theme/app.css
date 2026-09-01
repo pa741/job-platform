@@ -355,3 +355,34 @@ button.pill {
 }
 
 button.pill:hover { background: var(--gridline); }
+
+/* An application's event log. A list rather than a table: the rows are prose of varying
+   length, and the question it answers is "what happened, in order" rather than a comparison
+   between columns. Every colour is a token, so it follows the theme in both modes. */
+.timeline {
+  list-style: none;
+  margin: 4px 0 12px;
+  padding: 0 0 0 14px;
+  border-left: 2px solid var(--gridline);
+  font-size: 13px;
+}
+
+.timeline li {
+  position: relative;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--gridline);
+}
+
+.timeline li:last-child { border-bottom: 0; }
+
+/* The marker sits on the rule, so the newest entry is findable without a scan. */
+.timeline li::before {
+  content: '';
+  position: absolute;
+  left: -19px;
+  top: 11px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--series-1);
+}

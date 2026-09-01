@@ -49,6 +49,13 @@ public sealed class JobPostingEntity
 
     public string? JobUrl { get; set; }
     public string? JobUrlDirect { get; set; }
+
+    /// <summary>
+    /// Whether the application happens on the employer's own system. Null where the scraper
+    /// did not establish it, which is not the same as the board hosting it - see
+    /// <c>JobPosting.OffsiteApply</c>.
+    /// </summary>
+    public bool? OffsiteApply { get; set; }
     public string? CompanyUrl { get; set; }
 
     /// <summary>Full text. Only the posting detail returns it; it is the bulk of the row.</summary>

@@ -125,6 +125,63 @@ public sealed class JobCsvParserTests
     /// columns, a scraped board leaves them empty. Written inline rather than added to
     /// the shared fixture, which the row-count and fill-rate assertions above pin.
     /// </summary>
+    /// <summary>
+    /// The apply route, which is three-state and has to stay that way.
+    /// </summary>
+    /// <remarks>
+    /// Inline rather than in the shared fixture: that file's counts are known by construction and
+    /// every metric assertion reads them, so a column added to it is a change to unrelated tests.
+    ///
+    /// The empty cell is the case that matters. <c>offsite_apply</c> is absent for every posting
+    /// scraped before the scraper emitted it and for every board that does not say, and reading
+    /// that as "the board hosts it" is precisely the fault the column was added to fix - on a
+    /// live corpus it labelled 4,470 LinkedIn postings Easy Apply.
+    /// </remarks>
+    [Fact]
+    public void Offsite_apply_is_read_as_three_states_and_an_empty_cell_stays_null()
+    {
+        const string csv = """
+            id,site,title,company,job_url,job_url_direct,offsite_apply
+            li-a,linkedin,Backend Engineer,Northwind,https://li/1,,True
+            li-b,linkedin,Frontend Engineer,Contoso,https://li/2,,False
+            li-c,linkedin,Platform Engineer,Fabrikam,https://li/3,,
+            in-d,indeed,Data Engineer,Adventure,https://in/4,https://ats.example.invalid/4,
+            """;
+
+        var result = new JobCsvParser().Parse(new MemoryStream(Encoding.UTF8.GetBytes(csv)));
+        var byId = result.Postings.ToDictionary(p => p.ExternalId);
+
+        Assert.True(byId["li-a"].OffsiteApply);
+        Assert.False(byId["li-b"].OffsiteApply);
+        Assert.Null(byId["li-c"].OffsiteApply);
+
+        // A direct URL and no flag: the URL is the older, stronger signal and the flag stays
+        // absent rather than being back-filled from it. Deciding what that pair means belongs to
+        // the consumer, not to the parser.
+        Assert.Null(byId["in-d"].OffsiteApply);
+        Assert.Equal("https://ats.example.invalid/4", byId["in-d"].JobUrlDirect);
+    }
+
+    /// <summary>A column the scraper has not shipped yet must not break the parse.</summary>
+    /// <remarks>
+    /// The parser reads by name and ignores what it does not model, which is what lets a fork
+    /// add columns without a coordinated release. The reverse has to hold too: the deployed
+    /// scraper does not emit <c>offsite_apply</c> yet, and every posting already in the corpus
+    /// was written without it.
+    /// </remarks>
+    [Fact]
+    public void A_csv_without_the_offsite_column_parses_with_the_flag_absent()
+    {
+        const string csv = """
+            id,site,title,company,job_url
+            li-a,linkedin,Backend Engineer,Northwind,https://li/1
+            """;
+
+        var result = new JobCsvParser().Parse(new MemoryStream(Encoding.UTF8.GetBytes(csv)));
+
+        Assert.Null(Assert.Single(result.Postings).OffsiteApply);
+    }
+
     private static CsvParseResult ParseFreehireRows()
     {
         const string csv = """

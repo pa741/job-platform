@@ -68,6 +68,7 @@ public sealed class MetricsCalculator(TimeProvider? timeProvider = null)
             Enrichment = CalculateEnrichment(enriched),
             DescriptionLength = CalculateLengths(postings),
             FieldFillRates = parseResult.FieldFillRates,
+            ApplyLinks = CalculateApplyLinks(postings),
         };
     }
 
@@ -177,8 +178,22 @@ public sealed class MetricsCalculator(TimeProvider? timeProvider = null)
             .Take(take)
             .Select(g => new NamedCount(g.Key, g.Count()))];
 
+    /// <summary>
+    /// The same job listed on more than one board, within this run.
+    /// </summary>
+    /// <remarks>
+    /// Reads <see cref="JobFingerprint.CrossBoardKey"/>, not <c>ContentHash</c>. It read
+    /// ContentHash until 2026-09-01 and therefore reported zero every time: that hash folds in
+    /// the raw location string, which boards write differently, so it never collides across
+    /// them. Postings with no key - no city, or no employer - are not compared, because an
+    /// unlocated posting is not evidence of anything.
+    /// </remarks>
     private static int CountCrossSiteDuplicates(IReadOnlyList<JobPosting> postings)
-        => postings.Count - postings.Select(JobFingerprint.ContentHash).Distinct(StringComparer.Ordinal).Count();
+    {
+        var keyed = postings.Select(JobFingerprint.CrossBoardKey).OfType<string>().ToList();
+
+        return keyed.Count - keyed.Distinct(StringComparer.Ordinal).Count();
+    }
 
     /// <remarks>
     /// The share counts against postings that stated a work mode, not against every posting.
@@ -292,6 +307,27 @@ public sealed class MetricsCalculator(TimeProvider? timeProvider = null)
 
         return Sorted(counts);
     }
+
+    /// <summary>
+    /// Where each site says the application is made.
+    /// </summary>
+    /// <remarks>
+    /// Grouped by site because the sites disagree by construction and averaging them hides the
+    /// only movement worth seeing. See <see cref="ApplyLinkCount"/> for why absence is not the
+    /// same kind of signal as an empty column.
+    /// </remarks>
+    private static IReadOnlyList<ApplyLinkCount> CalculateApplyLinks(IReadOnlyList<JobPosting> postings)
+        => [.. postings
+            .Where(p => !string.IsNullOrWhiteSpace(p.Site))
+            .GroupBy(p => p.Site, StringComparer.OrdinalIgnoreCase)
+            .Select(g => new ApplyLinkCount(
+                g.Key,
+                g.Count(),
+                g.Count(p => string.IsNullOrWhiteSpace(p.JobUrlDirect))))
+            // Largest site first, then by name, so two runs with the same sites produce the
+            // same document rather than one that differs only in ordering.
+            .OrderByDescending(x => x.Postings)
+            .ThenBy(x => x.Site, StringComparer.Ordinal)];
 
     private static IReadOnlyDictionary<string, int> CountBy(
         IEnumerable<JobPosting> postings,

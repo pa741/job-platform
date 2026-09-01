@@ -46,6 +46,28 @@ public sealed record RunDigest
     /// <summary>Per-column non-empty ratio. A column falling to zero means the scraper
     /// silently degraded — this is the run's health check, not a curiosity.</summary>
     public required IReadOnlyDictionary<string, double> FieldFillRates { get; init; }
+
+    /// <summary>
+    /// Per site, where the application is actually made.
+    /// </summary>
+    /// <remarks>
+    /// <b>The inverse of <see cref="FieldFillRates"/>, and it has to be separate from it.</b>
+    /// A fill rate catches a column that stopped arriving; <c>job_url_direct</c> is absent for a
+    /// legitimate reason - the board hosts that application - so its absence is data rather than
+    /// a fault, and a rise in it looks exactly like a market that moved. It usually is not one:
+    /// LinkedIn's half of this is a DOM scrape of a single element id, and renaming that id makes
+    /// every posting read as Easy Apply with nothing throwing.
+    ///
+    /// Per site rather than per run, because a whole-file rate averages boards that behave
+    /// differently together with freehire, which sets the field unconditionally and so reports
+    /// 0% board-hosted whatever is true of it.
+    ///
+    /// Not <c>required</c>, deliberately. Ninety days of run digests are already in Cosmos
+    /// without this field, and a required property absent from a stored document fails
+    /// deserialisation outright - which would take the dashboard down to add a metric.
+    /// <see cref="Enrichment"/> is defaulted for the same reason.
+    /// </remarks>
+    public IReadOnlyList<ApplyLinkCount> ApplyLinks { get; init; } = [];
 }
 
 public sealed record RunCounts
@@ -98,6 +120,22 @@ public sealed record SalaryBreakdown
 }
 
 public sealed record LengthStats(int P50, int P90, int Max);
+
+/// <summary>
+/// How one site's postings split between an employer-hosted and a board-hosted application.
+/// </summary>
+/// <param name="Site">The board the postings came from.</param>
+/// <param name="Postings">Postings from that site in this run.</param>
+/// <param name="BoardHosted">
+/// How many carry no direct apply link. On <c>linkedin</c> and <c>indeed</c> that means the
+/// board hosts the application - Easy Apply, or Indeed Apply. On <c>freehire</c> it means
+/// nothing at all: that scraper sets the field unconditionally, so the count is always zero.
+/// </param>
+public sealed record ApplyLinkCount(string Site, int Postings, int BoardHosted)
+{
+    /// <summary>Board-hosted as a fraction of this site's postings. Zero where it had none.</summary>
+    public double BoardHostedShare => Postings == 0 ? 0 : (double)BoardHosted / Postings;
+}
 
 public sealed record NamedCount(string Name, int Count);
 

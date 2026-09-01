@@ -4,6 +4,8 @@ import type {
   MeResponse, MetricsSummary, PageResponse, PostingDetail, PostingInsight, PostingSummary, ProfileRequest,
   ProfileResponse, RunResponse, ScraperHealth, SearchTermResponse, SourceComposition,
   AiCallResponse, AiCallTotalsResponse,
+  ScraperSearchRequest, ScraperSearchListResponse, ScraperSearchOptionsResponse,
+  Submission, SubmissionEvent,
 } from './types';
 
 /** Thrown for any non-2xx response, carrying the RFC 9457 detail the API returns. */
@@ -209,6 +211,83 @@ export class JobPlatformApi {
     });
 
   deleteProfile = () => this.request<void>('/api/v1/profile', { method: 'DELETE' });
+
+  // --- scraper searches -----------------------------------------------------
+  //
+  // Per-principal like the profile, and scoped the same way: the slug in a path names one of
+  // the caller's own searches, and the API answers 404 for anybody else's.
+  //
+  // Every mutation answers with the caller's whole set rather than the one row it touched. A
+  // save rewrites the scraper's configuration for every search at once, so the publish state
+  // that comes back describes the set - and one round trip beats a save followed by a refetch
+  // against a database that pauses when idle.
+
+  searches = () => this.request<ScraperSearchListResponse>('/api/v1/searches');
+
+  /** The boards, job types and bounds a form may offer. Served, never hard-coded here. */
+  searchOptions = () => this.request<ScraperSearchOptionsResponse>('/api/v1/searches/options');
+
+  createSearch = (search: ScraperSearchRequest) =>
+    this.request<ScraperSearchListResponse>('/api/v1/searches', {
+      method: 'POST',
+      body: JSON.stringify(search),
+    });
+
+  updateSearch = (slug: string, search: ScraperSearchRequest) =>
+    this.request<ScraperSearchListResponse>(`/api/v1/searches/${encodeURIComponent(slug)}`, {
+      method: 'PUT',
+      body: JSON.stringify(search),
+    });
+
+  deleteSearch = (slug: string) =>
+    this.request<ScraperSearchListResponse>(`/api/v1/searches/${encodeURIComponent(slug)}`, {
+      method: 'DELETE',
+    });
+
+  /** Rewrites the scraper's configuration from what is stored. The repair path. */
+  publishSearches = () =>
+    this.request<{ published: boolean; publishedUtc: string }>('/api/v1/searches/publish', {
+      method: 'POST',
+    });
+
+  /**
+   * The candidate's applications, most recently active first.
+   *
+   * Reads SQL, like the profile and the searches, and for the same reason it is allowed to:
+   * opened by a person, not polled. It must never join the bootstrap sequence.
+   */
+  submissions = () => this.request<{ items: Submission[] }>('/api/v1/submissions');
+
+  submissionEvents = (id: number) =>
+    this.request<{ items: SubmissionEvent[] }>(`/api/v1/submissions/${id}/events`);
+
+  /**
+   * Records that an application was sent.
+   *
+   * Idempotent by construction - one submission per posting - so a double-click converges on
+   * the row that already exists rather than making a second.
+   */
+  createSubmission = (postingId: number) =>
+    this.request<Submission>('/api/v1/submissions', {
+      method: 'POST',
+      body: JSON.stringify({ postingId }),
+    });
+
+  /**
+   * Appends one event to an application's log.
+   *
+   * The idempotency key is minted here rather than by the server, because only the caller knows
+   * whether two requests are one event or two - a retry after a timeout is one, and a person
+   * recording a second interview round is two.
+   */
+  recordSubmissionEvent = (
+    id: number,
+    event: { type: string; atUtc?: string; stage?: string; note?: string; source?: string },
+  ) =>
+    this.request<{ recorded: boolean }>(`/api/v1/submissions/${id}/events`, {
+      method: 'POST',
+      body: JSON.stringify({ ...event, idempotencyKey: crypto.randomUUID() }),
+    });
 
   matches = (params: MatchQuery = {}) =>
     this.request<{ items: MatchSummary[]; offset: number }>(

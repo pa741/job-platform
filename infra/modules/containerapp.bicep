@@ -60,6 +60,12 @@ param openAiEmbeddingDeployment string = ''
 @description('Realtime service endpoint. Not a secret - the identity is what authenticates.')
 param signalRServiceUri string = ''
 
+@description('Storage account holding the scraper configuration container.')
+param landingStorageAccountName string = ''
+
+@description('Container the API publishes the scraper configuration into.')
+param scraperConfigContainerName string = 'scraper-config'
+
 var useAzureOpenAi = aiProvider == 'azureopenai' && !empty(openAiEndpoint)
 
 // Array-typed configuration binds by index, so each origin becomes its own variable. Hoisted
@@ -230,6 +236,20 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
               // against this service. disableLocalAuth means its keys cannot be used at all.
               name: 'Realtime__ServiceUri'
               value: signalRServiceUri
+            }
+            {
+              // Identity-based, like every other storage connection here. Empty leaves the
+              // publisher unregistered, the searches endpoints report that the scraper has not
+              // been told, and the scraper falls back to its own config.yaml - a deployment
+              // without this is degraded, never broken.
+              name: 'ScraperConfig__serviceUri'
+              value: empty(landingStorageAccountName)
+                ? ''
+                : 'https://${landingStorageAccountName}.blob.core.windows.net'
+            }
+            {
+              name: 'ScraperConfigContainerName'
+              value: scraperConfigContainerName
             }
           ])
           probes: [

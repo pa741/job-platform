@@ -149,6 +149,7 @@ public sealed class JobCsvParser(ILogger<JobCsvParser>? logger = null)
             CompanyIndustry = Field(csv, "company_industry"),
             JobUrl = Field(csv, "job_url"),
             JobUrlDirect = Field(csv, "job_url_direct"),
+            OffsiteApply = ParseNullableBool(Field(csv, "offsite_apply")),
             CompanyUrl = Field(csv, "company_url"),
             Description = Field(csv, "description"),
             CompanyNumEmployees = Field(csv, "company_num_employees"),

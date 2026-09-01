@@ -16,6 +16,21 @@ the rule in `CLAUDE.md` covers fixtures, examples and screenshots alike.
 **In flight.** 1.1 has all four call sites, a dashboard page and a replay route; 1.2 has a
 candidate fix. Both are marked *Progress* below, with what remains.
 
+**A second feature now has its own file.** [`mcp_handoff.md`](mcp_handoff.md) covers the
+submission pipeline and the agent surface over it, both built on 2026-08-31. Two things in it
+belong on this file's radar rather than only on that one:
+
+- **The realtime feed broadcasts.** `IRealtimeFeed.PublishAsync` sends to every connected client,
+  which is right for the AI-failure feed 1.1 built and wrong for anything addressed to a person.
+  The questions channel planned in `mcp_handoff.md` 1.4 assumed reusing that transport was free
+  and it is not - `NegotiateAsync` already carries a `subjectId` it does not use, so the fix is a
+  per-user send, but it is unbuilt work nobody had costed.
+- **A behavioural authorization test was found not to pin what it claimed.** Every handler calls
+  `CallerIdentity.TryGetSubjectId`, which answers 401 when the token carries no `oid`, so relaxing
+  a route group's policy to `PublicReadPolicy` left the read cases green. The policy is now
+  asserted as endpoint metadata. **The same weakness applies to the existing `/searches` and
+  `/me` cases**, which are behavioural only - worth converting when something next touches them.
+
 **1.6 is built, deployed, and has been through its first holdout - which moved the floor from
 45 to 80 and cut the headline claim down.** The corpus is at **4,668 of 4,668** embedded. On 154
 labels drawn *after* the ranking shipped, the ranking beats the score by **+0.045, CI

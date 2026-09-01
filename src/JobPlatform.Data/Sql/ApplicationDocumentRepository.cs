@@ -95,6 +95,26 @@ public sealed class ApplicationDocumentRepository(JobsDbContext db)
         return row is null ? null : Map(row.Entity, row.Title, row.Company);
     }
 
+    /// <summary>The newest draft for one posting, whole, or null where none has been written.</summary>
+    /// <remarks>
+    /// By posting rather than by document id, because that is the question the agent surface asks:
+    /// "what am I sending for this job". The highest revision wins - a regeneration supersedes
+    /// what came before it, and handing an agent an older draft than the candidate last looked at
+    /// would put a document in front of an employer that nobody chose.
+    /// </remarks>
+    public async Task<StoredApplication?> GetLatestForPostingAsync(
+        long profileId, long postingId, CancellationToken ct = default)
+    {
+        var row = await db.ApplicationDocuments
+            .AsNoTracking()
+            .Where(d => d.PostingId == postingId && d.ProfileId == profileId)
+            .OrderByDescending(d => d.Revision)
+            .Select(d => new { Entity = d, d.Posting!.Title, d.Posting.Company })
+            .FirstOrDefaultAsync(ct);
+
+        return row is null ? null : Map(row.Entity, row.Title, row.Company);
+    }
+
     /// <summary>
     /// This candidate's drafts, newest first.
     /// </summary>

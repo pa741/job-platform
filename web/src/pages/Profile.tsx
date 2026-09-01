@@ -4,7 +4,7 @@ import type {
   DeclaredSkill, ProfileCertification, ProfileEducation, ProfileExperience,
   ProfileLink, ProfileProject, ProfileRequest, ProfileResponse, SkillLevel,
 } from '../api/types';
-import { Card, ErrorNote } from '../components/Primitives';
+import { Card, ErrorNote, Field } from '../components/Primitives';
 
 const ARRANGEMENTS = ['Unknown', 'Remote', 'Hybrid', 'OnSite'] as const;
 const SENIORITIES = ['Unknown', 'Intern', 'Junior', 'Mid', 'Senior', 'Lead', 'Principal', 'Executive'] as const;
@@ -494,16 +494,6 @@ function Repeater<T>({ title, subtitle, items, onChange, blank, addLabel, render
         </div>
       ))}
     </Card>
-  );
-}
-
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <label className="field">
-      <span className="field-label">{label}</span>
-      {children}
-      {hint && <span className="field-hint">{hint}</span>}
-    </label>
   );
 }
 

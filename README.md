@@ -13,8 +13,13 @@ CI deploys through OIDC federation rather than a stored credential.
 
 ```
 NAS scraper ──CSV──> Blob Storage: jobs-landing/jobs/*.csv
-                          │
-                    Event Grid  (BlobCreated, filtered to jobs/*.csv)
+     ▲                    │
+     │              Event Grid  (BlobCreated, filtered to jobs/*.csv)
+     │                    │
+ what to scrape,          │
+ published by the API     │
+ to scraper-config/       │
+ searches.json            │
                           │
                     Azure Function  (Flex Consumption, .NET 9 isolated)
                      parse → enrich → upsert
@@ -89,6 +94,60 @@ what a regex genuinely cannot do — required versus nice-to-have, years tied to
 seniority when the title is uninformative — is handed the vocabulary as its allowed output
 set, and has every key it returns re-checked against the graph. An invented key would be
 indistinguishable from a real one in SQL.
+
+## Configuring the scraper
+
+The searches the scraper runs used to be a YAML file bind-mounted onto the NAS. They are now
+per-user records the dashboard edits, and the change had one hard constraint: **the NAS has no
+managed identity, and this architecture has no secret store.** An API for it to call would need
+a client secret or a function key living on that machine — which is the thing the whole design
+does without.
+
+So the platform publishes instead of serving. Every save rewrites `scraper-config/searches.json`
+from SQL, whole, and the scraper reads it with the storage credential it already holds. Its only
+channel to Azure is still Blob Storage. The blob is rebuilt rather than amended, so a republish
+converges and a failed one needs no cleanup — the same rule the curated Parquet partitions follow.
+
+```
+dashboard ──> API ──> Azure SQL ──rebuild──> Blob: scraper-config/searches.json
+                                                          │
+                                                     NAS scraper reads it,
+                                                     merges over its own defaults
+```
+
+**The slug is the identity and the name is an attribute** — the same split as `skill.kubernetes`
+against "Kubernetes". A slug becomes the blob name, which becomes a `JobPostingSearchTerms` key,
+a Cosmos partition key and a Parquet partition, so the platform assigns it and refuses to move
+it. Two people may name a search the same thing; the second slug is suffixed rather than the save
+refused, because refusing would tell one person the other's search exists.
+
+**The form is typed fields, and that is the security property.** The scraper ends up calling
+`scrape_jobs(**params)`, whose keyword arguments include `proxies` and the freehire API key. One
+method — `ScraperConfigDocument.ToParams` — writes those names, from validated properties; there
+is no path from a browser to a parameter name, because there is no field for one. An unrecognised
+board is a 400 rather than a silently dropped source, for the reason the posting filters answer
+400 instead of ignoring an unknown value.
+
+**An unchosen option is omitted, never sent as null.** The scraper merges what it is given over
+its own `defaults:` block, which is where the settings about *that machine* live — verbosity,
+LinkedIn description fetching, salary annualisation. A null would blank one of them, so "did not
+choose" and "chose nothing" are different bytes on the wire.
+
+**Owning a search decides what gets looked for, not who may read what was found.** The corpus
+stays shared: an advert is public text, `JobPostingSearchTerms` already attributes one posting to
+every search that turned it up, and deleting a search stops the scraping without touching the
+history. Each search records its owner, so scoping the browse experience later is a filter rather
+than a migration.
+
+**Two people asking for the same thing are scraped twice.** There is no coalescing and no cap:
+searches run one after another, so a run costs the sum of every enabled search across every user.
+That is a deliberate trade for a system with one real user, and it is the first thing to revisit
+if there is a second.
+
+A deployment with no configuration storage is degraded rather than broken — the endpoints store
+searches and report that the scraper has not been told, and the scraper falls back to its own
+`config.yaml`. That is the same "not here invites a fallback" shape the AI provider and the
+realtime feed both take.
 
 ## The curated zone
 
@@ -171,10 +230,17 @@ posting endpoints during development never reaches them.
 | `DELETE /api/v1/profile` | Erases the profile, every match and every generated document |
 | `GET /api/v1/matches` | Scored matches, best first. `minScore`, `assessedOnly`, paging |
 | `GET /api/v1/matches/{postingId}` | One match with the breakdown behind the number |
+| `GET /api/v1/searches` | The caller's scraper searches, and when the scraper was last told about them |
+| `POST`, `PUT /{slug}`, `DELETE /{slug}` | Add, replace and remove one. Each rewrites the scraper's configuration |
+| `POST /api/v1/searches/publish` | Rewrites that configuration from what is stored. The repair path |
 | `POST /api/v1/applications/{postingId}` | Writes a tailored CV and cover letter. The only route that spends money on the expensive model |
 | `GET /api/v1/applications`, `/{id}` | Generated drafts, as markdown |
 | `GET /api/v1/applications/{id}/cv.pdf` | The CV, rendered |
 | `GET /api/v1/applications/{id}/cover-letter.pdf` | The cover letter, rendered |
+| `GET /api/v1/submissions` | Applications actually sent, and where each stands. The status is folded from the event log, never stored |
+| `POST /api/v1/submissions` | Records that one was sent. Idempotent per posting - a retry converges rather than duplicating |
+| `GET`, `POST /api/v1/submissions/{id}/events` | The append-only log, and one append. No deletes: withdrawing is a `Withdrawn` event |
+| `POST /api/v1/mcp` | The agent surface, over MCP. Four read-only tools; see [`mcp_handoff.md`](mcp_handoff.md) |
 
 OpenAPI at `/openapi/v1.json`, with a Scalar UI at `/scalar/v1`.
 
@@ -347,13 +413,15 @@ and turns a missing apt package into a 500 on somebody's CV download.
 ## The dashboard
 
 A React SPA on Static Web Apps (Free tier), signing in with MSAL and calling the API with
-an Entra bearer token. Four pages: an overview of the market metrics, a filterable postings
-browser, the candidate's own matches, and the profile form that feeds them.
+an Entra bearer token. An overview of the market metrics, a filterable postings browser, the
+candidate's own matches, the profile form that feeds them, and the searches that decide what
+gets scraped in the first place.
 
-The last two behave differently from the first two on purpose. Overview and Postings are about
-a slice of the corpus and wait on the search-term bootstrap; Profile and Matches are about the
-signed-in person and render even when the platform has ingested nothing at all — which is
-exactly the state somebody filling in their profile for the first time is in.
+The per-person pages behave differently from the corpus ones on purpose. Overview and Postings
+are about a slice of the corpus and wait on the search-term bootstrap; Profile, Matches and
+Searches are about the signed-in person and render even when the platform has ingested nothing at
+all — which is exactly the state somebody filling in their profile, or configuring their first
+search, is in. Searches especially: the reason to open it is that nothing has been scraped yet.
 
 The match view shows the per-axis breakdown behind the score, and **omits every axis the
 posting said nothing about** rather than drawing it at zero: the scorer drops those from the
@@ -490,8 +558,10 @@ schema, and grants the function's managed identity a database user. Then, for CI
 ./scripts/setup-github-oidc.ps1 -Repository <owner>/<repo> -ResourceGroup <rg> -LandingStorageAccount <account>
 ```
 
-Finally, point the scraper at the landing container by setting
-`AZURE_CONTAINER_NAME=jobs-landing` in its `.env` and NAS `docker-compose.yml`.
+Finally, point the scraper at both containers by setting `AZURE_CONTAINER_NAME=jobs-landing`
+and `AZURE_CONFIG_CONTAINER_NAME=scraper-config` in its `.env` and NAS `docker-compose.yml`.
+The second is where this repository publishes the searches; without it the scraper falls back
+to its own `config.yaml` and the dashboard's Searches page has no effect.
 
 ### Backfilling
 
@@ -700,6 +770,22 @@ dotnet run --project tools/JobPlatform.DbAdmin -- metrics "https://<cosmos-accou
 ```
 
 Remember to delete the rule when you are done.
+
+**The submission pipeline and an MCP surface over it are the newest piece.** What was missing
+until now was any record that an application had been *sent* - the generated documents recorded
+only that one had been *written*. `Submissions` and `SubmissionEvents` close that: an append-only
+event log per posting, with the status folded from it on read so staleness cannot go stale, and a
+dashboard page that makes the pipeline legible to a person before anything automated writes to it.
+
+On top of it sits a read-only MCP server at `/api/v1/mcp`, behind the same Entra token the
+dashboard already carries. Four tools - what to apply to next, the pack for one application, one
+allowlisted profile answer at a time, and the pipeline's own state.
+
+**What it deliberately cannot do is apply.** There is no `submit_application` tool and there never
+will be: applying is irreversible and outward-facing, so it stays outside this system entirely and
+no bug in this repository can send anything to an employer. There is no `get_profile` either - a
+tool result is transcript content wherever the client runs - and the two tools that do disclose
+the candidate's own data record what they disclosed, never the value.
 
 ## Status
 

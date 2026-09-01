@@ -1,3 +1,4 @@
+using JobPlatform.Core.Submissions;
 using JobPlatform.Data.Sql.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
@@ -40,6 +41,13 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
 
     public DbSet<JobMatchEntity> JobMatches => Set<JobMatchEntity>();
     public DbSet<ApplicationDocumentEntity> ApplicationDocuments => Set<ApplicationDocumentEntity>();
+
+    public DbSet<SubmissionEntity> Submissions => Set<SubmissionEntity>();
+    public DbSet<SubmissionEventEntity> SubmissionEvents => Set<SubmissionEventEntity>();
+
+    public DbSet<ScraperSearchEntity> ScraperSearches => Set<ScraperSearchEntity>();
+    public DbSet<ScraperSearchSiteEntity> ScraperSearchSites => Set<ScraperSearchSiteEntity>();
+    public DbSet<ScraperSearchFilterEntity> ScraperSearchFilters => Set<ScraperSearchFilterEntity>();
 
     public DbSet<PostingEmbeddingEntity> PostingEmbeddings => Set<PostingEmbeddingEntity>();
     public DbSet<ProfileEmbeddingEntity> ProfileEmbeddings => Set<ProfileEmbeddingEntity>();
@@ -105,6 +113,21 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
             entity.HasIndex(e => e.ContentHash);
             entity.HasIndex(e => e.LastSeenUtc);
             entity.HasIndex(e => e.Company);
+
+            // The cross-board lookup: the same job on another board, which is where an apply
+            // link is recovered when the posting's own board stopped publishing one.
+            //
+            // Company and city are the key and the title is included rather than keyed, because
+            // Title is nvarchar(500) and SQL Server caps a nonclustered key at 1700 bytes - all
+            // three would be 1900 and the migration would fail outright. JobUrlDirect and Site
+            // are included so the subquery is answered from the index alone; it runs once per
+            // shortlist row against a database billed by the second.
+            //
+            // The single-column Company index above is now a prefix of this one and is probably
+            // redundant. Left alone deliberately: dropping an index is a query-plan change and
+            // nothing here has measured the plans that use it.
+            entity.HasIndex(e => new { e.Company, e.LocationCity })
+                .IncludeProperties(e => new { e.Title, e.JobUrlDirect, e.Site });
             entity.HasIndex(e => e.FreshnessClass);
 
             // The new group-by axes. Every one of these is a dashboard facet or an analysis
@@ -198,7 +221,9 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
         ConfigureAssertions(modelBuilder);
         ConfigureProfiles(modelBuilder);
         ConfigureMatches(modelBuilder);
+        ConfigureSubmissions(modelBuilder);
         ConfigureExtractionBatches(modelBuilder);
+        ConfigureScraperSearches(modelBuilder);
 
         modelBuilder.Entity<JobPostingSearchTerm>(entity =>
         {
@@ -445,6 +470,145 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
     /// referencing it. SQL Server refuses two cascade paths into one table anyway, and this is
     /// the direction that is right on its own terms rather than merely the one permitted.
     /// </remarks>
+    /// <summary>
+    /// The searches the scraper is told to run, and who asked for each.
+    /// </summary>
+    /// <remarks>
+    /// Two uniqueness rules, and they are different on purpose. <c>Slug</c> is unique across the
+    /// whole table because it is a global identity: it becomes a blob name, a
+    /// <c>JobPostingSearchTerms</c> key, a Cosmos partition key and a curated Parquet partition.
+    /// <c>(OwnerSubjectId, Name)</c> is unique per owner because a name is a label, and two
+    /// people naming a search the same thing is not a conflict.
+    /// </remarks>
+    private static void ConfigureScraperSearches(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<ScraperSearchEntity>(entity =>
+        {
+            entity.ToTable("ScraperSearches");
+            entity.HasKey(e => e.Id);
+
+            entity.Property(e => e.OwnerSubjectId).HasMaxLength(64).IsRequired();
+
+            // Matches SearchSlug.MaxLength and JobPostingSearchTerms.SearchTerm. A slug longer
+            // than the column it ends up in would truncate on the way through and stop matching
+            // the blob name it was derived from.
+            entity.Property(e => e.Slug).HasMaxLength(200).IsRequired();
+            entity.Property(e => e.Name).HasMaxLength(80).IsRequired();
+            entity.Property(e => e.SearchTerm).HasMaxLength(200).IsRequired();
+            entity.Property(e => e.Location).HasMaxLength(200);
+            entity.Property(e => e.CountryIndeed).HasMaxLength(100);
+            entity.Property(e => e.JobType).HasMaxLength(30);
+
+            entity.HasIndex(e => e.Slug).IsUnique();
+            entity.HasIndex(e => new { e.OwnerSubjectId, e.Name }).IsUnique();
+
+            // The publisher's query: every enabled search, whoever owns it.
+            entity.HasIndex(e => e.Enabled);
+        });
+
+        modelBuilder.Entity<ScraperSearchSiteEntity>(entity =>
+        {
+            entity.ToTable("ScraperSearchSites");
+            entity.HasKey(e => new { e.SearchId, e.Site });
+
+            entity.Property(e => e.Site).HasMaxLength(30).IsRequired();
+
+            entity.HasOne(e => e.Search)
+                .WithMany(s => s.Sites)
+                .HasForeignKey(e => e.SearchId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ScraperSearchFilterEntity>(entity =>
+        {
+            entity.ToTable("ScraperSearchFilters");
+            entity.HasKey(e => new { e.SearchId, e.Key });
+
+            entity.Property(e => e.Key).HasMaxLength(50).IsRequired();
+            entity.Property(e => e.Value).HasMaxLength(200).IsRequired();
+
+            entity.HasOne(e => e.Search)
+                .WithMany(s => s.Filters)
+                .HasForeignKey(e => e.SearchId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+    }
+
+    /// <summary>
+    /// What was sent, and the append-only log of what came back.
+    /// </summary>
+    /// <remarks>
+    /// <b>Both unique indexes are the feature, not an optimisation.</b>
+    /// <c>(ProfileId, PostingId)</c> stops a retrying client creating a second submission for one
+    /// posting; <c>(SubmissionId, IdempotencyKey)</c> stops it recording a second
+    /// <c>Submitted</c>. They are here before the write path that needs them because
+    /// retro-fitting a unique index to a table that already holds duplicates is a data migration
+    /// rather than a schema change.
+    ///
+    /// The profile side cascades and the posting side does not, exactly as
+    /// <see cref="ConfigureMatches"/> has it: deleting a profile should take that person's
+    /// submissions with it, while a posting is a shared record that must not be deletable out
+    /// from under the rows referencing it. SQL Server refuses two cascade paths into one table
+    /// anyway, and this is the direction that is right on its own terms.
+    ///
+    /// <b>No status column.</b> The status is a fold over the events - see
+    /// <c>SubmissionState</c>. Storing it would mean a timer to keep staleness current, a race
+    /// between that timer and a real event, and a row that is wrong in between.
+    /// </remarks>
+    private static void ConfigureSubmissions(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<SubmissionEntity>(entity =>
+        {
+            entity.ToTable("Submissions");
+            entity.HasKey(e => e.Id);
+
+            // One submission per pair. The write path's idempotency guarantee, in the one place
+            // a retry cannot argue with it.
+            entity.HasIndex(e => new { e.ProfileId, e.PostingId }).IsUnique();
+
+            // The list query: this candidate's submissions, newest first.
+            entity.HasIndex(e => new { e.ProfileId, e.CreatedAtUtc });
+
+            entity.Property(e => e.Channel).HasConversion<int>();
+            entity.Property(e => e.ApplyUrl).HasMaxLength(SubmissionLimits.MaxApplyUrlLength);
+
+            entity.HasOne(e => e.Profile)
+                .WithMany()
+                .HasForeignKey(e => e.ProfileId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Posting)
+                .WithMany()
+                .HasForeignKey(e => e.PostingId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<SubmissionEventEntity>(entity =>
+        {
+            entity.ToTable("SubmissionEvents");
+            entity.HasKey(e => e.Id);
+
+            // A redelivered write converges on the row it already made.
+            entity.HasIndex(e => new { e.SubmissionId, e.IdempotencyKey }).IsUnique();
+
+            // What the fold reads: one submission's whole log, in time order.
+            entity.HasIndex(e => new { e.SubmissionId, e.AtUtc });
+
+            entity.Property(e => e.Type).HasConversion<int>();
+            entity.Property(e => e.Source).HasConversion<int>();
+            entity.Property(e => e.Stage).HasMaxLength(SubmissionLimits.MaxStageLength);
+            entity.Property(e => e.Note).HasMaxLength(SubmissionLimits.MaxNoteLength);
+            entity.Property(e => e.IdempotencyKey)
+                .HasMaxLength(SubmissionLimits.MaxIdempotencyKeyLength)
+                .IsRequired();
+
+            entity.HasOne(e => e.Submission)
+                .WithMany(s => s.Events)
+                .HasForeignKey(e => e.SubmissionId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+    }
+
     private static void ConfigureMatches(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<JobMatchEntity>(entity =>

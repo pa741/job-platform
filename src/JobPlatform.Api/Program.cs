@@ -1,8 +1,11 @@
 using Azure.Identity;
+using Azure.Storage.Blobs;
 using JobPlatform.Ai;
 using JobPlatform.Api.Configuration;
 using JobPlatform.Core.Ai;
 using JobPlatform.Api.Endpoints;
+using JobPlatform.Api.Features.Mcp;
+using JobPlatform.Api.Features.Searches;
 using JobPlatform.Api.Infrastructure;
 using JobPlatform.Data.Cosmos;
 using JobPlatform.Data.Realtime;
@@ -91,7 +94,9 @@ builder.Services.AddDbContext<JobsDbContext>(options =>
 
 builder.Services.AddScoped<JobPostingQueryRepository>();
 builder.Services.AddScoped<CandidateProfileRepository>();
+builder.Services.AddScoped<ScraperSearchRepository>();
 builder.Services.AddScoped<JobMatchRepository>();
+builder.Services.AddScoped<SubmissionRepository>();
 
 // The realtime feed. Registers nothing when no endpoint is configured, so every consumer
 // resolves IRealtimeFeed as nullable and the dashboard falls back to polling.
@@ -108,6 +113,43 @@ builder.Services.AddScoped<IAiCallLog, AiCallLogRepository>();
 builder.Services.AddScoped<IMetricsSource>(sp => sp.GetRequiredService<MetricsQueryRepository>());
 
 builder.Services.AddAiProvider(configuration);
+
+// The agent surface. An MCP server over the repositories above, behind the same Entra
+// validation and the same authorisation boundary - see Features/Mcp.
+builder.Services.AddMcpFeature();
+
+// ---------------------------------------------------------------------------
+// The scraper's configuration, published to a blob it reads.
+// ---------------------------------------------------------------------------
+
+// Registered only when a service uri is present. Nothing here is required for the API to work:
+// with no storage configured the endpoints still store searches and simply say the scraper has
+// not been told, and the scraper falls back to its own config.yaml. That is the same "not here
+// invites a fallback" shape the AI provider and the realtime feed both take, and it is what
+// lets the test host and a fresh clone boot with no storage account at all.
+var scraperConfigServiceUri = configuration["ScraperConfig:serviceUri"]
+    ?? configuration["ScraperConfig__serviceUri"];
+
+if (!string.IsNullOrWhiteSpace(scraperConfigServiceUri))
+{
+    builder.Services.AddSingleton(_ =>
+    {
+        var containerName = configuration["ScraperConfigContainerName"] ?? "scraper-config";
+
+        var credential = string.IsNullOrWhiteSpace(managedIdentityClientId)
+            ? new DefaultAzureCredential()
+            : new DefaultAzureCredential(new DefaultAzureCredentialOptions
+            {
+                ManagedIdentityClientId = managedIdentityClientId,
+            });
+
+        return new ScraperConfigContainer(
+            new BlobServiceClient(new Uri(scraperConfigServiceUri), credential)
+                .GetBlobContainerClient(containerName));
+    });
+
+    builder.Services.AddScoped<ScraperConfigPublisher>();
+}
 
 // ---------------------------------------------------------------------------
 // Cross-cutting

@@ -479,6 +479,56 @@ export interface MatchDetail extends MatchSummary {
   hasApplication: boolean;
 }
 
+/**
+ * One application the candidate sent, with its status folded from the event log.
+ *
+ * There is no stored status behind this: the server folds the events on every read, which is
+ * why `isStale` can be trusted and why `phase` is null rather than a `Created` name where
+ * nothing has happened yet. "Not started" and "started and we cannot say" are different facts.
+ */
+export interface Submission {
+  id: number;
+  postingId: number;
+  postingTitle: string;
+  company: string | null;
+
+  /** `Ats` or `Board` — the employer's own system, or the job board's. */
+  channel: string;
+
+  /** Where the application went, as it stood when it was recorded. */
+  applyUrl: string | null;
+
+  createdAtUtc: string;
+
+  /** The furthest phase reached. Null until the first event. */
+  phase: string | null;
+
+  /** The label inside the phase — "Tech round 2". Free text. */
+  stage: string | null;
+
+  lastActivityUtc: string;
+
+  /** Nothing for a fortnight. Derived on read, never stored. */
+  isStale: boolean;
+
+  /** Rejected or withdrawn. A closed application is never stale. */
+  isClosed: boolean;
+
+  eventCount: number;
+}
+
+/** One thing that happened, as the log returns it. */
+export interface SubmissionEvent {
+  atUtc: string;
+  type: string;
+  stage: string | null;
+
+  /** `Candidate`, `Client` or `Email` — who asserted it. */
+  source: string;
+
+  note: string | null;
+}
+
 export interface ApplicationSummary {
   id: number;
   postingId: number;
@@ -690,4 +740,60 @@ export interface AiCallTotalsResponse {
   discarded: number;
   totalTokens: number;
   reasoningTokens: number;
+}
+
+// --- scraper searches -------------------------------------------------------
+
+/**
+ * One configured search, as the form submits it.
+ *
+ * Every field is named, and there is deliberately no free-form parameter map: the scraper
+ * ends up calling `scrape_jobs(**params)`, and a client that could name a keyword argument
+ * could reach the ones carrying proxies and API keys. The API builds those names from these
+ * typed fields and nowhere else.
+ *
+ * `slug` is absent for the same reason: it is an identity the platform assigns.
+ */
+export interface ScraperSearchRequest {
+  name: string;
+  enabled: boolean;
+  searchTerm: string;
+  /** Wire names from `GET /searches/options`, e.g. `['indeed', 'linkedin']`. */
+  sites: string[];
+  location: string | null;
+  countryIndeed: string | null;
+  /** `null` is "no preference", which is not the same as `false`. */
+  isRemote: boolean | null;
+  hoursOld: number | null;
+  resultsWanted: number | null;
+  jobType: string | null;
+  freehireFilters: Record<string, string>;
+}
+
+export interface ScraperSearchResponse extends ScraperSearchRequest {
+  /**
+   * The identity. It is what the scraper writes into the blob name, so it is also what the
+   * search-term picker and every metric partition call this search - shown rather than hidden,
+   * or the two views cannot be reconciled by the person looking at them.
+   */
+  slug: string;
+  createdUtc: string;
+  updatedUtc: string;
+}
+
+export interface ScraperSearchListResponse {
+  searches: ScraperSearchResponse[];
+  /** Whether the scraper's configuration was successfully written. */
+  published: boolean;
+  /** When it was last written. Null means never, or the last attempt failed. */
+  publishedUtc: string | null;
+}
+
+/** The vocabulary the form offers, served rather than duplicated here. */
+export interface ScraperSearchOptionsResponse {
+  sites: string[];
+  jobTypes: string[];
+  freehireFilterKeys: string[];
+  maxHoursOld: number;
+  maxResultsWanted: number;
 }

@@ -29,6 +29,9 @@ param landingContainerName string = 'jobs-landing'
 @description('Container holding the curated analysis surface. Never watched by Event Grid.')
 param curatedContainerName string = 'jobs-curated'
 
+@description('Container holding the scraper configuration the API publishes and the NAS reads.')
+param scraperConfigContainerName string = 'scraper-config'
+
 @description('Object id of the Microsoft Entra principal to make SQL admin and Cosmos data reader (i.e. you).')
 param administratorObjectId string
 
@@ -149,6 +152,22 @@ resource landingBlobContainer 'Microsoft.Storage/storageAccounts/blobServices/co
 resource curatedBlobContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
   parent: landingBlobService
   name: curatedContainerName
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+// What to scrape, published by the API and read by the scraper on the NAS.
+//
+// A third container for the same two reasons the curated one is separate, plus one of its own.
+// Event Grid watches jobs-landing, so a configuration write here can never be mistaken for an
+// upload to ingest. The identity's account-wide grant stays Blob Data *Reader*, and this gets
+// its own scoped Contributor - the API can rewrite the configuration and still cannot touch the
+// only copy of the scraped data. And the scraper needs *read* here while it needs *write* on
+// jobs-landing, so the two permissions the NAS holds stay separable.
+resource scraperConfigContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: landingBlobService
+  name: scraperConfigContainerName
   properties: {
     publicAccess: 'None'
   }
@@ -330,6 +349,8 @@ module containerApp 'modules/containerapp.bicep' = {
     openAiWritingDeployment: aiProvider == 'azureopenai' ? openAi!.outputs.writingDeployment : ''
     openAiEmbeddingDeployment: aiProvider == 'azureopenai' ? openAi!.outputs.embeddingDeployment : ''
     signalRServiceUri: signalR.outputs.serviceUri
+    landingStorageAccountName: landingStorageAccountName
+    scraperConfigContainerName: scraperConfigContainer.name
   }
 }
 
@@ -341,6 +362,7 @@ module rbac 'modules/rbac.bicep' = {
     applicationInsightsName: monitoring.outputs.applicationInsightsName
     ingestPrincipalId: identity.outputs.principalId
     curatedContainerName: curatedBlobContainer.name
+    scraperConfigContainerName: scraperConfigContainer.name
   }
 }
 
@@ -380,6 +402,7 @@ output sqlDatabaseName string = sql.outputs.databaseName
 output sqlSku string = sql.outputs.sqlSku
 output sqlConnectionString string = sql.outputs.connectionString
 output landingContainerName string = landingContainerName
+output scraperConfigContainerName string = scraperConfigContainer.name
 output apiName string = containerApp.outputs.name
 output apiUrl string = containerApp.outputs.url
 output apiFqdn string = containerApp.outputs.fqdn

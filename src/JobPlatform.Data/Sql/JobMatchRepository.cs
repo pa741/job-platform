@@ -2,6 +2,7 @@ using System.Text.Json;
 using JobPlatform.Core.Applications;
 using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Matching;
+using JobPlatform.Core.Submissions;
 using JobPlatform.Data.Sql.Entities;
 using Microsoft.EntityFrameworkCore;
 
@@ -49,6 +50,70 @@ public sealed record MatchRow(
     /// <summary>Reads one of the JSON columns back. Never throws - see the repository.</summary>
     public IReadOnlyList<T> Read<T>(string? json) => JobMatchRepository.Read<T>(json);
 }
+
+/// <summary>Where an apply URL came from, and therefore how much to trust it.</summary>
+/// <remarks>
+/// <b>Two of these are facts and one is an inference.</b> Keeping them apart is what stops a
+/// matched link being presented as the employer's own, which matters because the match is on
+/// title, employer and city rather than on anything either board guarantees.
+/// </remarks>
+public enum ApplyUrlSource
+{
+    /// <summary>No direct link known. This is the board's own posting page.</summary>
+    BoardPosting = 0,
+
+    /// <summary>The posting itself published the employer's apply URL.</summary>
+    Posting = 1,
+
+    /// <summary>
+    /// Taken from the same job on another board, matched on title, employer and city.
+    /// </summary>
+    /// <remarks>
+    /// An inference. It recovers roughly 5% of the links LinkedIn stopped publishing, at no
+    /// request and no risk, and the city is part of the match because without it better than a
+    /// quarter of the candidates were one employer advertising one title in several cities.
+    /// </remarks>
+    MatchedOnAnotherBoard = 2,
+}
+
+/// <summary>
+/// One posting worth applying to, as the agent surface sees it.
+/// </summary>
+/// <remarks>
+/// Deliberately narrow. This is a work queue, not a browse response: enough to decide which
+/// posting to act on and where to act on it, and nothing more. The advert body and the generated
+/// documents are a second call, so a shortlist of fifty is a page rather than megabytes.
+/// </remarks>
+/// <param name="Channel">
+/// Where the application is made, projected from <c>JobUrlDirect</c> rather than stored. Present
+/// means the employer's own system; absent on a board posting means the board hosts it.
+/// </param>
+/// <param name="ApplyUrl">
+/// Where to go. The direct link where there is one, the board's own posting URL otherwise -
+/// resolved here so no caller has to re-derive the rule that decides which.
+/// </param>
+/// <param name="ApplyUrlSource">
+/// Where <paramref name="ApplyUrl"/> came from, because one of the three is an inference and a
+/// caller acting on it deserves to know which.
+/// </param>
+public sealed record ApplyableRow(
+    long PostingId,
+    string Title,
+    string? Company,
+    string? Location,
+    SubmissionChannel Channel,
+    string? ApplyUrl,
+    ApplyUrlSource ApplyUrlSource,
+    int Score,
+    int? AssessmentScore,
+    CandidacyVerdict? Verdict,
+    string? Rationale,
+    double RankScore);
+
+/// <summary>Where an application for one matched posting would be made.</summary>
+/// <param name="Channel">Projected from the apply link, never stored on the posting.</param>
+/// <param name="ApplyUrl">The direct link where there is one, the board's posting URL otherwise.</param>
+public sealed record ApplyTarget(string Title, SubmissionChannel Channel, string? ApplyUrl);
 
 /// <summary>
 /// Everything the match pipeline reads and writes.
@@ -508,6 +573,172 @@ public sealed class JobMatchRepository(JobsDbContext db)
                 false))
             .ToListAsync(ct);
     }
+
+    /// <summary>
+    /// What this candidate should apply to next: judged worth it, and not yet sent.
+    /// </summary>
+    /// <remarks>
+    /// <b>Gated on the model's verdict, not on a score cut, and that is the whole point.</b> The
+    /// deterministic score is a good filter and a bad final sort - measured at -0.051 inside its
+    /// own top band, on fresh labels - so a threshold over it would hand an agent the rows
+    /// <c>MatchRanker</c> exists because the score gets wrong. <c>ICandidacyAssessor</c> is the
+    /// half of the design that knows what a role <i>is</i>, and this is the one query where that
+    /// judgement is load-bearing enough to require.
+    ///
+    /// <b>Its threshold is its own constant and must not be merged with either of the two that
+    /// already exist.</b> <c>MatchRanker.FusionFloor</c> is where the embedding earns its weight;
+    /// <c>MatchSweepFunction.AssessmentThreshold</c> is where buying a model judgement is worth
+    /// it. "Worth applying to" is a third question, and briefly collapsing the first two into one
+    /// constant was already a mistake once.
+    ///
+    /// <b><c>Unknown</c> is excluded and so is unassessed.</b> Unknown means the model answered
+    /// and said nothing usable; unassessed means it has not run. Neither is a recommendation, and
+    /// a rule keyed on one of them disagrees with a rule keyed on the other on exactly those rows.
+    ///
+    /// Already-submitted postings are excluded by a subquery rather than by loading a set and
+    /// filtering in memory - one round trip, and the same shape <see cref="GetDetailAsync"/>
+    /// already uses to answer <c>HasApplication</c>. Filtering after <c>Take</c> would be the
+    /// third instance in this codebase of a bound that a later filter quietly shrinks.
+    /// </remarks>
+    public async Task<IReadOnlyList<ApplyableRow>> ListApplyableAsync(
+        long profileId,
+        SubmissionChannel? channel,
+        int limit,
+        CancellationToken ct = default)
+    {
+        var query = db.JobMatches
+            .AsNoTracking()
+            .Where(m => m.ProfileId == profileId
+                && m.Verdict != null
+                && m.Verdict >= CandidacyVerdict.Possible
+                && !db.Submissions.Any(s => s.ProfileId == profileId && s.PostingId == m.PostingId));
+
+        // Filtered in the query, before the bound, so asking for ten board-hosted postings
+        // returns ten rather than however many of the top ten happened to be board-hosted.
+        // Filtered on the same expression the projection uses, so what comes back matches what
+        // each row says its channel is. Written out twice rather than shared, because EF has to
+        // translate it here and materialise it there, and a helper serving both would have to be
+        // an expression tree nobody can read.
+        // Mirrors the projection below exactly, in the same precedence. The two are written out
+        // twice because EF translates one and materialises the other, and a helper serving both
+        // would have to be an expression tree nobody can read - so
+        // The_channel_is_projected_from_the_apply_link_and_filters_before_the_bound is what
+        // holds them together. It has already caught them diverging once.
+        query = channel switch
+        {
+            SubmissionChannel.Ats => query.Where(m =>
+                m.Posting!.JobUrlDirect != null
+                || m.Posting.OffsiteApply == true
+                || (m.Posting.OffsiteApply == null
+                    && m.Posting.LocationCity != null
+                    && db.JobPostings.Any(other =>
+                        other.Title == m.Posting.Title
+                        && other.Company == m.Posting.Company
+                        && other.LocationCity == m.Posting.LocationCity
+                        && other.Site != m.Posting.Site
+                        && other.JobUrlDirect != null))),
+            SubmissionChannel.Board => query.Where(m =>
+                m.Posting!.JobUrlDirect == null && m.Posting.OffsiteApply == false),
+            SubmissionChannel.Unknown => query.Where(m =>
+                m.Posting!.JobUrlDirect == null
+                && m.Posting.OffsiteApply == null
+                && !(m.Posting.LocationCity != null && db.JobPostings.Any(other =>
+                        other.Title == m.Posting.Title
+                        && other.Company == m.Posting.Company
+                        && other.LocationCity == m.Posting.LocationCity
+                        && other.Site != m.Posting.Site
+                        && other.JobUrlDirect != null))),
+            _ => query,
+        };
+
+        return await query
+            .OrderByDescending(m => m.RankScore)
+            .ThenBy(m => m.PostingId)
+            .Take(limit)
+            .Select(m => new ApplyableRow(
+                m.PostingId,
+                m.Posting!.Title,
+                m.Posting.Company,
+                m.Posting.LocationRaw,
+                // Precedence, strongest evidence first: the posting's own published link, then
+                // what its own board said about itself, and only then the same job seen
+                // elsewhere. A board saying it hosts the application beats a title match on
+                // another board, because it is talking about this listing rather than one that
+                // resembles it.
+                m.Posting.JobUrlDirect != null
+                || m.Posting.OffsiteApply == true
+                || (m.Posting.OffsiteApply == null
+                    && m.Posting.LocationCity != null
+                    && db.JobPostings.Any(other =>
+                        other.Title == m.Posting.Title
+                        && other.Company == m.Posting.Company
+                        && other.LocationCity == m.Posting.LocationCity
+                        && other.Site != m.Posting.Site
+                        && other.JobUrlDirect != null))
+                    ? SubmissionChannel.Ats
+                    : m.Posting.OffsiteApply == false
+                        ? SubmissionChannel.Board
+                        : SubmissionChannel.Unknown,
+                m.Posting.JobUrlDirect
+                    ?? (m.Posting.OffsiteApply == false || m.Posting.LocationCity == null
+                        ? null
+                        : db.JobPostings
+                            .Where(other =>
+                                other.Title == m.Posting.Title
+                                && other.Company == m.Posting.Company
+                                && other.LocationCity == m.Posting.LocationCity
+                                && other.Site != m.Posting.Site
+                                && other.JobUrlDirect != null)
+                            .Select(other => other.JobUrlDirect)
+                            .FirstOrDefault())
+                    ?? m.Posting.JobUrl,
+                m.Posting.JobUrlDirect != null
+                    ? ApplyUrlSource.Posting
+                    : m.Posting.OffsiteApply != false
+                        && m.Posting.LocationCity != null
+                        && db.JobPostings.Any(other =>
+                            other.Title == m.Posting.Title
+                            && other.Company == m.Posting.Company
+                            && other.LocationCity == m.Posting.LocationCity
+                            && other.Site != m.Posting.Site
+                            && other.JobUrlDirect != null)
+                        ? ApplyUrlSource.MatchedOnAnotherBoard
+                        : ApplyUrlSource.BoardPosting,
+                m.Score,
+                m.AssessmentScore,
+                m.Verdict,
+                m.Rationale,
+                m.RankScore))
+            .ToListAsync(ct);
+    }
+
+    /// <summary>
+    /// Where an application for this pair would go, or null where the pair is not matched.
+    /// </summary>
+    /// <remarks>
+    /// <b>Requiring a match is the same guarantee <c>applications</c> enforces</b>, for a related
+    /// reason. There, a document written without a gap list has nothing stopping it inventing
+    /// skills; here, a submission recorded against an arbitrary posting id is a pipeline entry
+    /// nothing in this system ever chose, and the ids will be supplied by a model. The corpus is
+    /// public text and shared; a candidate's pipeline is neither.
+    ///
+    /// The apply link is resolved here rather than at the call site so exactly one place decides
+    /// that a missing <c>JobUrlDirect</c> means the board hosts it.
+    /// </remarks>
+    public Task<ApplyTarget?> ResolveApplyTargetAsync(
+        long profileId, long postingId, CancellationToken ct = default)
+        => db.JobMatches
+            .AsNoTracking()
+            .Where(m => m.ProfileId == profileId && m.PostingId == postingId)
+            .Select(m => new ApplyTarget(
+                m.Posting!.Title,
+                m.Posting.OffsiteApply == true || m.Posting.JobUrlDirect != null
+                    ? SubmissionChannel.Ats
+                    : m.Posting.OffsiteApply == false
+                        ? SubmissionChannel.Board
+                        : SubmissionChannel.Unknown,
+                m.Posting.JobUrlDirect ?? m.Posting.JobUrl))
+            .FirstOrDefaultAsync(ct);
 
     /// <summary>One match in full, with whether a document has already been generated for it.</summary>
     public async Task<MatchRow?> GetDetailAsync(

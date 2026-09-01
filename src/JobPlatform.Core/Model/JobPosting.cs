@@ -48,6 +48,26 @@ public sealed record JobPosting
 
     public string? JobUrl { get; init; }
     public string? JobUrlDirect { get; init; }
+
+    /// <summary>
+    /// Whether the application is completed on the employer's own system.
+    /// </summary>
+    /// <remarks>
+    /// <b>Three-state, and the third state is the point.</b> Null means the scraper did not
+    /// establish it - the detail page was not fetched, or the board does not say - which is a
+    /// different fact from <c>false</c>, meaning the board hosts the application itself.
+    ///
+    /// It exists because <see cref="JobUrlDirect"/> stopped being able to answer this. LinkedIn
+    /// no longer publishes an apply URL to signed-out clients, so on 2026-09-01 all 4,470
+    /// LinkedIn postings of the previous week carried no direct link - and reading that absence
+    /// as "the board hosts it" labelled the entire corpus Easy Apply. The scraper now reads
+    /// LinkedIn's own offsite markers instead, so the route survives even where the URL does not.
+    ///
+    /// <b>True does not imply <see cref="JobUrlDirect"/> is set.</b> They are separate facts:
+    /// this says the application happens on the employer's system, and the URL says where. On
+    /// LinkedIn today the first is knowable and the second is not.
+    /// </remarks>
+    public bool? OffsiteApply { get; init; }
     public string? CompanyUrl { get; init; }
 
     public string? Description { get; init; }

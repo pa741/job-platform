@@ -6,23 +6,37 @@ import type { SearchTermResponse } from './api/types';
 import { Overview } from './pages/Overview';
 import { Postings } from './pages/Postings';
 import { Profile } from './pages/Profile';
+import { Searches } from './pages/Searches';
 import { Matches } from './pages/Matches';
+import { Submissions } from './pages/Submissions';
 import { Vocabulary } from './pages/Vocabulary';
 import { AiCalls } from './pages/AiCalls';
 import { ErrorNote } from './components/Primitives';
 import { useTheme, type Theme } from './theme/useTheme';
 import './theme/app.css';
 
-type Page = 'overview' | 'postings' | 'vocabulary' | 'matches' | 'profile' | 'ai';
+type Page = 'overview' | 'postings' | 'vocabulary' | 'searches' | 'matches' | 'submissions' | 'profile' | 'ai';
 
 const PAGES: { id: Page; label: string }[] = [
   { id: 'overview', label: 'Overview' },
   { id: 'postings', label: 'Postings' },
   { id: 'vocabulary', label: 'Vocabulary' },
+  { id: 'searches', label: 'Searches' },
   { id: 'matches', label: 'Matches' },
+  { id: 'submissions', label: 'Applications sent' },
   { id: 'profile', label: 'Profile' },
   { id: 'ai', label: 'Model calls' },
 ];
+
+/**
+ * The pages that are about a slice of the corpus, and therefore wait on the search-term
+ * bootstrap.
+ *
+ * Named as a set rather than repeated as `page !== 'profile' && page !== 'matches' && ...` in
+ * three places: this list has grown twice, and the third addition is where one of the three
+ * copies gets missed and a per-person page starts waiting on a call it has no use for.
+ */
+const CORPUS_PAGES: Page[] = ['overview', 'postings', 'vocabulary'];
 
 export function App() {
   const [theme, setTheme] = useTheme();
@@ -157,16 +171,16 @@ function Dashboard({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => 
         {/* The search-term bootstrap gates the corpus pages only. Profile and Matches are
             about the signed-in person, so neither an error nor a slow load here should stand
             between somebody and their own record. */}
-        {error && page !== 'profile' && page !== 'matches' && page !== 'ai'
+        {error && CORPUS_PAGES.includes(page)
           ? <ErrorNote error={error} onRetry={loadTerms} />
           : null}
-        {!error && !terms && page !== 'profile' && page !== 'matches' && page !== 'ai' && (
+        {!error && !terms && CORPUS_PAGES.includes(page) && (
           <div className="empty">Loading…</div>
         )}
-        {terms?.length === 0 && page !== 'profile' && page !== 'matches' && page !== 'ai' && (
+        {terms?.length === 0 && CORPUS_PAGES.includes(page) && (
           <div className="empty">
-            The platform has no ingested data yet. Run the scraper, or replay a blob through
-            the ingest function.
+            The platform has no ingested data yet. Add a search under Searches and run the
+            scraper, or replay a blob through the ingest function.
           </div>
         )}
 
@@ -178,12 +192,15 @@ function Dashboard({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => 
         {searchTerm && page === 'overview' && <Overview api={api} searchTerm={searchTerm} />}
         {searchTerm && page === 'postings' && <Postings api={api} searchTerm={searchTerm} />}
 
-        {/* Neither of these is scoped by search term, and neither waits on one. They are about
-            the signed-in person rather than about a slice of the corpus, so they render even
-            when the platform has ingested nothing at all - which is exactly the state somebody
-            filling in their profile for the first time is in. */}
+        {/* None of these is scoped by search term, and none waits on one. They are about the
+            signed-in person rather than about a slice of the corpus, so they render even when
+            the platform has ingested nothing at all - which is exactly the state somebody
+            filling in their profile, or configuring their first search, is in. Searches
+            especially: the reason to open it is that nothing has been scraped yet. */}
         {page === 'vocabulary' && <Vocabulary api={api} searchTerm={searchTerm} />}
+        {page === 'searches' && <Searches api={api} />}
         {page === 'matches' && <Matches api={api} />}
+        {page === 'submissions' && <Submissions api={api} />}
         {page === 'profile' && <Profile api={api} />}
       </main>
     </>

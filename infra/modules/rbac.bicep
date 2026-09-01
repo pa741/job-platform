@@ -12,6 +12,9 @@ param ingestPrincipalId string
 @description('Container the curated export writes into. Scoped write access, nothing wider.')
 param curatedContainerName string
 
+@description('Container the API publishes the scraper configuration into. Scoped write access.')
+param scraperConfigContainerName string
+
 // Built-in role ids, hard-coded because they are stable platform GUIDs.
 var storageBlobDataReader = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
 var storageBlobDataContributor = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
@@ -92,6 +95,23 @@ resource curatedContainer 'Microsoft.Storage/storageAccounts/blobServices/contai
 resource curatedBlobWrite 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: curatedContainer
   name: guid(curatedContainer.id, ingestPrincipalId, storageBlobDataContributor)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributor)
+    principalId: ingestPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// The same shape again, for the same reason. The API rewrites the scraper's configuration here
+// and holds Contributor on this container alone; its account-wide grant is still Reader, so the
+// identity that decides what gets scraped still cannot alter what was scraped.
+resource scraperConfigContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' existing = {
+  name: '${landingStorageAccountName}/default/${scraperConfigContainerName}'
+}
+
+resource scraperConfigBlobWrite 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: scraperConfigContainer
+  name: guid(scraperConfigContainer.id, ingestPrincipalId, storageBlobDataContributor)
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributor)
     principalId: ingestPrincipalId
