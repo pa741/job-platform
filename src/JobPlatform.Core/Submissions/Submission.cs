@@ -118,11 +118,54 @@ public static class SubmissionLimits
     /// <summary>A sentence or two of context. Never a message body.</summary>
     public const int MaxNoteLength = 1000;
 
-    /// <summary>What a retrying caller sends to make a write converge rather than duplicate.</summary>
+    /// <summary>What the caller sends to make a write converge rather than duplicate.</summary>
     public const int MaxIdempotencyKeyLength = 100;
+
+    /// <summary>
+    /// How many applications may be recorded as <i>sent</i> in one UTC day.
+    /// </summary>
+    /// <remarks>
+    /// <b>A bound on the blast radius of a client that loops.</b> The server never submits
+    /// anything, so the damage is a pipeline full of applications nobody made - but the whole
+    /// point of the pipeline is that a person can trust it, and four hundred phantom rows
+    /// destroys that as surely as four hundred real emails would.
+    ///
+    /// <b>Enforced in <c>SubmissionRepository</c> and nowhere else</b>, for the reason
+    /// <c>AiCallRecord.Create</c> is the only constructor: a rule enforced at the call sites
+    /// survives exactly until somebody adds another one, and there are already two.
+    ///
+    /// It bounds <c>Submitted</c> alone. Recording that a hundred applications exist is fine -
+    /// somebody may be importing a history - and claiming a hundred were sent today is not.
+    /// Set well above what a person does in a day and well below what a loop does in a minute.
+    /// </remarks>
+    public const int MaxSubmittedPerDay = 25;
 
     /// <summary>The apply URL as it was at the time, so a later edit to the posting does not rewrite history.</summary>
     public const int MaxApplyUrlLength = 1000;
+}
+
+/// <summary>What happened to an attempt to append an event.</summary>
+/// <remarks>
+/// Four states rather than a bool, because a caller acts differently on each and three of them
+/// are ordinary rather than exceptional. A retry that finds its event already recorded has
+/// succeeded; a client that has hit the daily cap should stop rather than retry.
+/// </remarks>
+public enum SubmissionEventResult
+{
+    /// <summary>Appended.</summary>
+    Recorded = 0,
+
+    /// <summary>That idempotency key is already on this submission. The retry converged.</summary>
+    AlreadyRecorded = 1,
+
+    /// <summary>No such submission for this candidate. Indistinguishable from "not yours".</summary>
+    NotFound = 2,
+
+    /// <summary>
+    /// The candidate has already recorded <see cref="SubmissionLimits.MaxSubmittedPerDay"/>
+    /// applications as sent today.
+    /// </summary>
+    DailyLimitReached = 3,
 }
 
 /// <summary>

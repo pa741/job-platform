@@ -9,14 +9,25 @@ using ModelContextProtocol.Server;
 namespace JobPlatform.Api.Features.Mcp;
 
 /// <summary>
-/// The agent surface over the submission pipeline. <b>Read-only.</b>
+/// The agent surface over the submission pipeline.
 /// </summary>
 /// <remarks>
-/// <b>Nothing here writes and nothing here applies.</b> The write tools are a separate step,
-/// added once this has been exercised, and <c>submit_application</c> will never exist: applying
-/// is irreversible and outward-facing, and keeping it outside means no bug in this repository
-/// can send anything to an employer. This surface answers questions; a person, or an agent
-/// driving a browser somewhere else entirely, does the applying.
+/// <b>Four reads and two writes, and the writes record rather than act.</b>
+/// <c>submit_application</c> will never exist: applying is irreversible and outward-facing, so
+/// it stays outside this system entirely and no bug here can reach an employer. A person, or an
+/// agent driving a browser somewhere else, does the applying; these tools write down that it
+/// happened. <c>McpEndpointTests</c> asserts the surface is exactly these six, an equality
+/// rather than a superset, so a seventh turns the build red.
+///
+/// <b>Both writes converge instead of duplicating, and one of them is capped.</b>
+/// <c>create_submission</c> is idempotent per posting by the schema, and <c>record_event</c> on
+/// a key the caller chooses. The daily cap on <c>Submitted</c> events lives in
+/// <c>SubmissionRepository</c> rather than here - the reason <c>AiCallRecord.Create</c> is the
+/// only constructor: a guard at the call sites survives until somebody adds another call site.
+///
+/// <b>Events written here carry <c>Source = Client</c>, never <c>Candidate</c>.</b> What a
+/// person asserted and what an agent inferred are different kinds of claim, and a log that
+/// cannot tell them apart cannot be audited after one turns out to be wrong.
 ///
 /// <b>No tool takes a profile id, and none ever should.</b> Every one resolves the caller from
 /// the token on the request and hands a subject id to a repository that has no overload
@@ -24,14 +35,14 @@ namespace JobPlatform.Api.Features.Mcp;
 /// arguments are named by a router and these are named by a model: an unused <c>profileId</c>
 /// parameter is exactly the kind of thing a model would helpfully fill in.
 ///
-/// <b>Two of these disclose the candidate's own data and both are logged.</b> There is no
+/// <b>Two of the reads disclose the candidate's own data and both are logged.</b> There is no
 /// <c>get_profile</c> - a tool result is transcript content wherever the client runs - so
 /// <see cref="GetFormFieldAsync"/> answers one allowlisted question at a time. But
 /// <see cref="GetSubmissionPackAsync"/> returns the tailored CV, which is the profile rewritten
 /// in prose, so it is recorded on the same terms rather than treated as a public-text read.
 ///
-/// <b>These read Azure SQL</b>, which the architecture reserves for posting browse, search and
-/// detail because it is billed on wall-clock time online against a monthly grant. The bound is
+/// <b>These read and write Azure SQL</b>, which the architecture reserves for posting browse,
+/// search and detail because it is billed on wall-clock time online against a monthly grant. The bound is
 /// <c>RateLimitSetup.McpPolicy</c>, deliberately an order of magnitude below the dashboard's:
 /// a client asking what changed once a day is what this is sized for, and a client polling every
 /// minute is the failure that rule exists to prevent.
@@ -212,6 +223,152 @@ public sealed class SubmissionTools(
             note = value is null
                 ? "The profile does not carry this. Ask the candidate rather than inferring it."
                 : null,
+        };
+    }
+
+    [McpServerTool(Name = "create_submission")]
+    [Description(
+        "Records that an application was sent for one posting. Does NOT apply to anything - "
+        + "nothing in this system can reach an employer; a person or a browser does the applying "
+        + "and this records that it happened. Idempotent per posting: calling it twice returns "
+        + "the submission that already exists rather than making a second, and never overwrites "
+        + "where the first said the application went. The posting must already be matched to "
+        + "this candidate.")]
+    public async Task<object> CreateSubmissionAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The posting applied to. Must appear in list_applyable, or already be matched.")] long postingId,
+        [Description("Where it was sent: 'Ats', 'Board' or 'Unknown'. Omit to take it from the posting.")] string? channel = null,
+        [Description("The URL actually applied at. Omit to record the posting's own apply link.")] string? applyUrl = null,
+        CancellationToken ct = default)
+    {
+        var (profileId, failure) = await ResolveAsync(context, ct);
+
+        if (failure is not null)
+        {
+            return failure;
+        }
+
+        if (!TryParseChannel(channel, out var requested))
+        {
+            return Refused(
+                $"'{channel}' is not a channel. Expected 'Ats' (the employer's own system), "
+                + "'Board' (the job board hosts the application) or 'Unknown'.");
+        }
+
+        var target = await matches.ResolveApplyTargetAsync(profileId!.Value, postingId, ct);
+
+        // The same rule the application writer follows. It is what stops an arbitrary posting id
+        // - and these are named by a model - becoming a row in somebody's pipeline.
+        if (target is null)
+        {
+            return Refused(
+                $"Posting {postingId} has not been matched against this candidate's profile, so "
+                + "there is nothing to record a submission against. Use list_applyable.");
+        }
+
+        var (row, created) = await submissions.CreateAsync(
+            profileId.Value,
+            postingId,
+            requested ?? target.Channel,
+            applyUrl ?? target.ApplyUrl,
+            time.GetUtcNow(),
+            ct);
+
+        return new
+        {
+            submissionId = row.Id,
+            postingId = row.PostingId,
+            title = row.Title,
+            channel = row.Channel.ToString(),
+            applyUrl = row.ApplyUrl,
+
+            // False on a retry. Worth returning rather than hiding: a client that cannot tell
+            // "I made this" from "this already existed" will re-record events against it.
+            created,
+            note = created
+                ? "Recorded. Add a 'Submitted' event with record_event once the application is "
+                    + "actually sent - creating the submission does not assert that it was."
+                : "A submission for this posting already existed and was returned unchanged.",
+        };
+    }
+
+    [McpServerTool(Name = "record_event")]
+    [Description(
+        "Appends one event to a submission's log - that it was sent, acknowledged, rejected, an "
+        + "interview booked, and so on. The log is append-only: nothing edits or deletes an "
+        + "event, and withdrawing an application is a 'Withdrawn' event. Requires an "
+        + "idempotencyKey the caller chooses, so a retry records the same thing once. There is a "
+        + "daily cap on 'Submitted' events.")]
+    public async Task<object> RecordEventAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The submission to append to, from create_submission or list_submissions.")] long submissionId,
+        [Description("One of: Submitted, Acknowledged, ScreeningScheduled, InterviewScheduled, OfferReceived, Rejected, Withdrawn.")] string type,
+        [Description("Your own key for this event, unique per submission. The same key twice records once.")] string idempotencyKey,
+        [Description("When it happened, UTC. Omit for now - which is right only when it just did.")] DateTimeOffset? atUtc = null,
+        [Description("The round or label inside the phase, e.g. 'Tech round 2'. Free text.")] string? stage = null,
+        [Description("A sentence of context for the candidate. Never paste a message body.")] string? note = null,
+        CancellationToken ct = default)
+    {
+        var (profileId, failure) = await ResolveAsync(context, ct);
+
+        if (failure is not null)
+        {
+            return failure;
+        }
+
+        if (string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            return Refused(
+                "idempotencyKey is required. It is what makes a retry record the same event once, "
+                + "and only the caller knows whether two requests are one event or two.");
+        }
+
+        if (!Enum.TryParse<SubmissionEventType>(type, ignoreCase: true, out var parsed)
+            || !Enum.IsDefined(parsed))
+        {
+            return Refused(
+                $"'{type}' is not an event type. Expected one of: "
+                + string.Join(", ", Enum.GetNames<SubmissionEventType>())
+                + ". A specific interview round belongs in 'stage', not here.");
+        }
+
+        var result = await submissions.AddEventAsync(
+            profileId!.Value,
+            submissionId,
+            // Client, not Candidate. What a person asserted and what an agent inferred are
+            // different kinds of claim, and the log is only auditable if it says which.
+            new SubmissionEvent(
+                atUtc ?? time.GetUtcNow(), parsed, stage, SubmissionEventSource.Client, note),
+            idempotencyKey,
+            ct);
+
+        return result switch
+        {
+            SubmissionEventResult.Recorded =>
+                new { recorded = true, result = "Recorded", note = (string?)null },
+            SubmissionEventResult.AlreadyRecorded => new
+            {
+                recorded = false,
+                result = "AlreadyRecorded",
+                note = (string?)("That key is already on this submission, so the earlier call "
+                    + "landed. Nothing was duplicated and nothing needs retrying."),
+            },
+            SubmissionEventResult.NotFound => new
+            {
+                recorded = false,
+                result = "NotFound",
+                note = (string?)($"No submission {submissionId} for this candidate. Use "
+                    + "list_submissions, or create_submission first."),
+            },
+            _ => new
+            {
+                recorded = false,
+                result = "DailyLimitReached",
+                note = (string?)($"This candidate has already recorded "
+                    + $"{SubmissionLimits.MaxSubmittedPerDay} applications as sent for that day, "
+                    + "which is the cap. Stop rather than retrying: the limit exists so a client "
+                    + "looping cannot fill somebody's pipeline with applications never made."),
+            },
         };
     }
 

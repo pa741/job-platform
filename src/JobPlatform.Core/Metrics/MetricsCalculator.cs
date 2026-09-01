@@ -323,7 +323,9 @@ public sealed class MetricsCalculator(TimeProvider? timeProvider = null)
             .Select(g => new ApplyLinkCount(
                 g.Key,
                 g.Count(),
-                g.Count(p => string.IsNullOrWhiteSpace(p.JobUrlDirect))))
+                g.Count(p => string.IsNullOrWhiteSpace(p.JobUrlDirect)),
+                // Neither a link nor a flag: this run learned nothing about how to apply.
+                g.Count(p => string.IsNullOrWhiteSpace(p.JobUrlDirect) && p.OffsiteApply is null)))
             // Largest site first, then by name, so two runs with the same sites produce the
             // same document rather than one that differs only in ordering.
             .OrderByDescending(x => x.Postings)

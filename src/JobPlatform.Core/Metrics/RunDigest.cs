@@ -127,14 +127,24 @@ public sealed record LengthStats(int P50, int P90, int Max);
 /// <param name="Site">The board the postings came from.</param>
 /// <param name="Postings">Postings from that site in this run.</param>
 /// <param name="BoardHosted">
-/// How many carry no direct apply link. On <c>linkedin</c> and <c>indeed</c> that means the
-/// board hosts the application - Easy Apply, or Indeed Apply. On <c>freehire</c> it means
-/// nothing at all: that scraper sets the field unconditionally, so the count is always zero.
+/// How many carry no direct apply link. <b>Reported, not alarmed on.</b> LinkedIn stopped
+/// publishing apply URLs entirely, so this is permanently 100% there and a warning keyed on it
+/// would fire on every run forever. <paramref name="RouteUnknown"/> is the one that means
+/// something went wrong.
 /// </param>
-public sealed record ApplyLinkCount(string Site, int Postings, int BoardHosted)
+/// <param name="RouteUnknown">
+/// How many say <b>nothing</b> about where the application is made: no direct link and no
+/// offsite flag. This is the number worth watching. A board that stops answering the question
+/// lands here, and unlike a missing URL it has no legitimate steady state - every board this
+/// system scrapes answers it one way or the other when it is working.
+/// </param>
+public sealed record ApplyLinkCount(string Site, int Postings, int BoardHosted, int RouteUnknown)
 {
     /// <summary>Board-hosted as a fraction of this site's postings. Zero where it had none.</summary>
     public double BoardHostedShare => Postings == 0 ? 0 : (double)BoardHosted / Postings;
+
+    /// <summary>The share whose apply route is not established either way.</summary>
+    public double RouteUnknownShare => Postings == 0 ? 0 : (double)RouteUnknown / Postings;
 }
 
 public sealed record NamedCount(string Name, int Count);

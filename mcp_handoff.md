@@ -7,10 +7,10 @@ lives in [`HANDOFF.md`](HANDOFF.md). This file is one feature, and **the open wo
 because that is what someone picking this up needs. What was built, and what was verified, is
 below it.
 
-**Built on 2026-08-31: the submission aggregate, its dashboard page, and the read-only tool
-surface.** The write tools and the questions channel are deliberately not built - see section 2
-for what each is waiting on. Nothing here has been exercised against a real client yet; section 4
-is the sequence for doing that.
+**Built and deployed: the submission aggregate, its dashboard page, and a six-tool MCP surface
+- four reads and two writes.** The questions channel is the one piece deliberately not built, and
+section 1.4 says what blocks it. **Nothing here has been driven by a real MCP client yet**;
+section 4 is the sequence, and section 1.3 is what to watch when it happens.
 
 **The one measurement this plan turned on came back saying the signal is broken.** Section 0.3 of
 the original plan asked what share of the corpus is board-hosted, and said not to guess it. The
@@ -85,76 +85,54 @@ board hosts it" is the exact fault this replaced.
 3. Re-run `dbadmin apply-links` after the first scrape on the new image. The board-hosted share
    becomes measurable for the first time, and only then is "does the board path matter" answerable.
 
-### 1.2b Could an authenticated session get the URL back? Researched 2026-09-01
+### 1.2b Authenticated LinkedIn: researched, and decided against
 
 Asked because the obvious next move is dedicated accounts used only for the job detail fetch.
-Short answer: **technically yes, and it is the wrong trade at this scale.** The evidence, so the
-next person does not re-derive it:
+**The answer is no, and this is the decision rather than an open question** - the research is
+kept so nobody re-derives it, not so it can be re-litigated.
 
-**It is not a proxy problem.** The 4,470 postings above were scraped *through DataImpulse
-residential IPs* - `config.yaml` routes linkedin and indeed through `PROXIES` - and still got
-zero. Rotating residential exit nodes does not restore the link, so nothing short of an
-authenticated session changes the answer.
+**It is not a proxy problem.** The 4,470 postings were scraped *through DataImpulse residential
+IPs* - `config.yaml` routes linkedin and indeed through `PROXIES` - and still got zero. Nothing
+short of an authenticated session changes the answer.
 
-**The authenticated endpoint exists and still carries the field.** `/voyager/api/jobs/jobPostings/{id}`
-answers **403 "CSRF check failed"**, not 404 - it is gated, not gone. Its `applyMethod` is
-documented in the wild as `{"companyApplyUrl": "...", "type": "OffsiteApply"}`, which is exactly
-the value that used to appear in `<code id="applyUrl">`. A session cookie plus a matching
-`csrf-token` header would very likely return it.
+**It would work.** `/voyager/api/jobs/jobPostings/{id}` answers **403 "CSRF check failed"**, not
+404 - gated, not gone - and its `applyMethod` is `{"companyApplyUrl": "...", "type":
+"OffsiteApply"}`, exactly the value that used to appear in `<code id="applyUrl">`. The plumbing
+would be small: `PROXIES` is already a comma-separated env var feeding a rotating session, and a
+`LINKEDIN_COOKIES` var would follow the same shape.
 
-**What it would cost:**
+**Why not, anyway:**
 
 | | |
 | --- | --- |
-| Terms | Authenticated automation breaches LinkedIn's User Agreement outright, unlike scraping the signed-out pages |
-| Accounts | The consistent reporting is permanent bans on detection, via fingerprinting, rate heuristics and IP reputation |
-| Throughput | ~100-200 detail views per account per day against ~640 LinkedIn postings a day here, so 3-6 accounts running continuously just to keep pace |
-| Upkeep | `li_at` expires in weeks and cannot be refreshed unattended, so the pipeline acquires a manual step whose failure mode is silent - the exact shape of bug this section exists because of |
+| Terms | Authenticated automation breaches LinkedIn's User Agreement outright, unlike reading the signed-out pages |
+| Accounts | The consistent reporting is permanent bans on detection - fingerprinting, rate heuristics, IP reputation |
+| Throughput | ~100-200 detail views per account per day against ~640 LinkedIn postings a day, so 3-6 accounts running continuously just to keep pace |
+| Upkeep | `li_at` expires in weeks and cannot be refreshed unattended, so the pipeline gains a manual step whose failure mode is silent - the exact shape of bug this file exists because of |
 
-**What is already free, measured rather than assumed:**
+**And the cheap wins were taken instead, both shipped:** `offsite_apply` gives the route for
+every posting at no risk, and the cross-board recovery returns ~5% of the missing links outright.
 
-- **`offsite_apply` gives the route for every posting at no risk**, which is most of what the
-  agent surface needs: "the employer takes this one, the posting says where."
-- **6.4% of the missing links (285 of 4,470) are already in the database**, on a sibling posting
-  from another board, reachable by matching title and employer.
-- **freehire and Indeed already carry real links for 1,762 postings**, 92.6% of Indeed's pointing
-  at a genuine external ATS.
+**What would reopen it:** a measured demand for the URL specifically rather than the route. If
+`list_applyable` is in daily use and the `Ats`-without-a-URL rows are the ones that stall, that
+is evidence. Until then this buys a URL for jobs whose posting page already leads to it.
 
-**And a latent bug found while measuring it, now fixed.** `JobFingerprint.ContentHash` folds
-location into the hash, and boards write locations differently - "London, England, United
-Kingdom" against "London, UK". Corpus-wide it matched across boards **zero** times in 30 days,
-so `RunCounts.CrossSiteDuplicates` had reported 0 since it was written. `CrossBoardKey` now
-parses the city out first; `ContentHash` is untouched because embedding staleness compares it.
+### 1.3 Connect a client and exercise the write path
 
-**Both quick wins are built.** The recovery is live in `ListApplyableAsync`: where a posting has
-no link and the same job on another board does - matched on title, employer **and city** - the
-shortlist serves that link and marks it `MatchedOnAnotherBoard`. Measured on the live corpus that
-is 211 of 4,470, and the city qualifier is what keeps it honest: title and employer alone matched
-285, so 74 were one employer advertising one title in several cities.
+The write tools are built - see 2.5 - and have never been called by a real client. That is the
+next thing, and it is the same step as 1.1: a token, `claude mcp add`, and the sequence in
+section 4.
 
-**If it is built anyway**, the shape that limits the damage: opt-in and off by default
-(`LINKEDIN_COOKIES` unset changes nothing), used only on the detail fetch and never on search,
-one account per proxy exit, and **falling back to `offsite_apply` rather than failing** - so a
-banned account degrades to today's behaviour instead of stopping the run.
+What to watch for on the first real use, because none of it has been exercised end to end:
 
-### 1.3 The write tools
-
-`create_submission` and `record_event`. **Add only once section 1.1 has actually happened** - the
-handoff's original ordering, and the reason has not changed: nothing on the read surface can be
-damaged by a client that misbehaves, and these can.
-
-Most of the work is already done. The schema carries both idempotency guarantees
-(`UNIQUE (ProfileId, PostingId)` and `UNIQUE (SubmissionId, IdempotencyKey)`),
-`SubmissionRepository.CreateAsync` and `AddEventAsync` already converge rather than duplicating,
-and `POST /api/v1/submissions` and `.../events` already exercise both. A write tool is a thin call
-onto those.
-
-**What is not built and must be, at the same time: a daily cap on `Submitted` events.** A client
-that loops applies to four hundred jobs under somebody's name, and the recovery is four hundred
-emails. Bound it **in `SubmissionRepository`, not at the call sites**, for the reason
-`AiCallRecord.Create` is the only constructor - a rule enforced at two call sites survives until
-somebody adds a third. Note the cap belongs on the event type, not on submissions: recording that
-a hundred applications exist is fine, and claiming a hundred were sent today is not.
+- **`create_submission` on a posting that is already submitted** should answer `created: false`
+  and leave the original channel and URL alone, not overwrite them.
+- **`record_event` retried under one key** should answer `AlreadyRecorded`, not append twice.
+- **The daily cap** at `SubmissionLimits.MaxSubmittedPerDay` (25) should answer
+  `DailyLimitReached` and record nothing. It counts by the event's `AtUtc` across every
+  submission, so it cannot be sidestepped by spreading writes over postings.
+- **`Source` on every event written by a tool is `Client`**, never `Candidate`. If the dashboard
+  starts showing agent-written events as "you", that is the bug.
 
 ### 1.4 The questions channel, and the defect in the original plan for it
 
@@ -220,7 +198,7 @@ pins the numbering the fold leans on.
 form that appends to it. Built before the tools, deliberately: if the pipeline is not legible to a
 person, an agent writing to it is writing somewhere nobody is looking.
 
-### 2.3 The read-only tool surface
+### 2.3 The tool surface
 
 `ModelContextProtocol.AspNetCore` 2.2.0, in `JobPlatform.Api` as `Features/Mcp/` - one
 `IEndpointGroup`, one line in `EndpointGroupExtensions`, one `AddMcpFeature()` in `Program.cs`
@@ -229,8 +207,8 @@ user and its own role assignments.
 
 Stateless sessions, set explicitly. `WithTools<SubmissionTools>()` rather than
 `WithToolsFromAssembly()`, so a class gaining an attribute is not a new public tool nobody
-reviewed - `McpEndpointTests` asserts the surface is **exactly** four tools, which is an equality
-rather than a superset precisely so that an added one turns the build red.
+reviewed - `McpEndpointTests` asserts the surface is **exactly** these six tools, an equality rather
+than a superset precisely so that an added one turns the build red.
 
 | Tool | Notes |
 | --- | --- |
@@ -238,6 +216,8 @@ rather than a superset precisely so that an added one turns the build red.
 | `get_submission_pack(postingId)` | Advert text, apply URL, and the latest CV and cover letter as markdown. |
 | `get_form_field(name)` | **One** answer, from `FormFieldCatalog`. Call with no name to list what is allowed. |
 | `list_submissions(phase?, since?)` | Folded status per application. |
+| `create_submission(postingId, channel?, applyUrl?)` | Records that one was sent. Idempotent per posting by the schema. |
+| `record_event(submissionId, type, idempotencyKey, atUtc?, stage?, note?)` | Appends one event. Idempotent on the caller's key; `Submitted` is capped daily. |
 
 **`list_applyable`'s threshold is its own constant and gates on the verdict, not on a score cut.**
 `MatchRanker.FusionFloor` is where the embedding earns its weight and
@@ -264,6 +244,37 @@ retention is not one decision.
 
 Not App Insights. Sampling is on with `excludedTypes: "Request;Exception"` and none of these calls
 throws, so traces are sampled exactly where the record matters.
+
+### 2.5 The write tools
+
+`create_submission` and `record_event`. **Both record; neither acts.** Nothing here reaches an
+employer, and `submit_application` will never exist.
+
+**Both converge on a retry rather than duplicating**, which is the contract the whole ingestion
+side of this system runs on. A submission is unique on `(ProfileId, PostingId)` in the schema, so
+a second `create_submission` returns the first and answers `created: false` without overwriting
+where it said the application went. An event is unique on `(SubmissionId, IdempotencyKey)`, and
+the key is the caller's to choose because only the caller knows whether two requests are one
+event or two.
+
+**The daily cap on `Submitted` is in `SubmissionRepository`, not at the call sites**, for the
+reason `AiCallRecord.Create` is the only constructor: two paths reach it today and a third will.
+`SubmissionLimits.MaxSubmittedPerDay` is 25 - above what a person does in a day, far below what a
+loop does in a minute. It bounds `Submitted` alone, because recording that a hundred applications
+exist is fine and claiming a hundred were sent today is not, and it counts by the event's `AtUtc`
+so backdating is the same assertion and is capped the same way.
+
+**The idempotency check runs before the cap.** A client retrying a write it is unsure landed must
+not be refused for a quota that very event already spent - it would have no way to tell "already
+done" from "refused" and might stop early with the work half recorded.
+
+**Events written by a tool carry `Source = Client`, never `Candidate`.** What a person asserted
+and what an agent inferred from an inbox are different kinds of claim, and a log that cannot tell
+them apart cannot be audited after one turns out wrong.
+
+`SubmissionEventResult` has four members rather than being a bool, because three of the outcomes
+are ordinary: recorded, already recorded, not yours, capped. The HTTP route maps the cap to
+**429, not 400** - the request is well formed and would be accepted tomorrow.
 
 ---
 

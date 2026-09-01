@@ -255,9 +255,20 @@ public sealed class SubmissionEndpoints : IEndpointGroup
 
         return recorded switch
         {
-            null => TypedResults.NotFound(),
-            true => TypedResults.Created($"/api/v1/submissions/{id}/events", new { recorded = true }),
-            false => TypedResults.Ok(new { recorded = false }),
+            SubmissionEventResult.NotFound => TypedResults.NotFound(),
+            SubmissionEventResult.Recorded =>
+                TypedResults.Created($"/api/v1/submissions/{id}/events", new { recorded = true }),
+            SubmissionEventResult.AlreadyRecorded => TypedResults.Ok(new { recorded = false }),
+
+            // 429, not 400. The request is well formed and would be accepted tomorrow; the
+            // caller has spent a budget rather than made a mistake, and the status should say so.
+            SubmissionEventResult.DailyLimitReached => TypedResults.Problem(
+                detail: $"This profile has already recorded {SubmissionLimits.MaxSubmittedPerDay} "
+                    + "applications as sent for that day, which is the cap. Nothing was recorded. "
+                    + "The limit exists so that a client looping cannot fill somebody's pipeline "
+                    + "with applications they never made.",
+                statusCode: StatusCodes.Status429TooManyRequests),
+            _ => TypedResults.Problem(statusCode: StatusCodes.Status500InternalServerError),
         };
     }
 

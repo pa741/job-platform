@@ -168,9 +168,9 @@ public sealed class SubmissionPersistenceTests : IDisposable
         var refused = await repository.AddEventAsync(
             OtherProfileId, mine.Id, Event(2, SubmissionEventType.Rejected), "k1");
 
-        // Null, not false. "That is not yours" and "that event is already recorded" are different
-        // answers and a caller acts differently on each.
-        Assert.Null(refused);
+        // NotFound, not AlreadyRecorded. "That is not yours" and "that event is already
+        // recorded" are different answers and a caller acts differently on each.
+        Assert.Equal(SubmissionEventResult.NotFound, refused);
         Assert.Empty(await repository.ListEventsAsync(ProfileId, mine.Id));
     }
 
@@ -232,8 +232,8 @@ public sealed class SubmissionPersistenceTests : IDisposable
         var replayed = await repository.AddEventAsync(
             ProfileId, submission.Id, Event(2, SubmissionEventType.Submitted), "send-1");
 
-        Assert.True(first);
-        Assert.False(replayed);
+        Assert.Equal(SubmissionEventResult.Recorded, first);
+        Assert.Equal(SubmissionEventResult.AlreadyRecorded, replayed);
         Assert.Single(await repository.ListEventsAsync(ProfileId, submission.Id));
     }
 
@@ -269,8 +269,98 @@ public sealed class SubmissionPersistenceTests : IDisposable
 
         // The key is unique per submission, not globally. A client numbering its writes from one
         // per application is the obvious thing to do and must not collide across them.
-        Assert.True(await repository.AddEventAsync(ProfileId, one.Id, Event(2, SubmissionEventType.Submitted), "1"));
-        Assert.True(await repository.AddEventAsync(ProfileId, two.Id, Event(2, SubmissionEventType.Submitted), "1"));
+        Assert.Equal(
+            SubmissionEventResult.Recorded,
+            await repository.AddEventAsync(ProfileId, one.Id, Event(2, SubmissionEventType.Submitted), "1"));
+        Assert.Equal(
+            SubmissionEventResult.Recorded,
+            await repository.AddEventAsync(ProfileId, two.Id, Event(2, SubmissionEventType.Submitted), "1"));
+    }
+
+    /// <summary>
+    /// The daily cap on applications recorded as sent.
+    /// </summary>
+    /// <remarks>
+    /// The bound on what a client that loops can do. The server never submits anything, so the
+    /// damage is a pipeline full of applications nobody made - but a pipeline a person cannot
+    /// trust is as broken as one that emailed four hundred employers.
+    /// </remarks>
+    [Fact]
+    public async Task Recording_more_applications_as_sent_than_the_daily_cap_is_refused()
+    {
+        await using var db = CreateContext();
+        var repository = new SubmissionRepository(db);
+
+        // One submission per posting, so the cap has to count events across all of them rather
+        // than per submission - which is the only way it bounds anything.
+        var results = new List<SubmissionEventResult>();
+
+        for (var i = 0; i < SubmissionLimits.MaxSubmittedPerDay + 2; i++)
+        {
+            await using var scoped = CreateContext();
+            var repo = new SubmissionRepository(scoped);
+            var (submission, _) = await repo.CreateAsync(
+                ProfileId, 1 + (i % 6), SubmissionChannel.Ats, null, Now);
+
+            results.Add(await repo.AddEventAsync(
+                ProfileId, submission.Id, Event(2, SubmissionEventType.Submitted), $"send-{i}"));
+        }
+
+        Assert.Equal(
+            SubmissionLimits.MaxSubmittedPerDay,
+            results.Count(r => r == SubmissionEventResult.Recorded));
+        Assert.All(
+            results.Skip(SubmissionLimits.MaxSubmittedPerDay),
+            r => Assert.Equal(SubmissionEventResult.DailyLimitReached, r));
+    }
+
+    [Fact]
+    public async Task The_cap_counts_only_submitted_events_and_only_within_one_day()
+    {
+        await using var db = CreateContext();
+        var repository = new SubmissionRepository(db);
+        var (submission, _) = await repository.CreateAsync(ProfileId, 1, SubmissionChannel.Ats, null, Now);
+
+        for (var i = 0; i < SubmissionLimits.MaxSubmittedPerDay; i++)
+        {
+            await repository.AddEventAsync(
+                ProfileId, submission.Id, Event(2, SubmissionEventType.Submitted), $"send-{i}");
+        }
+
+        // Day 2 is a fresh budget: the cap is per day, counted on when the event says it
+        // happened rather than on when the row was written.
+        Assert.Equal(
+            SubmissionEventResult.Recorded,
+            await repository.AddEventAsync(
+                ProfileId, submission.Id, Event(3, SubmissionEventType.Submitted), "next-day"));
+
+        // And nothing else is capped. Recording that an employer replied is not an application.
+        Assert.Equal(
+            SubmissionEventResult.Recorded,
+            await repository.AddEventAsync(
+                ProfileId, submission.Id, Event(2, SubmissionEventType.Rejected), "reply"));
+    }
+
+    [Fact]
+    public async Task A_retry_at_the_cap_still_converges_rather_than_being_refused()
+    {
+        await using var db = CreateContext();
+        var repository = new SubmissionRepository(db);
+        var (submission, _) = await repository.CreateAsync(ProfileId, 1, SubmissionChannel.Ats, null, Now);
+
+        for (var i = 0; i < SubmissionLimits.MaxSubmittedPerDay; i++)
+        {
+            await repository.AddEventAsync(
+                ProfileId, submission.Id, Event(2, SubmissionEventType.Submitted), $"send-{i}");
+        }
+
+        // The idempotency check runs before the cap. A client retrying a write it is not sure
+        // landed must not be told it has exceeded a quota it already spent on that very event -
+        // it would have no way to tell "already done" from "refused" and might stop early.
+        Assert.Equal(
+            SubmissionEventResult.AlreadyRecorded,
+            await repository.AddEventAsync(
+                ProfileId, submission.Id, Event(2, SubmissionEventType.Submitted), "send-0"));
     }
 
     // -----------------------------------------------------------------------

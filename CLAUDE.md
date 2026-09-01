@@ -416,6 +416,20 @@ mechanism, and it is derived from the corpus rather than guessed at.
   `jobs-sample.csv` carries an identical location string on both rows, so the broken metric
   matched it and its assertion passed for as long as the metric was wrong. The test that catches
   it writes the two locations the way two boards actually write them.
+- **The daily cap on `Submitted` events lives in `SubmissionRepository`, not at the call sites.**
+  Two paths reach it today and a third will; a guard written at the call sites survives until
+  then. It bounds `Submitted` alone - recording that a hundred applications exist is fine, and
+  claiming a hundred were sent today is not - and counts by the event's `AtUtc` rather than by
+  when the row was written, so backdating a hundred is the same assertion and is capped the same
+  way. The idempotency check runs *before* the cap: a client retrying a write it is unsure landed
+  must not be refused for a quota that very event already spent.
+- **The digest's apply-link warning is keyed on the route being unknown, not on the URL being
+  absent, and the first version had that wrong.** It alarmed at a 98% "board-hosted" share, which
+  was right on the day LinkedIn's selector broke and wrong forever afterwards: LinkedIn publishes
+  no apply URLs at all now, so that share is pinned at 100% and the warning would have fired on
+  every ingest for the rest of time. A warning that fires on the ordinary case is one people learn
+  to scroll past. `RouteUnknown` - no link *and* no offsite flag - has no legitimate steady state,
+  because every board answers that question one way or the other when it is working.
 - **The server records that something was submitted; it never submits.** There is no
   `submit_application` tool and there must never be one — applying is irreversible and
   outward-facing, so keeping it outside means no bug here can reach an employer. `McpEndpointTests`

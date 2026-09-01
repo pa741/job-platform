@@ -17,18 +17,20 @@ namespace JobPlatform.Api.Tests;
 /// The tool <i>behaviour</i> is not tested here - it is a thin projection over repositories that
 /// have their own tests, and reaching it would need an authenticated principal the test host has
 /// no way to mint. What is tested is the part that is specific to this surface and would be
-/// catastrophic to get wrong: the route is closed, the surface is the four tools somebody
-/// reviewed, and there is no tool that returns the profile or sends anything.
+/// catastrophic to get wrong: the route is closed, the surface is exactly the six tools somebody
+/// reviewed, and there is no tool that returns the profile or sends anything to an employer.
 /// </remarks>
 public sealed class McpEndpointTests
 {
-    /// <summary>The whole read-only surface, by name. Adding to this list is a deliberate act.</summary>
+    /// <summary>The whole surface, by name. Adding to this list is a deliberate act.</summary>
     private static readonly string[] Expected =
     [
         "list_applyable",
         "get_submission_pack",
         "get_form_field",
         "list_submissions",
+        "create_submission",
+        "record_event",
     ];
 
     /// <summary>
@@ -38,16 +40,16 @@ public sealed class McpEndpointTests
     /// <b>An equality, not a superset.</b> The point is the tools that are <i>absent</i>: there is
     /// no <c>submit_application</c>, because applying is irreversible and outward-facing and
     /// nothing in this repository may reach an employer; there is no <c>get_profile</c>, because
-    /// a tool result is transcript content wherever the client runs; and there is no write tool
-    /// yet, because those are added only once this surface has been exercised. A superset
-    /// assertion would pass while any of those was quietly added.
+    /// a tool result is transcript content wherever the client runs. A superset assertion would
+    /// pass while either was quietly added, and both are the kind of thing that gets added to be
+    /// helpful.
     ///
     /// It also pins the registration style. <c>WithTools&lt;T&gt;</c> is explicit; had it been
     /// <c>WithToolsFromAssembly</c>, a class gaining an attribute would become a public tool with
     /// nothing failing, and this test is what turns that into a red build.
     /// </remarks>
     [Fact]
-    public void The_tool_surface_is_exactly_the_four_read_tools()
+    public void The_tool_surface_is_exactly_the_six_intended_tools()
     {
         using var factory = new ApiFactory();
         using var client = factory.CreateClient();

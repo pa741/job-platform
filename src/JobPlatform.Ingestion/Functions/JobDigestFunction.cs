@@ -18,14 +18,23 @@ public sealed class JobDigestFunction(IngestionPipeline pipeline, ILogger<JobDig
     private const int MinimumSiteSample = 20;
 
     /// <summary>
-    /// The board-hosted share at which a site is reporting a broken selector rather than a market.
+    /// The share of a site's postings whose apply route is unknown before that is worth saying.
     /// </summary>
     /// <remarks>
-    /// Deliberately near-total. Real shares move; they do not reach 98% on a board that had a
-    /// mixture yesterday. Setting this lower would fire on ordinary variation and become the kind
-    /// of warning people learn to scroll past, which is worse than not having it.
+    /// <b>Keyed on the route being unestablished, not on the apply URL being absent, and that is
+    /// a correction.</b> The first version of this warned when a site was 98% "board-hosted",
+    /// meaning 98% had no <c>job_url_direct</c> - which was the right alarm on the day LinkedIn's
+    /// selector broke and the wrong one permanently afterwards. LinkedIn has stopped publishing
+    /// apply URLs to signed-out clients at all, so that share is now pinned at 100% there and the
+    /// warning would have fired on every ingest forever. A warning that fires on the ordinary
+    /// case is one people learn to scroll past.
+    ///
+    /// What has no legitimate steady state is a board that says <i>nothing</i>: no link and no
+    /// offsite flag. Every board this system scrapes answers that question one way or the other
+    /// when it is working, so a site landing here has broken. Still near-total, for the original
+    /// reason - a real mixture does not reach 98%.
     /// </remarks>
-    private const double BoardHostedAlarm = 0.98;
+    private const double RouteUnknownAlarm = 0.98;
 
     [Function(nameof(JobDigestFunction))]
     public async Task RunAsync(
@@ -81,25 +90,23 @@ public sealed class JobDigestFunction(IngestionPipeline pipeline, ILogger<JobDig
                 "Column {Column} was empty in every row of {BlobPath}.", column, digest.BlobPath);
         }
 
-        // The inverse check, and it needs its own because the fill rate above cannot express it.
-        // `job_url_direct` is absent wherever the board hosts the application, so absence is
-        // ordinary and a whole-file rate never reaches zero. What is not ordinary is a site where
-        // *every* posting is board-hosted: LinkedIn's half of this is a DOM scrape of one element
-        // id, and if that id is renamed the entire corpus reads as Easy Apply with nothing
-        // throwing - which is a broken scraper, not a hiring market that changed overnight.
+        // The check that catches a board going quiet about how to apply.
         //
-        // A near-total boundary rather than a trend, matching the shape of the check above. A
-        // trend needs the trailing runs, which means a Cosmos read on the ingest path to catch
-        // something a gradual market shift can never trigger; `dbadmin apply-links` is where that
-        // comparison is cheap. The sample floor keeps a run that found three postings quiet.
+        // Not "no apply URL" - that is now the permanent and correct state of every LinkedIn
+        // posting, because LinkedIn stopped publishing them. What is never correct is a site
+        // answering neither way: no link and no offsite flag means this run learned nothing
+        // about how any of those jobs is applied to, and downstream that is a shortlist of
+        // Unknowns nobody can act on.
         foreach (var site in digest.ApplyLinks.Where(
-            s => s.Postings >= MinimumSiteSample && s.BoardHostedShare >= BoardHostedAlarm))
+            s => s.Postings >= MinimumSiteSample && s.RouteUnknownShare >= RouteUnknownAlarm))
         {
             logger.LogWarning(
-                "Site {Site} had no direct apply link on {BoardHosted} of {Postings} postings in " +
-                "{BlobPath}. At that share this is a scraper selector that stopped matching, not " +
-                "a change in how employers accept applications.",
-                site.Site, site.BoardHosted, site.Postings, digest.BlobPath);
+                "Site {Site} said nothing about how to apply for {RouteUnknown} of {Postings} " +
+                "postings in {BlobPath} - no direct link and no offsite flag. Either the scraper " +
+                "is not reading that board's apply markers, or it is not fetching the detail " +
+                "page at all. Check the fill rate on the description column before the selectors.",
+                site.Site, site.RouteUnknown, site.Postings, digest.BlobPath);
         }
+
     }
 }

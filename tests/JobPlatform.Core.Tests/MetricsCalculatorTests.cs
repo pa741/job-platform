@@ -311,6 +311,64 @@ public sealed class MetricsCalculatorTests
     }
 
     /// <summary>
+    /// The number the digest warns on, and why it is not the board-hosted share.
+    /// </summary>
+    /// <remarks>
+    /// <b>Written after the first version of that warning turned out to be permanent noise.</b>
+    /// It alarmed at a 98% board-hosted share, which was right on the day LinkedIn's apply-URL
+    /// selector broke and wrong forever afterwards: LinkedIn stopped publishing apply URLs at
+    /// all, so that share is pinned at 100% there and the warning would have fired on every
+    /// ingest for the rest of time.
+    ///
+    /// A missing URL is now an ordinary state. Saying nothing either way is not - so the alarm
+    /// moved to the route being unestablished, which a working board never reports.
+    /// </remarks>
+    [Fact]
+    public void A_posting_with_no_url_but_a_known_route_is_not_counted_as_unknown()
+    {
+        const string csv = """
+            id,site,title,company,job_url,job_url_direct,offsite_apply
+            li-1,linkedin,Backend Engineer,Northwind,https://li/1,,True
+            li-2,linkedin,Frontend Engineer,Contoso,https://li/2,,False
+            li-3,linkedin,Platform Engineer,Fabrikam,https://li/3,,
+            """;
+
+        var parsed = new JobCsvParser().Parse(new MemoryStream(Encoding.UTF8.GetBytes(csv)));
+        var context = BlobNameParser.Parse(BlobPath, DateTimeOffset.UnixEpoch);
+
+        var link = Assert.Single(
+            new MetricsCalculator().Calculate(context, parsed, UpsertOutcome.Empty, 0).ApplyLinks);
+
+        // All three lack a URL, which is now permanent on LinkedIn and must not alarm.
+        Assert.Equal(3, link.BoardHosted);
+        Assert.Equal(1.0, link.BoardHostedShare);
+
+        // Only the third says nothing at all about how to apply. That is the one worth warning on.
+        Assert.Equal(1, link.RouteUnknown);
+        Assert.Equal(1.0 / 3, link.RouteUnknownShare, precision: 6);
+    }
+
+    [Fact]
+    public void A_site_that_answers_nothing_is_entirely_route_unknown()
+    {
+        // The state the corpus is in today, before the scraper that emits offsite_apply reaches
+        // the NAS: no links and no flags. The warning should fire here, and stop once it ships.
+        const string csv = """
+            id,site,title,company,job_url
+            li-1,linkedin,Backend Engineer,Northwind,https://li/1
+            li-2,linkedin,Frontend Engineer,Contoso,https://li/2
+            """;
+
+        var parsed = new JobCsvParser().Parse(new MemoryStream(Encoding.UTF8.GetBytes(csv)));
+        var context = BlobNameParser.Parse(BlobPath, DateTimeOffset.UnixEpoch);
+
+        var link = Assert.Single(
+            new MetricsCalculator().Calculate(context, parsed, UpsertOutcome.Empty, 0).ApplyLinks);
+
+        Assert.Equal(1.0, link.RouteUnknownShare);
+    }
+
+    /// <summary>
     /// A share, not a count, because that is what the digest's warning is keyed on.
     /// </summary>
     /// <remarks>
@@ -321,8 +379,10 @@ public sealed class MetricsCalculatorTests
     [Fact]
     public void Board_hosted_share_is_derived_and_survives_an_empty_site()
     {
-        Assert.Equal(0.5, new ApplyLinkCount("linkedin", 20, 10).BoardHostedShare);
-        Assert.Equal(0, new ApplyLinkCount("linkedin", 0, 0).BoardHostedShare);
+        Assert.Equal(0.5, new ApplyLinkCount("linkedin", 20, 10, 0).BoardHostedShare);
+        Assert.Equal(0, new ApplyLinkCount("linkedin", 0, 0, 0).BoardHostedShare);
+        Assert.Equal(0.25, new ApplyLinkCount("linkedin", 20, 20, 5).RouteUnknownShare);
+        Assert.Equal(0, new ApplyLinkCount("linkedin", 0, 0, 0).RouteUnknownShare);
     }
 
     /// <summary>

@@ -170,18 +170,29 @@ public sealed class SubmissionRepository(JobsDbContext db)
     }
 
     /// <summary>
-    /// Appends one event, or returns false where that idempotency key is already recorded.
+    /// Appends one event, converging on a retry and refusing past the daily cap.
     /// </summary>
     /// <remarks>
-    /// False means "already there", never "rejected": a retrying client has to be able to send
-    /// the same event twice and get the same outcome. The unique index on
-    /// <c>(SubmissionId, IdempotencyKey)</c> is the guarantee; the check here is what turns the
-    /// ordinary case into an answer rather than a constraint violation.
+    /// <b>Every outcome here is ordinary rather than exceptional</b>, which is why it answers
+    /// with a <see cref="SubmissionEventResult"/> rather than throwing or returning a bool. A
+    /// retrying client must be able to send the same event twice and get the same answer; a
+    /// client that has hit the cap must be told to stop rather than encouraged to try again.
+    ///
+    /// <b>The cap is enforced here and nowhere else.</b> It counts <c>Submitted</c> events this
+    /// candidate has recorded today, by <c>AtUtc</c>, across every submission. Bounding it in the
+    /// sink is the same rule <c>AiCallRecord.Create</c> follows: two call sites reach this today
+    /// and a third will, and a guard written at the call sites survives until then.
+    ///
+    /// <b>Counted by <c>AtUtc</c>, not by when the row was written.</b> That is what the event
+    /// claims happened, so backdating a hundred events into one day is the same assertion as
+    /// making them now and is capped the same way. It does mean somebody importing a real
+    /// history can hit the cap; that is the right trade for a bound whose job is to be
+    /// unarguable.
     ///
     /// The submission is resolved through the caller's profile id, so an id from a route or from
     /// a model's argument cannot append to a stranger's log.
     /// </remarks>
-    public async Task<bool?> AddEventAsync(
+    public async Task<SubmissionEventResult> AddEventAsync(
         long profileId,
         long submissionId,
         SubmissionEvent submissionEvent,
@@ -195,19 +206,39 @@ public sealed class SubmissionRepository(JobsDbContext db)
             .AsNoTracking()
             .AnyAsync(s => s.Id == submissionId && s.ProfileId == profileId, ct);
 
-        // Null rather than false: "you do not have that submission" and "that event is already
-        // recorded" are different answers and a caller acts differently on each.
         if (!owned)
         {
-            return null;
+            return SubmissionEventResult.NotFound;
         }
 
         var key = Bound(idempotencyKey, SubmissionLimits.MaxIdempotencyKeyLength)!;
 
+        // Checked before the cap, so a retry of an event that is already recorded answers
+        // AlreadyRecorded rather than being refused for a quota it has already spent.
         if (await db.SubmissionEvents.AnyAsync(
                 e => e.SubmissionId == submissionId && e.IdempotencyKey == key, ct))
         {
-            return false;
+            return SubmissionEventResult.AlreadyRecorded;
+        }
+
+        if (submissionEvent.Type == SubmissionEventType.Submitted)
+        {
+            var dayStart = new DateTimeOffset(submissionEvent.AtUtc.UtcDateTime.Date, TimeSpan.Zero);
+            var dayEnd = dayStart.AddDays(1);
+
+            var sentToday = await db.SubmissionEvents
+                .AsNoTracking()
+                .CountAsync(
+                    e => e.Submission!.ProfileId == profileId
+                        && e.Type == SubmissionEventType.Submitted
+                        && e.AtUtc >= dayStart
+                        && e.AtUtc < dayEnd,
+                    ct);
+
+            if (sentToday >= SubmissionLimits.MaxSubmittedPerDay)
+            {
+                return SubmissionEventResult.DailyLimitReached;
+            }
         }
 
         db.SubmissionEvents.Add(new SubmissionEventEntity
@@ -223,7 +254,7 @@ public sealed class SubmissionRepository(JobsDbContext db)
 
         await db.SaveChangesAsync(ct);
 
-        return true;
+        return SubmissionEventResult.Recorded;
     }
 
     /// <summary>
