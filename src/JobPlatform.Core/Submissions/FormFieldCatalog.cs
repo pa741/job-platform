@@ -73,10 +73,10 @@ public static class FormFieldCatalog
     ];
 
     private static readonly Dictionary<string, FormField> ByName =
-        All.ToDictionary(field => field.Name, StringComparer.OrdinalIgnoreCase);
+        All.ToDictionary(entry => entry.Name, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The names a client may ask for.</summary>
-    public static IReadOnlyList<string> Names => [.. All.Select(field => field.Name)];
+    public static IReadOnlyList<string> Names => [.. All.Select(entry => entry.Name)];
 
     /// <summary>Looks a field up, or false where the name is not one this system will answer.</summary>
     /// <remarks>

@@ -2,7 +2,17 @@
 
   <PropertyGroup>
     <TargetFramework>net9.0</TargetFramework>
-    <LangVersion>latest</LangVersion>
+    <!-- Pinned to the version paired with net9.0, not `latest`.
+
+         `latest` means "whatever this SDK supports", and the SDK is not pinned - there is no
+         global.json, and CI asks setup-dotnet for `9.0.x`. So a developer on 9.0.304 compiled
+         C# 13 while the runner compiled C# 14, and the build was green locally and red on CI.
+         It cost a failed deploy: `field` became a contextual keyword inside property accessors
+         in C# 14, and a lambda parameter named `field` stopped compiling on the runner only.
+
+         A language version the two machines disagree about is a build that cannot be trusted
+         locally. Raise this deliberately, together with the target framework. -->
+    <LangVersion>13.0</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- Back on. This was off because the Semantic Kernel path used to compose a chat service

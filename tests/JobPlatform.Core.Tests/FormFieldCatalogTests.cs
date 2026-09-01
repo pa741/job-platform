@@ -92,7 +92,7 @@ public sealed class FormFieldCatalogTests
     {
         // The description is what a model reads to choose between them, and a duplicate name
         // would make one entry unreachable through TryGet with nothing saying so.
-        Assert.All(FormFieldCatalog.All, field => Assert.False(string.IsNullOrWhiteSpace(field.Description)));
+        Assert.All(FormFieldCatalog.All, entry => Assert.False(string.IsNullOrWhiteSpace(entry.Description)));
         Assert.Equal(FormFieldCatalog.All.Count, FormFieldCatalog.Names.Distinct(StringComparer.OrdinalIgnoreCase).Count());
     }
 
@@ -152,6 +152,6 @@ public sealed class FormFieldCatalogTests
         // profile is the ordinary state of a new one.
         var empty = new CandidateProfile { SubjectId = "22222222-2222-2222-2222-222222222222" };
 
-        Assert.All(FormFieldCatalog.All, field => Assert.Null(field.Read(empty)));
+        Assert.All(FormFieldCatalog.All, entry => Assert.Null(entry.Read(empty)));
     }
 }

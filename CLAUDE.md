@@ -486,6 +486,14 @@ Each of these cost a red CI run; none of them fail locally.
   therefore defaults with `empty(readEnvironmentVariable('X', '')) ? default : ...`. Follow
   that pattern for every new parameter, or a missing repo variable fails the deploy with
   BCP033 rather than taking the default.
+- **`LangVersion` was `latest` and the SDK is not pinned, so the runner compiled a different
+  language than the developer did.** There is no `global.json` and `deploy.yml` asks
+  setup-dotnet for `9.0.x`, so a laptop on 9.0.304 compiled C# 13 while the runner compiled
+  C# 14. `field` became a contextual keyword inside property accessors in C# 14, and a lambda
+  parameter named `field` built clean locally and failed the deploy at `Publish function` with
+  CS9273. `LangVersion` is now pinned to `13.0`, the version paired with net9.0 - raise it
+  deliberately, with the target framework. **A green local build is only evidence if both
+  machines compile the same language.**
 - **Do not create a user in the API Dockerfile.** The .NET base images already ship a
   non-root `app` user and expose `APP_UID`; `useradd` fails the build with exit code 9,
   "username already in use".

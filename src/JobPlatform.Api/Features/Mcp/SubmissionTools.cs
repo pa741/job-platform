@@ -185,7 +185,7 @@ public sealed class SubmissionTools(
             return new
             {
                 fields = FormFieldCatalog.All
-                    .Select(field => new { name = field.Name, description = field.Description })
+                    .Select(entry => new { name = entry.Name, description = entry.Description })
                     .ToList(),
             };
         }
