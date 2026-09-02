@@ -1,0 +1,910 @@
+<title>Telemetry Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+/* ---------------------------------------------------------------------------
+   Direction A - Telemetry Console.
+   Dark-first: the bare :root carries the dark palette, and light is the override,
+   so the un-stamped "system" viewer on a dark OS gets the intended design.
+   --------------------------------------------------------------------------- */
+:root {
+  color-scheme: dark;
+  --ground: #0E1417;
+  --panel: #151C20;
+  --panel-2: #1B2429;
+  --line: #26343A;
+  --line-soft: #1D272C;
+  --ink: #DEE8EA;
+  --ink-2: #93A8AE;
+  --ink-3: #63797F;
+  --signal: #5EC8D8;
+  --signal-dim: #2B6874;
+  --ok: #3FB950;
+  --warn: #E3A008;
+  --bad: #E5534B;
+  --shadow: 0 18px 40px rgba(0, 0, 0, .45);
+
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --cond: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif;
+  --sans: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --ground: #E9EEEF;
+    --panel: #FFFFFF;
+    --panel-2: #F3F7F8;
+    --line: #D0DBDE;
+    --line-soft: #E2EAEC;
+    --ink: #0E1417;
+    --ink-2: #4C5F65;
+    --ink-3: #7A8D93;
+    --signal: #0C6F81;
+    --signal-dim: #A6D9E1;
+    --ok: #1A7F37;
+    --warn: #8A5D00;
+    --bad: #BE3A31;
+    --shadow: 0 18px 40px rgba(14, 20, 23, .14);
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --ground: #E9EEEF;
+  --panel: #FFFFFF;
+  --panel-2: #F3F7F8;
+  --line: #D0DBDE;
+  --line-soft: #E2EAEC;
+  --ink: #0E1417;
+  --ink-2: #4C5F65;
+  --ink-3: #7A8D93;
+  --signal: #0C6F81;
+  --signal-dim: #A6D9E1;
+  --ok: #1A7F37;
+  --warn: #8A5D00;
+  --bad: #BE3A31;
+  --shadow: 0 18px 40px rgba(14, 20, 23, .14);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+/* Layout ------------------------------------------------------------------ */
+.shell { display: grid; grid-template-columns: 226px minmax(0, 1fr); min-height: 100vh; }
+
+.rail {
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  display: flex; flex-direction: column;
+  position: sticky; top: 0; height: 100vh;
+}
+
+.brand { padding: 16px 16px 14px; border-bottom: 1px solid var(--line); }
+.brand b {
+  font-family: var(--cond); font-weight: 700; font-size: 17px;
+  letter-spacing: .01em; display: block;
+}
+.brand .build {
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+  margin-top: 3px; display: flex; gap: 6px; align-items: center;
+}
+
+.navgroup { padding: 14px 10px 4px; }
+.navgroup > span {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--ink-3); padding-left: 8px;
+}
+.navgroup ul { list-style: none; margin: 6px 0 0; padding: 0; }
+
+.navgroup button {
+  width: 100%; text-align: left; border: 0; background: transparent;
+  color: var(--ink-2); font: inherit; font-size: 13px;
+  padding: 6px 10px; border-radius: 3px; cursor: pointer;
+  display: flex; align-items: center; gap: 9px;
+  position: relative;
+}
+.navgroup button:hover { background: var(--panel-2); color: var(--ink); }
+.navgroup button[aria-current="page"] { background: var(--panel-2); color: var(--ink); font-weight: 500; }
+.navgroup button[aria-current="page"]::before {
+  content: ""; position: absolute; left: 0; top: 6px; bottom: 6px;
+  width: 2px; background: var(--signal);
+}
+.navgroup .count {
+  margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+}
+
+.rail footer {
+  margin-top: auto; border-top: 1px solid var(--line); padding: 12px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.who { font-size: 11.5px; color: var(--ink-3); font-family: var(--mono); }
+.dotlive { width: 5px; height: 5px; border-radius: 50%; background: var(--ok); display: inline-block; }
+
+/* Top strip: the pipeline, left to right, as it actually runs ------------- */
+.strip {
+  border-bottom: 1px solid var(--line); background: var(--panel);
+  padding: 0 18px; display: flex; align-items: center; gap: 18px;
+  height: 56px; position: sticky; top: 0; z-index: 20;
+}
+.stages { display: flex; align-items: center; gap: 0; position: relative; flex: 1; min-width: 0; overflow: hidden; }
+.stage { display: flex; align-items: center; gap: 8px; padding-right: 14px; }
+.stage .dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent);
+}
+.stage.warn .dot { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 20%, transparent); }
+.stage .txt { line-height: 1.15; }
+.stage .nm {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--ink-2);
+}
+.stage .vl { font-family: var(--mono); font-size: 11.5px; color: var(--ink); }
+.link { width: 26px; height: 1px; background: var(--line); margin-right: 14px; flex: none; }
+.pulse {
+  position: absolute; top: 50%; width: 5px; height: 5px; margin-top: 12px;
+  border-radius: 50%; background: var(--signal); pointer-events: none;
+  box-shadow: 0 0 8px var(--signal);
+}
+
+.strip .right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+select.ctl, button.ctl {
+  font: inherit; font-size: 12px; font-family: var(--mono);
+  color: var(--ink); background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 3px; padding: 5px 9px; cursor: pointer;
+}
+select.ctl:hover, button.ctl:hover { border-color: var(--signal-dim); }
+kbd {
+  font-family: var(--mono); font-size: 10px; border: 1px solid var(--line);
+  border-radius: 3px; padding: 1px 4px; color: var(--ink-3); background: var(--ground);
+}
+
+/* Panels ------------------------------------------------------------------ */
+main { padding: 14px 18px 40px; }
+.pgrid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px; }
+.c3 { grid-column: span 3; } .c4 { grid-column: span 4; }
+.c5 { grid-column: span 5; } .c6 { grid-column: span 6; }
+.c7 { grid-column: span 7; } .c8 { grid-column: span 8; } .c12 { grid-column: span 12; }
+
+@media (max-width: 1100px) {
+  .c3, .c4, .c5 { grid-column: span 6; }
+  .c6, .c7, .c8 { grid-column: span 12; }
+}
+@media (max-width: 720px) {
+  .shell { grid-template-columns: 1fr; }
+  .rail { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; }
+  .rail .navgroup { padding: 8px; }
+  .rail .navgroup ul { display: flex; gap: 4px; }
+  .rail footer { margin: 0; border: 0; flex-direction: row; }
+  .c3, .c4, .c5, .c6, .c7, .c8 { grid-column: span 12; }
+}
+
+.panel {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 3px;
+  padding: 12px 14px 14px; min-width: 0;
+}
+.panel > header {
+  display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px;
+}
+.panel h2 {
+  margin: 0; font-family: var(--mono); font-size: 10px; font-weight: 500;
+  letter-spacing: .14em; text-transform: uppercase; color: var(--ink-2);
+}
+.panel .meta { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
+.note { color: var(--ink-3); font-size: 11.5px; margin: 8px 0 0; max-width: 62ch; }
+
+/* Stat cell: the number is the visualisation. */
+.stat .lbl {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--ink-2);
+}
+.stat .val {
+  font-family: var(--mono); font-size: 30px; font-weight: 500; letter-spacing: -.02em;
+  margin-top: 6px; font-variant-numeric: tabular-nums; line-height: 1.05;
+}
+.stat .sub { font-size: 11.5px; color: var(--ink-3); margin-top: 3px; }
+.stat .sub.up { color: var(--ok); } .stat .sub.down { color: var(--bad); }
+.spark { display: block; margin-top: 8px; width: 100%; height: 26px; overflow: visible; }
+
+/* Meter: one ratio against its limit. The percentage is always written out. */
+.meter + .meter { margin-top: 14px; }
+.meter .top { display: flex; align-items: baseline; gap: 8px; }
+.meter .top b { font-family: var(--mono); font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.meter .top span { font-size: 11.5px; color: var(--ink-2); }
+.meter .track { height: 6px; background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: 2px; margin-top: 6px; overflow: hidden; }
+.meter .fill { height: 100%; background: var(--signal); transform-origin: left center; }
+.meter small { display: block; color: var(--ink-3); font-size: 11px; margin-top: 4px; }
+
+/* Ranked bars */
+.bars { display: flex; flex-direction: column; gap: 7px; }
+.bar { display: grid; grid-template-columns: 116px minmax(0, 1fr) 52px; align-items: center; gap: 10px; }
+.bar .nm { font-size: 12px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar .tr { height: 14px; background: var(--panel-2); border-radius: 2px; overflow: hidden; }
+.bar .fl { display: block; height: 100%; background: var(--signal-dim); transform-origin: left center; }
+.bar.hot .fl { background: var(--signal); }
+.bar .vl { font-family: var(--mono); font-size: 11.5px; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* Stacked part-to-whole */
+.stack { display: flex; gap: 2px; height: 16px; margin: 4px 0 10px; }
+.stack i { display: block; transform-origin: left center; border-radius: 1px; }
+.keys { display: flex; flex-wrap: wrap; gap: 12px; }
+.keys span { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-2); }
+.keys i { width: 9px; height: 9px; border-radius: 1px; }
+.keys b { font-family: var(--mono); font-weight: 500; color: var(--ink); }
+
+/* Tables */
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+th {
+  text-align: left; font-family: var(--mono); font-weight: 500; font-size: 9.5px;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3);
+  padding: 0 10px 7px; border-bottom: 1px solid var(--line);
+}
+td { padding: 7px 10px; border-bottom: 1px solid var(--line-soft); }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover { background: var(--panel-2); }
+.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.scroll { overflow-x: auto; }
+
+.tag {
+  display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono);
+  font-size: 10px; letter-spacing: .04em; padding: 2px 6px; border-radius: 2px;
+  border: 1px solid var(--line); color: var(--ink-2); white-space: nowrap;
+}
+.tag.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
+.tag.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
+.tag.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); }
+
+.score {
+  font-family: var(--mono); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums;
+  border-left: 2px solid var(--signal); padding-left: 7px;
+}
+.score.mid { border-color: var(--signal-dim); }
+.score.low { border-color: var(--line); color: var(--ink-2); }
+
+/* Live log */
+.log { list-style: none; margin: 0; padding: 0; font-family: var(--mono); font-size: 11.5px; }
+.log li {
+  display: grid; grid-template-columns: 62px 1fr auto; gap: 10px;
+  padding: 5px 0; border-bottom: 1px solid var(--line-soft); align-items: baseline;
+  overflow: hidden;
+}
+.log .ts { color: var(--ink-3); }
+.log .ev { color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.log .n { color: var(--ink); }
+
+/* Match detail, opened in place */
+.detail { grid-column: span 12; }
+.axes { display: flex; flex-direction: column; gap: 6px; }
+.axis { display: grid; grid-template-columns: 132px minmax(0, 1fr) 40px; gap: 10px; align-items: center; font-size: 12px; }
+.axis .nm { color: var(--ink-2); }
+.axis .tr { height: 5px; background: var(--panel-2); border-radius: 999px; overflow: hidden; }
+.axis .fl { height: 100%; background: var(--signal); transform-origin: left center; }
+.axis .vl { font-family: var(--mono); font-size: 11.5px; text-align: right; font-variant-numeric: tabular-nums; }
+.split { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 20px; }
+h3.sub {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .13em; text-transform: uppercase;
+  color: var(--ink-3); margin: 0 0 8px; font-weight: 500;
+}
+ul.tight { margin: 0 0 12px; padding-left: 16px; }
+ul.tight li { margin: 3px 0; font-size: 12.5px; color: var(--ink-2); }
+p.lead { margin: 0 0 12px; font-size: 13px; color: var(--ink); max-width: 62ch; }
+
+.filters { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.filters label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2); }
+input[type="range"] { accent-color: var(--signal); width: 150px; }
+input[type="checkbox"] { accent-color: var(--signal); }
+
+.act {
+  font: inherit; font-size: 12px; font-family: var(--mono);
+  background: var(--signal); color: var(--ground); border: 0; border-radius: 3px;
+  padding: 6px 12px; cursor: pointer; font-weight: 500;
+}
+.act:hover { filter: brightness(1.08); }
+.ghost {
+  font: inherit; font-size: 12px; font-family: var(--mono);
+  background: transparent; color: var(--ink-2); border: 1px solid var(--line);
+  border-radius: 3px; padding: 6px 12px; cursor: pointer;
+}
+.ghost:hover { color: var(--ink); border-color: var(--signal-dim); }
+
+/* Command palette */
+.scrim {
+  position: fixed; inset: 0; background: color-mix(in srgb, var(--ground) 76%, transparent);
+  backdrop-filter: blur(3px); z-index: 60; display: grid; place-items: start center; padding-top: 12vh;
+}
+.scrim[hidden] { display: none; }
+.palette {
+  width: min(560px, 92vw); background: var(--panel); border: 1px solid var(--line);
+  border-radius: 4px; box-shadow: var(--shadow); overflow: hidden;
+}
+.palette input {
+  width: 100%; border: 0; border-bottom: 1px solid var(--line); background: transparent;
+  color: var(--ink); font: inherit; font-family: var(--mono); font-size: 14px; padding: 13px 14px;
+}
+.palette input:focus { outline: none; }
+.palette ul { list-style: none; margin: 0; padding: 6px; max-height: 300px; overflow-y: auto; }
+.palette li button {
+  width: 100%; text-align: left; border: 0; background: transparent; color: var(--ink-2);
+  font: inherit; font-size: 13px; padding: 8px 10px; border-radius: 3px; cursor: pointer;
+  display: flex; gap: 10px; align-items: center;
+}
+.palette li button:hover, .palette li button.on { background: var(--panel-2); color: var(--ink); }
+.palette li .k { font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin-left: auto; }
+
+.view[hidden] { display: none; }
+</style>
+
+<div class="shell">
+  <aside class="rail">
+    <div class="brand">
+      <b>JOB&thinsp;/&thinsp;PLATFORM</b>
+      <div class="build"><span class="dotlive"></span>build 0.9.4 &middot; uk-south</div>
+    </div>
+
+    <div class="navgroup">
+      <span>Corpus</span>
+      <ul>
+        <li><button data-view="overview" aria-current="page">Overview</button></li>
+        <li><button data-view="postings">Postings <em class="count">18,742</em></button></li>
+        <li><button data-view="vocabulary">Vocabulary <em class="count">1,104</em></button></li>
+      </ul>
+    </div>
+
+    <div class="navgroup">
+      <span>You</span>
+      <ul>
+        <li><button data-view="matches">Matches <em class="count">248</em></button></li>
+        <li><button data-view="applications">Applications <em class="count">4</em></button></li>
+        <li><button data-view="profile">Profile</button></li>
+      </ul>
+    </div>
+
+    <div class="navgroup">
+      <span>System</span>
+      <ul>
+        <li><button data-view="searches">Searches <em class="count">3</em></button></li>
+        <li><button data-view="calls">Model calls</button></li>
+      </ul>
+    </div>
+
+    <footer>
+      <div class="who">pablodg38@gmail.com</div>
+      <select class="ctl" id="theme" aria-label="Colour theme">
+        <option value="system">Theme: system</option>
+        <option value="dark">Theme: dark</option>
+        <option value="light">Theme: light</option>
+      </select>
+    </footer>
+  </aside>
+
+  <div>
+    <header class="strip">
+      <div class="stages" id="stages">
+        <div class="pulse" id="pulse"></div>
+      </div>
+      <div class="right">
+        <select class="ctl" aria-label="Search term">
+          <option>platform engineer (18,742)</option>
+          <option>data engineer (9,204)</option>
+          <option>security engineer (3,881)</option>
+        </select>
+        <button class="ctl" id="openPalette">Search <kbd>&#8984;K</kbd></button>
+      </div>
+    </header>
+
+    <main>
+      <section class="view pgrid" id="view-overview"></section>
+      <section class="view pgrid" id="view-matches" hidden></section>
+      <section class="view pgrid" id="view-calls" hidden></section>
+      <section class="view pgrid" id="view-blank" hidden></section>
+    </main>
+  </div>
+</div>
+
+<div class="scrim" id="scrim" hidden>
+  <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+    <input id="q" placeholder="Jump to a page, a board, a skill&hellip;" autocomplete="off">
+    <ul id="results"></ul>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/gsap.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/Flip.min.js"></script>
+<script>
+/* Shared mock dataset - the same numbers in every direction. */
+const DATA = {
+  summary: { cumulative: 18742, newInLastRun: 412, prevNew: 366, seenInLastRun: 3918, days: 47,
+    remote: 0.342, salaryColumns: 0.216, salaryKnown: 0.589, median: 72000, fromProse: 0.63, lastScraped: '2 Sep, 04:12' },
+  trend: [{ d: '20 Aug', n: 298 }, { d: '21 Aug', n: 341 }, { d: '22 Aug', n: 302 }, { d: '23 Aug', n: 96 },
+    { d: '24 Aug', n: 74 }, { d: '25 Aug', n: 388 }, { d: '26 Aug', n: 412 }, { d: '27 Aug', n: 377 },
+    { d: '28 Aug', n: 349 }, { d: '29 Aug', n: 310 }, { d: '30 Aug', n: 88 }, { d: '31 Aug', n: 71 },
+    { d: '1 Sep', n: 366 }, { d: '2 Sep', n: 412 }],
+  sites: [{ name: 'LinkedIn', n: 1614 }, { name: 'Indeed', n: 1102 }, { name: 'Glassdoor', n: 617 },
+    { name: 'freehire.me', n: 402 }, { name: 'ZipRecruiter', n: 183 }],
+  skills: [{ name: 'Python', n: 1204 }, { name: 'AWS', n: 986 }, { name: 'Kubernetes', n: 743 },
+    { name: 'TypeScript', n: 690 }, { name: 'Terraform', n: 512 }, { name: 'SQL', n: 498 },
+    { name: 'React', n: 431 }, { name: 'Docker', n: 402 }],
+  areas: [{ name: 'Backend', n: 1880 }, { name: 'Cloud and platform', n: 1402 }, { name: 'Data', n: 1120 },
+    { name: 'Frontend', n: 764 }, { name: 'Security', n: 318 }],
+  seniority: [{ name: 'Mid', n: 1412 }, { name: 'Senior', n: 1206 }, { name: 'Junior', n: 512 },
+    { name: 'Lead', n: 288 }, { name: 'Principal', n: 94 }],
+  arrangement: [{ name: 'On-site', n: 1764 }, { name: 'Hybrid', n: 1402 }, { name: 'Remote', n: 752 }],
+  companies: [{ name: 'Capgemini', n: 84 }, { name: 'Accenture', n: 71 }, { name: 'BT Group', n: 58 },
+    { name: 'Sky', n: 44 }, { name: 'Deloitte', n: 39 }],
+  health: { status: 'degraded', rows: 3918, invalid: 44, empty: ['job_level', 'company_industry'],
+    sparse: [{ f: 'salary_source', r: 0.184 }, { f: 'company_rating', r: 0.221 }] },
+  unresolved: [{ form: 'ci/cd', reason: 'vocabulary', n: 212 }, { form: 'go', reason: 'context', n: 188 },
+    { form: 'agile delivery', reason: 'vocabulary', n: 141 }, { form: 'r', reason: 'context', n: 96 }],
+  matches: [
+    { id: 1, score: 91, title: 'Senior Platform Engineer', company: 'Sky', work: 'Hybrid', salary: '£85k–£95k', verdict: 'Strong', unmet: 1,
+      axes: [['Essential skills', 82], ['Other skills', 64], ['Seniority', 100], ['Experience', 88], ['Working arrangement', 100], ['Salary', 71]],
+      rationale: 'Nine of their eleven stated requirements are covered, including the two they lead with. The gap is Terraform at a level they call essential, and you have Bicep and Pulumi, which reads as adjacent rather than equivalent.',
+      strengths: ['Kubernetes at the depth the advert asks for', 'Azure and AWS both named, they want either', 'Platform team leadership matches the reporting line'],
+      gaps: ['Terraform named essential, not in your profile', 'They ask for on-call rotation experience'] },
+    { id: 2, score: 88, title: 'Backend Engineer (Go)', company: 'Monzo', work: 'Remote', salary: '£80k–£100k', verdict: 'Fair', unmet: 2,
+      axes: [['Essential skills', 68], ['Other skills', 72], ['Seniority', 100], ['Experience', 92], ['Working arrangement', 100], ['Salary', 88]],
+      rationale: 'Strong on distributed systems and the domain, thin on Go itself. Your profile shows C# and Python at depth; the advert treats Go as learnable but lists two years of it under essentials.',
+      strengths: ['Event-driven architecture, named three times in the advert', 'Fintech domain experience'],
+      gaps: ['Go, two years listed as essential', 'gRPC not shown anywhere in your profile'] },
+    { id: 3, score: 84, title: 'Cloud Engineer', company: 'BT Group', work: 'On-site', salary: '£70k–£78k', verdict: 'Strong', unmet: 0,
+      axes: [['Essential skills', 94], ['Other skills', 70], ['Seniority', 88], ['Experience', 84], ['Working arrangement', 40], ['Salary', 62]],
+      rationale: 'Everything they call essential is covered. The friction is location: five days on-site in Ipswich against a remote preference, and the band sits below what you asked for.',
+      strengths: ['Every essential requirement met', 'Azure certification they name explicitly'],
+      gaps: ['Five days on-site', 'Band tops out below your stated floor'] },
+    { id: 4, score: 79, title: 'Senior Software Engineer', company: 'Deliveroo', work: 'Hybrid', salary: '£90k–£110k', verdict: null, unmet: 1,
+      axes: [], rationale: '', strengths: [], gaps: [] },
+    { id: 5, score: 76, title: 'DevOps Engineer', company: 'Capgemini', work: 'Hybrid', salary: '£65k–£75k', verdict: 'Weak', unmet: 3,
+      axes: [['Essential skills', 52], ['Other skills', 58], ['Seniority', 70], ['Experience', 80], ['Working arrangement', 100], ['Salary', 48]],
+      rationale: 'The title matches and little else does. Three essentials are unmet and the band is well under your floor, so the score is carried by axes the advert barely states.',
+      strengths: ['CI/CD pipeline ownership'], gaps: ['Ansible', 'Jenkins', 'SC clearance required before start'] },
+    { id: 6, score: 74, title: 'Data Platform Engineer', company: 'Ocado', work: 'Remote', salary: '£75k–£88k', verdict: 'Strong', unmet: 0,
+      axes: [['Essential skills', 86], ['Other skills', 66], ['Seniority', 92], ['Experience', 78], ['Working arrangement', 100], ['Salary', 74]],
+      rationale: 'A quieter advert than its neighbours, and everything it does state, you have. Fully remote and the band clears your floor.',
+      strengths: ['Spark and Parquet, both named', 'Fully remote'], gaps: [] },
+    { id: 7, score: 71, title: 'Site Reliability Engineer', company: 'Starling Bank', work: 'Hybrid', salary: '—', verdict: 'Fair', unmet: 1,
+      axes: [['Essential skills', 74], ['Other skills', 62], ['Seniority', 84], ['Experience', 80], ['Working arrangement', 100]],
+      rationale: 'No salary stated, so that axis was dropped rather than scored. On what the advert does say the fit is good, and the one gap is a tool rather than a discipline.',
+      strengths: ['Observability stack matches theirs', 'Incident command experience'], gaps: ['Prometheus named, you show Azure Monitor'] },
+    { id: 8, score: 58, title: 'Lead Engineer, Payments', company: 'Wise', work: 'On-site', salary: '£95k–£115k', verdict: 'Strong', unmet: 2, thin: true,
+      axes: [['Essential skills', 46], ['Other skills', 50], ['Seniority', 96], ['Experience', 94], ['Working arrangement', 40], ['Salary', 96]],
+      rationale: 'The lowest score here and the most interesting row on the page. The advert states very little, so the arithmetic had little to score, but what it does say is leadership and payments at scale, and both are the strongest parts of your record.',
+      strengths: ['Ten years, five of them leading teams', 'Payments domain, end to end', 'Band is the highest on your shortlist'],
+      gaps: ['Advert names Java, you have C#', 'Four days on-site in London'] }
+  ],
+  calls: [
+    { t: '04:12:07', purpose: 'Extraction batch', model: 'gpt-5.6-luna', items: 120, tok: 84210, ms: 6240, ok: true },
+    { t: '04:11:58', purpose: 'Extraction batch', model: 'gpt-5.6-luna', items: 120, tok: 81964, ms: 5980, ok: true },
+    { t: '04:10:31', purpose: 'Match assessment', model: 'gpt-5.6-luna', items: 40, tok: 31420, ms: 4110, ok: true },
+    { t: '04:09:02', purpose: 'Match assessment', model: 'gpt-5.6-luna', items: 40, tok: 30886, ms: 3980, ok: false },
+    { t: '23:40:16', purpose: 'Application draft', model: 'gpt-5.6-sol', items: 1, tok: 12408, ms: 9120, ok: true }
+  ]
+};
+
+const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+const fmt = (n) => n.toLocaleString('en-GB');
+const pct = (r) => (Math.round(r * 1000) / 10).toFixed(1);
+
+/* --- the pipeline strip -------------------------------------------------- */
+const STAGES = [
+  ['Scrape', DATA.summary.lastScraped, 'ok'],
+  ['Land', '38 blobs', 'ok'],
+  ['Ingest', fmt(DATA.health.rows) + ' rows', 'ok'],
+  ['Enrich', '2 columns empty', 'warn'],
+  ['Match', '248 above 40', 'ok']
+];
+
+const stagesEl = $('#stages');
+STAGES.forEach(([name, value, state], i) => {
+  if (i) stagesEl.insertAdjacentHTML('beforeend', '<div class="link"></div>');
+  stagesEl.insertAdjacentHTML('beforeend',
+    '<div class="stage ' + state + '"><span class="dot"></span><span class="txt">' +
+    '<span class="nm">' + name + '</span><br><span class="vl">' + value + '</span></span></div>');
+});
+
+/* --- small chart builders ------------------------------------------------ */
+function bars(items, hotIndex) {
+  const max = Math.max(...items.map((i) => i.n));
+  return '<div class="bars">' + items.map((it, i) =>
+    '<div class="bar' + (i === hotIndex ? ' hot' : '') + '">' +
+    '<span class="nm">' + it.name + '</span>' +
+    '<span class="tr"><span class="fl" style="width:' + (it.n / max * 100) + '%"></span></span>' +
+    '<span class="vl">' + fmt(it.n) + '</span></div>').join('') + '</div>';
+}
+
+function stacked(items) {
+  const total = items.reduce((s, i) => s + i.n, 0);
+  const tones = ['var(--signal)', 'var(--signal-dim)', 'var(--ink-3)', 'var(--line)'];
+  return '<div class="stack">' + items.map((it, i) =>
+    '<i style="flex:' + it.n + ';background:' + tones[i % tones.length] + '"></i>').join('') + '</div>' +
+    '<div class="keys">' + items.map((it, i) =>
+      '<span><i style="background:' + tones[i % tones.length] + '"></i>' + it.name +
+      ' <b>' + Math.round(it.n / total * 100) + '%</b></span>').join('') + '</div>';
+}
+
+function areaChart(data) {
+  const W = 660, H = 176, L = 38, R = 10, T = 14, B = 24;
+  const max = Math.ceil(Math.max(...data.map((d) => d.n)) / 100) * 100;
+  const x = (i) => L + i * (W - L - R) / (data.length - 1);
+  const y = (n) => T + (1 - n / max) * (H - T - B);
+  const line = data.map((d, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(d.n).toFixed(1)).join(' ');
+  const area = line + ' L' + x(data.length - 1).toFixed(1) + ' ' + (H - B) + ' L' + L + ' ' + (H - B) + ' Z';
+  const grid = [0, max / 2, max].map((v) =>
+    '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(v) + '" y2="' + y(v) + '" stroke="var(--line-soft)"/>' +
+    '<text x="' + (L - 8) + '" y="' + (y(v) + 3.5) + '" text-anchor="end" class="ax">' + v + '</text>').join('');
+  const ticks = data.map((d, i) => (i % 3 === 0 || i === data.length - 1)
+    ? '<text x="' + x(i) + '" y="' + (H - 6) + '" text-anchor="middle" class="ax">' + d.d + '</text>' : '').join('');
+
+  return '<svg viewBox="0 0 ' + W + ' ' + H + '" class="area" style="width:100%;height:auto;display:block">' +
+    '<style>.ax{font-family:var(--mono);font-size:9px;fill:var(--ink-3)}</style>' +
+    '<defs><clipPath id="wipe"><rect id="wiperect" x="0" y="0" width="' + W + '" height="' + H + '"/></clipPath>' +
+    '<linearGradient id="g" x1="0" y1="0" x2="0" y2="1">' +
+    '<stop offset="0%" stop-color="var(--signal)" stop-opacity=".28"/>' +
+    '<stop offset="100%" stop-color="var(--signal)" stop-opacity="0"/></linearGradient></defs>' +
+    grid + ticks +
+    '<g clip-path="url(#wipe)"><path d="' + area + '" fill="url(#g)"/>' +
+    '<path id="trendline" d="' + line + '" fill="none" stroke="var(--signal)" stroke-width="1.75" stroke-linejoin="round"/></g>' +
+    '<circle id="tip" cx="' + x(data.length - 1) + '" cy="' + y(data[data.length - 1].n) + '" r="3.5" fill="var(--signal)"/>' +
+    '</svg>';
+}
+
+function sparkline(values, id) {
+  const W = 120, H = 26, max = Math.max(...values), min = Math.min(...values);
+  const pts = values.map((v, i) =>
+    (i ? 'L' : 'M') + (i * W / (values.length - 1)).toFixed(1) + ' ' +
+    (H - 2 - ((v - min) / (max - min || 1)) * (H - 5)).toFixed(1)).join(' ');
+  return '<svg class="spark" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" aria-hidden="true">' +
+    '<path class="sparkpath" d="' + pts + '" fill="none" stroke="var(--signal-dim)" stroke-width="1.5"/></svg>';
+}
+
+/* --- Overview ------------------------------------------------------------ */
+const s = DATA.summary;
+const delta = s.newInLastRun - s.prevNew;
+
+$('#view-overview').innerHTML = [
+  '<div class="panel stat c3"><div class="lbl">Distinct postings</div>',
+  '<div class="val" data-count="' + s.cumulative + '">0</div>',
+  '<div class="sub">across ' + s.days + ' days of history</div>',
+  sparkline(DATA.trend.map((t) => t.n)) + '</div>',
+
+  '<div class="panel stat c3"><div class="lbl">New in last run</div>',
+  '<div class="val" data-count="' + s.newInLastRun + '">0</div>',
+  '<div class="sub up">&uarr; ' + delta + ' vs previous day</div>',
+  sparkline(DATA.trend.slice(-8).map((t) => t.n)) + '</div>',
+
+  '<div class="panel stat c3"><div class="lbl">Seen in last run</div>',
+  '<div class="val" data-count="' + s.seenInLastRun + '">0</div>',
+  '<div class="sub">' + DATA.health.invalid + ' rows unparseable</div>',
+  sparkline([3410, 3620, 3540, 3880, 3760, 3918]) + '</div>',
+
+  '<div class="panel stat c3"><div class="lbl">Median salary</div>',
+  '<div class="val">&pound;<span data-count="72" data-suffix="k">0</span></div>',
+  '<div class="sub">' + Math.round(s.fromProse * 100) + '% read from prose</div>',
+  sparkline([66, 68, 67, 70, 71, 72]) + '</div>',
+
+  '<div class="panel c4"><header><h2>Coverage</h2></header>',
+  meter('Remote', s.remote, 'of postings that said'),
+  meter('Salary in the columns', s.salaryColumns, 'as the boards delivered it'),
+  meter('Salary known', s.salaryKnown, 'after reading descriptions'),
+  '<p class="note">Two true numbers, and the gap between them is the point: the first is what the scraper delivered, the second is what is known once the description has been read.</p></div>',
+
+  '<div class="panel c8"><header><h2>New postings per scrape day</h2>',
+  '<span class="meta">first sighting &middot; 14 days</span></header>',
+  areaChart(DATA.trend) + '</div>',
+
+  '<div class="panel c4"><header><h2>Boards</h2><span class="meta">last run</span></header>',
+  bars(DATA.sites, 0) + '</div>',
+
+  '<div class="panel c4"><header><h2>Skills in demand</h2></header>', bars(DATA.skills, 0), '</div>',
+
+  '<div class="panel c4"><header><h2>Areas in demand</h2></header>', bars(DATA.areas, 0),
+  '<p class="note">The same demand rolled up. The one number here that could not exist without the concept graph.</p></div>',
+
+  '<div class="panel c6"><header><h2>How the work happens</h2></header>', stacked(DATA.arrangement), '</div>',
+  '<div class="panel c6"><header><h2>Seniority mix</h2>',
+  '<span class="meta">3,512 of 3,918 state a level</span></header>', stacked(DATA.seniority), '</div>',
+
+  '<div class="panel c7"><header><h2>Scraper health</h2>',
+  '<span class="tag bad">&#9650; degraded</span></header>',
+  '<p class="note" style="margin-top:0">Two columns were empty in <b>every</b> row of the last run. A column that drops to zero usually means a board changed its markup and the scraper degraded quietly.</p>',
+  '<div style="display:flex;gap:6px;margin:10px 0 14px;flex-wrap:wrap">' +
+  DATA.health.empty.map((c) => '<span class="tag bad">&#9650; ' + c + '</span>').join('') + '</div>',
+  '<h3 class="sub">Sparse &mdash; under a quarter of rows</h3>',
+  '<div class="bars">' + DATA.health.sparse.map((f) =>
+    '<div class="bar"><span class="nm">' + f.f + '</span>' +
+    '<span class="tr"><span class="fl" style="width:' + (f.r * 100) + '%;background:var(--warn)"></span></span>' +
+    '<span class="vl">' + pct(f.r) + '%</span></div>').join('') + '</div></div>',
+
+  '<div class="panel c5"><header><h2>Ingest log</h2><span class="meta" id="livedot">live</span></header>',
+  '<ul class="log" id="log"></ul></div>'
+].join('');
+
+function meter(label, ratio, caption) {
+  return '<div class="meter"><div class="top"><b data-count="' + (ratio * 100).toFixed(1) + '" data-suffix="%">0</b>' +
+    '<span>' + label + '</span></div>' +
+    '<div class="track"><i class="fill" style="display:block;width:' + (ratio * 100) + '%"></i></div>' +
+    '<small>' + caption + '</small></div>';
+}
+
+/* --- Matches ------------------------------------------------------------- */
+function verdictTag(m) {
+  if (!m.verdict) return '<span class="tag">not read yet</span>';
+  const cls = m.verdict === 'Strong' ? 'ok' : m.verdict === 'Weak' ? 'bad' : 'warn';
+  return '<span class="tag ' + cls + '">' + m.verdict.toLowerCase() + '</span>';
+}
+
+function matchRows() {
+  return DATA.matches.map((m) =>
+    '<tr data-match="' + m.id + '" tabindex="0">' +
+    '<td class="num"><span class="score ' + (m.score >= 85 ? '' : m.score >= 70 ? 'mid' : 'low') + '">' + m.score + '</span></td>' +
+    '<td>' + m.title + (m.thin ? ' <span class="tag" title="Scored on 44% of a full assessment">thin</span>' : '') + '</td>' +
+    '<td>' + m.company + '</td>' +
+    '<td>' + m.work + '</td>' +
+    '<td class="num">' + m.salary + '</td>' +
+    '<td>' + verdictTag(m) + (m.unmet ? ' <span class="tag warn">' + m.unmet + ' unmet</span>' : '') + '</td>' +
+    '</tr>').join('');
+}
+
+$('#view-matches').innerHTML = [
+  '<div class="panel c12"><header><h2>Shortlist</h2>',
+  '<span class="meta">scored nightly &middot; 248 above 40</span></header>',
+  '<div class="filters" style="margin-bottom:12px">',
+  '<label>Minimum score <input type="range" min="0" max="90" step="5" value="40" id="minScore">',
+  '<span class="tag" id="minScoreOut">40</span></label>',
+  '<label><input type="checkbox"> Only roles the model has read</label>',
+  '</div>',
+  '<div class="scroll"><table><thead><tr>',
+  '<th class="num">Score</th><th>Role</th><th>Company</th><th>Working</th>',
+  '<th class="num">Salary</th><th>Verdict</th></tr></thead>',
+  '<tbody id="matchBody">' + matchRows() + '</tbody></table></div>',
+  '<p class="note">Ordered by overall fit, not by the number in the first column: the score orders the corpus well and inverts inside its own top band.</p>',
+  '</div>',
+  '<div class="panel detail" id="detail" hidden></div>'
+].join('');
+
+function openMatch(id) {
+  const m = DATA.matches.find((x) => x.id === id);
+  const el = $('#detail');
+  const wasOpen = !el.hidden;
+  const state = (REDUCED || !wasOpen) ? null : Flip.getState(el);
+
+  el.hidden = false;
+  el.innerHTML = [
+    '<header><h2>' + m.title + ' &middot; ' + m.company + '</h2>',
+    '<span class="meta">posting 41,209</span>',
+    '<button class="ghost" id="closeDetail" style="margin-left:12px">Close</button></header>',
+    '<div class="split">',
+    '<div><h3 class="sub">How the score was reached</h3><div class="axes">' +
+    m.axes.map(([nm, v]) =>
+      '<div class="axis"><span class="nm">' + nm + '</span>' +
+      '<span class="tr"><i class="fl" style="display:block;width:' + v + '%"></i></span>' +
+      '<span class="vl">' + v + '%</span></div>').join('') +
+    '</div><p class="note">Axes the advert said nothing about are left out entirely rather than scored zero.</p></div>',
+    '<div><h3 class="sub">What the model said</h3>',
+    m.verdict
+      ? '<p class="lead">' + m.rationale + '</p>' +
+        (m.strengths.length ? '<h3 class="sub">Lands well</h3><ul class="tight">' + m.strengths.map((x) => '<li>' + x + '</li>').join('') + '</ul>' : '') +
+        (m.gaps.length ? '<h3 class="sub">Worth knowing</h3><ul class="tight">' + m.gaps.map((x) => '<li>' + x + '</li>').join('') + '</ul>' : '')
+      : '<p class="lead">The model has not read this one yet. It reads the highest-scoring unassessed roles each night.</p>',
+    '<div style="display:flex;gap:8px;margin-top:4px">',
+    '<button class="act">Write CV and cover letter</button>',
+    '<button class="ghost">Open the advert</button></div></div></div>'
+  ].join('');
+
+  $('#closeDetail').onclick = () => { el.hidden = true; };
+
+  if (REDUCED) return;
+  if (state) Flip.from(state, { duration: .4, ease: 'power2.out', absolute: true });
+  else gsap.from(el, { opacity: 0, y: 8, duration: .35, ease: 'power2.out' });
+  gsap.from(el.querySelectorAll('.axis .fl'), { scaleX: 0, duration: .5, stagger: .05, ease: 'power2.out' });
+  gsap.from(el.querySelectorAll('.lead, .tight li, .sub, .act, .ghost'), {
+    opacity: 0, y: 6, duration: .35, stagger: .025, ease: 'power2.out'
+  });
+}
+
+/* --- Model calls --------------------------------------------------------- */
+$('#view-calls').innerHTML = [
+  '<div class="panel stat c3"><div class="lbl">Calls today</div><div class="val" data-count="41">0</div>',
+  '<div class="sub">39 succeeded, 2 retried</div></div>',
+  '<div class="panel stat c3"><div class="lbl">Tokens</div><div class="val" data-count="1.24" data-suffix="M">0</div>',
+  '<div class="sub">batched 120 postings to a call</div></div>',
+  '<div class="panel stat c3"><div class="lbl">Median latency</div><div class="val" data-count="5.1" data-suffix="s">0</div>',
+  '<div class="sub">extraction batches</div></div>',
+  '<div class="panel stat c3"><div class="lbl">Spend</div><div class="val">&pound;<span data-count="2.84">0</span></div>',
+  '<div class="sub">provider is optional; this is the cost of switching it on</div></div>',
+  '<div class="panel c12"><header><h2>Model calls</h2><span class="meta">last 7 days</span></header>',
+  '<div class="scroll"><table><thead><tr><th>Time</th><th>Purpose</th><th>Model</th>',
+  '<th class="num">Items</th><th class="num">Tokens</th><th class="num">Latency</th><th>Result</th></tr></thead><tbody>' +
+  DATA.calls.map((c) =>
+    '<tr><td class="num">' + c.t + '</td><td>' + c.purpose + '</td><td><code>' + c.model + '</code></td>' +
+    '<td class="num">' + c.items + '</td><td class="num">' + fmt(c.tok) + '</td>' +
+    '<td class="num">' + (c.ms / 1000).toFixed(2) + 's</td>' +
+    '<td>' + (c.ok ? '<span class="tag ok">ok</span>' : '<span class="tag bad">retried</span>') + '</td></tr>').join('') +
+  '</tbody></table></div></div>'
+].join('');
+
+$('#view-blank').innerHTML =
+  '<div class="panel c12" style="padding:60px;text-align:center;color:var(--ink-3)">' +
+  '<p style="margin:0;font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase">Not in this mock</p>' +
+  '<p class="note" style="margin:8px auto 0;max-width:40ch">Postings, Vocabulary, Applications, Searches and Profile all exist in the real dashboard. This direction shows Overview, Matches and Model calls.</p></div>';
+
+/* --- animation ----------------------------------------------------------- */
+function countUp(scope) {
+  $$('[data-count]', scope).forEach((node) => {
+    const target = parseFloat(node.dataset.count);
+    const suffix = node.dataset.suffix || '';
+    const decimals = (node.dataset.count.split('.')[1] || '').length;
+    if (REDUCED) {
+      node.textContent = (decimals ? target.toFixed(decimals) : fmt(target)) + suffix;
+      return;
+    }
+    const obj = { v: 0 };
+    gsap.to(obj, {
+      v: target, duration: 1.1, ease: 'power2.out',
+      onUpdate: () => {
+        node.textContent = (decimals ? obj.v.toFixed(decimals) : fmt(Math.round(obj.v))) + suffix;
+      }
+    });
+  });
+}
+
+function enter(scope) {
+  countUp(scope);
+  if (REDUCED) return;
+  const tl = gsap.timeline();
+  tl.from(scope.querySelectorAll('.panel'), { opacity: 0, y: 10, duration: .45, stagger: .04, ease: 'power2.out' })
+    .from(scope.querySelectorAll('.bar .fl, .meter .fill, .stack i, .axis .fl'),
+      { scaleX: 0, duration: .55, stagger: .015, ease: 'power2.out' }, '-=.3');
+
+  const wipe = scope.querySelector('#wiperect');
+  if (wipe) tl.from(wipe, { attr: { width: 0 }, duration: 1, ease: 'power2.inOut' }, '-=.7');
+
+  const tip = scope.querySelector('#tip');
+  if (tip) tl.from(tip, { scale: 0, transformOrigin: '50% 50%', duration: .3, ease: 'back.out(2)' }, '-=.15');
+
+  scope.querySelectorAll('.sparkpath').forEach((p) => {
+    const len = p.getTotalLength();
+    gsap.fromTo(p, { strokeDasharray: len, strokeDashoffset: len },
+      { strokeDashoffset: 0, duration: .9, ease: 'power2.out' });
+  });
+}
+
+/* Load sequence: the rail, then the pipeline lighting up left to right. */
+if (!REDUCED) {
+  gsap.from('.rail .navgroup, .brand', { opacity: 0, x: -8, duration: .4, stagger: .06, ease: 'power2.out' });
+  gsap.from('.stage', { opacity: 0, y: 6, duration: .35, stagger: .09, ease: 'power2.out', delay: .1 });
+  gsap.fromTo('#pulse', { left: '2%', opacity: 0 },
+    { left: '86%', opacity: 1, duration: 3.4, ease: 'none', repeat: -1, repeatDelay: .6, delay: .8 });
+} else {
+  $('#pulse').style.display = 'none';
+}
+enter($('#view-overview'));
+
+/* Ingest log ticks, so the page reads as live rather than fetched once. */
+const LOG_LINES = [
+  ['linkedin', 'batch landed'], ['indeed', 'batch landed'], ['enrich', 'concepts written'],
+  ['glassdoor', 'batch landed'], ['dedupe', 'cross-board key'], ['freehire.me', 'batch landed'],
+  ['match', 'nightly sweep'], ['curated', 'parquet rebuilt']
+];
+const logEl = $('#log');
+let logSeed = 0;
+
+function tick() {
+  const [src, ev] = LOG_LINES[logSeed % LOG_LINES.length];
+  const n = 40 + Math.floor(Math.random() * 260);
+  const now = new Date(Date.now() - logSeed * 41000);
+  const li = document.createElement('li');
+  li.innerHTML = '<span class="ts">' + now.toTimeString().slice(0, 8) + '</span>' +
+    '<span class="ev">' + src + ' &middot; ' + ev + '</span><span class="n">+' + n + '</span>';
+  logEl.prepend(li);
+  while (logEl.children.length > 9) logEl.lastElementChild.remove();
+  logSeed++;
+  if (!REDUCED) gsap.from(li, { height: 0, opacity: 0, duration: .35, ease: 'power2.out' });
+}
+for (let i = 0; i < 7; i++) tick();
+if (!REDUCED) setInterval(tick, 4200);
+
+/* --- interaction --------------------------------------------------------- */
+const VIEWS = { overview: 'view-overview', matches: 'view-matches', calls: 'view-calls' };
+
+function show(name) {
+  const id = VIEWS[name] || 'view-blank';
+  $$('.view').forEach((v) => { v.hidden = v.id !== id; });
+  $$('.rail button[data-view]').forEach((b) =>
+    b.setAttribute('aria-current', b.dataset.view === name ? 'page' : 'false'));
+  enter($('#' + id));
+  window.scrollTo({ top: 0, behavior: REDUCED ? 'auto' : 'smooth' });
+}
+
+$$('.rail button[data-view]').forEach((b) => { b.onclick = () => show(b.dataset.view); });
+
+document.addEventListener('click', (e) => {
+  const row = e.target.closest('tr[data-match]');
+  if (row) openMatch(Number(row.dataset.match));
+});
+document.addEventListener('keydown', (e) => {
+  const row = e.target.closest && e.target.closest('tr[data-match]');
+  if (row && e.key === 'Enter') openMatch(Number(row.dataset.match));
+});
+
+document.addEventListener('input', (e) => {
+  if (e.target.id === 'minScore') $('#minScoreOut').textContent = e.target.value;
+});
+
+$('#theme').onchange = (e) => {
+  const v = e.target.value;
+  if (v === 'system') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', v);
+};
+
+/* Command palette */
+const COMMANDS = [
+  ['Overview', 'page', () => show('overview')],
+  ['Matches', 'page', () => show('matches')],
+  ['Model calls', 'page', () => show('calls')],
+  ['Postings', 'page', () => show('postings')],
+  ['Vocabulary', 'page', () => show('vocabulary')],
+  ['Filter to LinkedIn', 'board', () => show('postings')],
+  ['Filter to freehire.me', 'board', () => show('postings')],
+  ['Skill: Kubernetes', 'concept', () => show('postings')],
+  ['Area: Cloud and platform', 'concept', () => show('postings')],
+  ['Re-run the nightly sweep', 'action', () => show('matches')]
+];
+
+const scrim = $('#scrim'), qEl = $('#q'), resultsEl = $('#results');
+
+function renderResults() {
+  const q = qEl.value.toLowerCase();
+  const hits = COMMANDS.filter(([label]) => label.toLowerCase().includes(q)).slice(0, 7);
+  resultsEl.innerHTML = hits.map(([label, kind], i) =>
+    '<li><button data-i="' + COMMANDS.indexOf(hits[i]) + '" class="' + (i === 0 ? 'on' : '') + '">' +
+    label + '<span class="k">' + kind + '</span></button></li>').join('') ||
+    '<li><button disabled>Nothing matches that</button></li>';
+  if (!REDUCED) gsap.from(resultsEl.children, { opacity: 0, y: 4, duration: .2, stagger: .02 });
+}
+
+function openPalette() {
+  scrim.hidden = false;
+  qEl.value = '';
+  renderResults();
+  qEl.focus();
+  if (!REDUCED) {
+    gsap.from('.palette', { y: -14, opacity: 0, duration: .28, ease: 'power3.out' });
+    gsap.from(scrim, { opacity: 0, duration: .2 });
+  }
+}
+function closePalette() { scrim.hidden = true; }
+
+$('#openPalette').onclick = openPalette;
+qEl.oninput = renderResults;
+resultsEl.onclick = (e) => {
+  const b = e.target.closest('button[data-i]');
+  if (!b) return;
+  closePalette();
+  COMMANDS[Number(b.dataset.i)][2]();
+};
+scrim.onclick = (e) => { if (e.target === scrim) closePalette(); };
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openPalette(); }
+  if (e.key === 'Escape') closePalette();
+  if (e.key === 'Enter' && !scrim.hidden) {
+    const first = resultsEl.querySelector('button[data-i]');
+    if (first) { closePalette(); COMMANDS[Number(first.dataset.i)][2](); }
+  }
+});
+</script>

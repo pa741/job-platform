@@ -27,6 +27,17 @@ public sealed class MetricEndpoints : IEndpointGroup
     /// <summary>Below this fill rate a column is reported as sparse.</summary>
     private const double SparseThreshold = 0.25;
 
+    /// <summary>
+    /// How many runs back to look for the last time an empty column was populated.
+    /// </summary>
+    /// <remarks>
+    /// One partition, newest first, and the digests are already stored - so this reads the
+    /// history rather than adding to it. Ninety is chosen against what Cosmos holds; past the
+    /// window a regressed column is indistinguishable from one that never shipped, and at
+    /// ninety runs it has been empty long enough that it is no longer an early warning.
+    /// </remarks>
+    private const int HistoryDigests = 90;
+
     public void Map(IEndpointRouteBuilder routes)
     {
         ArgumentNullException.ThrowIfNull(routes);
@@ -193,7 +204,11 @@ public sealed class MetricEndpoints : IEndpointGroup
         string searchTerm,
         CancellationToken ct)
     {
-        var digest = await metrics.GetLatestRunDigestAsync(searchTerm, ct);
+        // The history, not just the latest run: an empty column on its own does not say which
+        // of two faults it is, and the two need opposite responses. Newest first, one
+        // partition, and the same call GetLatestRunDigestAsync makes with take: 1.
+        var history = await metrics.ListRunDigestsAsync(searchTerm, from: null, to: null, HistoryDigests, ct);
+        var digest = history.Count == 0 ? null : history[0];
 
         if (digest is null)
         {
@@ -206,8 +221,8 @@ public sealed class MetricEndpoints : IEndpointGroup
 
         var empty = digest.FieldFillRates
             .Where(f => f.Value <= 0)
-            .Select(f => f.Key)
-            .OrderBy(f => f, StringComparer.Ordinal)
+            .Select(f => LastFilled(f.Key, history))
+            .OrderBy(f => f.Field, StringComparer.Ordinal)
             .ToList();
 
         var sparse = digest.FieldFillRates
@@ -220,10 +235,11 @@ public sealed class MetricEndpoints : IEndpointGroup
         {
             SearchTerm = searchTerm,
             LastScrapedAtUtc = digest.ScrapedAtUtc,
-            // A wholly empty column is the signal worth alerting on. Sparse columns are
-            // routine in this data - date_posted sat at 40% in a real run - so they are
-            // reported without being treated as a fault.
-            Status = empty.Count > 0 ? "degraded" : "healthy",
+            // A column that WAS filled and now is not is the signal worth alerting on.
+            // A column that has never been filled is one the scraper does not emit yet, and
+            // degrading on it is how this alarm becomes something people scroll past - the
+            // same reason sparse columns are reported without being treated as a fault.
+            Status = empty.Any(c => c.LastFilledUtc is not null) ? "degraded" : "healthy",
             EmptyColumns = empty,
             SparseColumns = sparse,
             FieldFillRates = digest.FieldFillRates,
@@ -231,5 +247,27 @@ public sealed class MetricEndpoints : IEndpointGroup
             InvalidInLastRun = digest.Counts.Invalid,
             BySite = digest.BySite,
         });
+    }
+
+    /// <summary>
+    /// Walks back through the run history for the last run in which a column was populated.
+    /// </summary>
+    /// <remarks>
+    /// Skips the first entry: that is the run which reported the column empty in the first
+    /// place. A column absent from an older digest's dictionary is treated as not populated
+    /// rather than as unknown - the parser writes every tracked column on every run, so its
+    /// absence means the column was not tracked then, which is not evidence that it was full.
+    /// </remarks>
+    private static EmptyColumn LastFilled(string field, IReadOnlyList<RunDigest> history)
+    {
+        for (var i = 1; i < history.Count; i++)
+        {
+            if (history[i].FieldFillRates.TryGetValue(field, out var rate) && rate > 0)
+            {
+                return new EmptyColumn(field, history[i].ScrapedAtUtc, rate);
+            }
+        }
+
+        return new EmptyColumn(field, null, null);
     }
 }

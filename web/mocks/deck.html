@@ -1,0 +1,790 @@
+<title>Shortlist Deck</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=DM+Mono:wght@400;500&display=swap">
+
+<style>
+/* ---------------------------------------------------------------------------
+   Direction C - Shortlist Deck.
+   The shortlist is the product, so it is the home screen: one role at a time,
+   decided with a drag or an arrow key. Everything else is a panel behind it.
+   --------------------------------------------------------------------------- */
+:root {
+  color-scheme: light;
+  --ground: #E7E6E1;
+  --card: #FFFFFF;
+  --card-2: #F2F1EC;
+  --ink: #111112;
+  --ink-2: #5C5C58;
+  --ink-3: #8C8C86;
+  --rule: #D2D1CA;
+  --blue: #1B2FE0;        /* the one loud colour: decisions and emphasis */
+  --blue-soft: #C9CEF7;
+  --coral: #FF5436;       /* passing on something, and nothing else */
+  --coral-soft: #FBD3CA;
+  --green: #12805A;
+  --on-blue: #FFFFFF;   /* ink for anything sitting on --blue */
+  --shadow-lift: 0 24px 60px rgba(17, 17, 18, .14), 0 3px 10px rgba(17, 17, 18, .06);
+  --shadow-rest: 0 10px 30px rgba(17, 17, 18, .08);
+
+  --display: "Bricolage Grotesque", "Helvetica Neue", Arial, sans-serif;
+  --sans: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --mono: "DM Mono", ui-monospace, Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground: #131314;
+    --card: #1E1E20;
+    --card-2: #26262A;
+    --ink: #F3F2EE;
+    --ink-2: #A8A8A2;
+    --ink-3: #7A7A75;
+    --rule: #33333A;
+    --blue: #8091FF;
+    --blue-soft: #2E356B;
+    --coral: #FF7A5C;
+    --coral-soft: #522A21;
+    --green: #4FBF92;
+    --on-blue: #101020;
+    --shadow-lift: 0 24px 60px rgba(0, 0, 0, .55), 0 3px 10px rgba(0, 0, 0, .3);
+    --shadow-rest: 0 10px 30px rgba(0, 0, 0, .35);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #131314;
+  --card: #1E1E20;
+  --card-2: #26262A;
+  --ink: #F3F2EE;
+  --ink-2: #A8A8A2;
+  --ink-3: #7A7A75;
+  --rule: #33333A;
+  --blue: #8091FF;
+  --blue-soft: #2E356B;
+  --coral: #FF7A5C;
+  --coral-soft: #522A21;
+  --green: #4FBF92;
+  --on-blue: #101020;
+  --shadow-lift: 0 24px 60px rgba(0, 0, 0, .55), 0 3px 10px rgba(0, 0, 0, .3);
+  --shadow-rest: 0 10px 30px rgba(0, 0, 0, .35);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+:focus-visible { outline: 2.5px solid var(--blue); outline-offset: 3px; border-radius: 2px; }
+
+/* Chrome ------------------------------------------------------------------ */
+.top {
+  display: flex; align-items: center; gap: 20px;
+  padding: 18px 26px; max-width: 1280px; margin: 0 auto;
+}
+.mark {
+  font-family: var(--display); font-weight: 800; font-size: 19px;
+  letter-spacing: -.03em; display: flex; align-items: center; gap: 9px;
+}
+.mark i {
+  width: 11px; height: 11px; border-radius: 3px; background: var(--blue);
+  display: block;
+}
+.segs { display: flex; gap: 3px; background: var(--card-2); padding: 3px; border-radius: 999px; }
+.segs button {
+  border: 0; background: transparent; font: inherit; font-size: 13.5px; font-weight: 500;
+  color: var(--ink-2); padding: 7px 17px; border-radius: 999px; cursor: pointer;
+  position: relative; z-index: 1;
+}
+.segs button[aria-current="page"] { color: var(--card); }
+.segs { position: relative; }
+.segs .thumb {
+  position: absolute; top: 3px; bottom: 3px; left: 3px; border-radius: 999px;
+  background: var(--ink); z-index: 0; width: 0;
+}
+.top .right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+select.ctl {
+  font: inherit; font-size: 13px; font-family: var(--mono); color: var(--ink-2);
+  background: var(--card); border: 1px solid var(--rule); border-radius: 999px;
+  padding: 6px 12px; cursor: pointer;
+}
+
+.stage { max-width: 1280px; margin: 0 auto; padding: 0 26px 60px; }
+.view[hidden] { display: none; }
+
+/* Triage ------------------------------------------------------------------ */
+.triage { display: grid; grid-template-columns: minmax(0, 1fr) 290px; gap: 34px; align-items: start; }
+@media (max-width: 980px) { .triage { grid-template-columns: 1fr; } .queue { order: -1; } }
+
+.progress { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+.progress .bar { flex: 1; height: 3px; background: var(--rule); border-radius: 2px; overflow: hidden; }
+.progress .bar i { display: block; height: 100%; background: var(--blue); transform-origin: left center; }
+.progress .txt { font-family: var(--mono); font-size: 12px; color: var(--ink-3); white-space: nowrap; }
+
+.deck { position: relative; height: 620px; }
+@media (max-width: 620px) { .deck { height: 720px; } }
+
+.mcard {
+  position: absolute; inset: 0; background: var(--card); border-radius: 16px;
+  box-shadow: var(--shadow-rest); padding: 30px 32px 32px; overflow: hidden;
+  border: 1px solid var(--rule); will-change: transform;
+  display: flex; flex-direction: column;
+}
+.mcard.top { box-shadow: var(--shadow-lift); cursor: grab; }
+.mcard.top:active { cursor: grabbing; }
+
+.mcard .head { display: flex; align-items: flex-start; gap: 20px; }
+.mcard .role { font-family: var(--display); font-weight: 600; font-size: 30px; line-height: 1.08; letter-spacing: -.025em; margin: 0; text-wrap: balance; }
+.mcard .co { font-size: 15px; color: var(--ink-2); margin-top: 5px; }
+.mcard .fig { text-align: right; flex: none; }
+.mcard .fig b {
+  font-family: var(--display); font-weight: 800; font-size: 58px; line-height: .9;
+  letter-spacing: -.05em; display: block; font-variant-numeric: tabular-nums;
+}
+.mcard .fig span { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); letter-spacing: .08em; text-transform: uppercase; }
+
+.chips { display: flex; gap: 7px; flex-wrap: wrap; margin: 18px 0 4px; }
+.chip {
+  font-size: 12.5px; padding: 4px 11px; border-radius: 999px;
+  background: var(--card-2); color: var(--ink-2); white-space: nowrap;
+}
+.chip.blue { background: var(--blue-soft); color: var(--blue); font-weight: 500; }
+.chip.coral { background: var(--coral-soft); color: var(--coral); font-weight: 500; }
+.chip.good { background: color-mix(in srgb, var(--green) 14%, transparent); color: var(--green); font-weight: 500; }
+
+.mcard .body { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin-top: 20px; flex: 1; min-height: 0; }
+@media (max-width: 620px) { .mcard .body { grid-template-columns: 1fr; gap: 18px; } }
+
+h4.mini {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .13em; text-transform: uppercase;
+  color: var(--ink-3); font-weight: 400; margin: 0 0 10px;
+}
+.axes { display: flex; flex-direction: column; gap: 9px; }
+.ax { display: grid; grid-template-columns: 1fr 34px; gap: 10px; font-size: 12.5px; color: var(--ink-2); }
+.ax .nm { grid-column: 1; }
+.ax .vl { grid-column: 2; text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+.ax .tr { grid-column: 1 / -1; height: 4px; background: var(--card-2); border-radius: 999px; overflow: hidden; margin-top: -2px; }
+.ax .fl { display: block; height: 100%; background: var(--blue); transform-origin: left center; border-radius: 999px; }
+
+.quote { font-size: 14px; line-height: 1.55; margin: 0 0 14px; color: var(--ink); }
+ul.tight { margin: 0 0 14px; padding-left: 16px; }
+ul.tight li { font-size: 13.5px; color: var(--ink-2); margin: 3px 0; }
+.scrollable { overflow-y: auto; padding-right: 6px; }
+
+/* The verdict is stamped across the card as you drag it. */
+.verdict-stamp {
+  position: absolute; top: 40px; font-family: var(--display); font-weight: 800;
+  font-size: 34px; letter-spacing: -.02em; padding: 6px 16px; border-radius: 8px;
+  border: 3px solid currentColor; opacity: 0; pointer-events: none;
+}
+.verdict-stamp.keep { right: 34px; color: var(--blue); transform: rotate(9deg); }
+.verdict-stamp.pass { left: 34px; color: var(--coral); transform: rotate(-9deg); }
+
+.actions { display: flex; gap: 12px; justify-content: center; margin-top: 22px; flex-wrap: wrap; }
+.act {
+  font: inherit; font-size: 14px; font-weight: 500; border-radius: 999px;
+  padding: 12px 22px; cursor: pointer; border: 1px solid var(--rule);
+  background: var(--card); color: var(--ink); display: inline-flex; align-items: center; gap: 9px;
+  will-change: transform;
+}
+.act:hover { border-color: var(--ink-3); }
+.act.primary { background: var(--blue); border-color: var(--blue); color: var(--on-blue); }
+.act.primary:hover { filter: brightness(1.1); }
+.act.pass:hover { border-color: var(--coral); color: var(--coral); }
+.act kbd {
+  font-family: var(--mono); font-size: 11px; color: var(--ink-3);
+  border: 1px solid var(--rule); border-radius: 4px; padding: 0 5px;
+}
+.act.primary kbd { color: color-mix(in srgb, var(--on-blue) 72%, var(--blue));
+  border-color: color-mix(in srgb, var(--on-blue) 42%, var(--blue)); }
+
+.hint { text-align: center; font-size: 12.5px; color: var(--ink-3); margin-top: 14px; }
+
+/* Queue ------------------------------------------------------------------- */
+.queue { position: sticky; top: 18px; }
+.queue h3 {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .13em; text-transform: uppercase;
+  color: var(--ink-3); font-weight: 400; margin: 0 0 12px;
+}
+.qlist { display: flex; flex-direction: column; gap: 2px; }
+.qrow {
+  display: grid; grid-template-columns: 38px 1fr; gap: 12px; align-items: baseline;
+  padding: 9px 11px; border-radius: 9px; cursor: pointer; border: 0; background: transparent;
+  font: inherit; text-align: left; color: var(--ink-2); width: 100%;
+}
+.qrow:hover { background: var(--card); }
+.qrow.now { background: var(--card); box-shadow: var(--shadow-rest); color: var(--ink); }
+.qrow.done { opacity: .42; }
+.qrow .sc { font-family: var(--mono); font-size: 14px; font-variant-numeric: tabular-nums; color: var(--ink); }
+.qrow.done .sc { text-decoration: line-through; }
+.qrow .nm { font-size: 13.5px; line-height: 1.3; }
+.qrow .nm small { display: block; color: var(--ink-3); font-size: 12px; }
+
+.tally { display: flex; gap: 10px; margin-top: 20px; }
+.tally div { flex: 1; background: var(--card); border-radius: 11px; padding: 12px 14px; }
+.tally .k { font-family: var(--mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
+.tally .v { font-family: var(--display); font-weight: 700; font-size: 26px; letter-spacing: -.03em; margin-top: 2px; }
+.tally .v.blue { color: var(--blue); }
+.tally .v.coral { color: var(--coral); }
+
+/* Done state */
+.done-state { text-align: center; padding: 80px 20px; }
+.done-state h2 { font-family: var(--display); font-weight: 700; font-size: 34px; letter-spacing: -.03em; margin: 0 0 10px; }
+.done-state p { color: var(--ink-2); max-width: 44ch; margin: 0 auto 22px; }
+
+/* Board ------------------------------------------------------------------- */
+.board { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 18px; }
+.b4 { grid-column: span 4; } .b5 { grid-column: span 5; } .b6 { grid-column: span 6; }
+.b7 { grid-column: span 7; } .b8 { grid-column: span 8; } .b12 { grid-column: span 12; }
+@media (max-width: 980px) { .b4, .b5, .b6, .b7, .b8 { grid-column: span 12; } }
+
+.tile { background: var(--card); border-radius: 16px; padding: 22px 24px 24px; min-width: 0; }
+.tile.loud { background: var(--blue); color: var(--on-blue); }
+.tile.loud .k, .tile.loud .n { color: color-mix(in srgb, var(--on-blue) 76%, var(--blue)); }
+.tile .k { font-family: var(--mono); font-size: 10.5px; letter-spacing: .11em; text-transform: uppercase; color: var(--ink-3); }
+.tile .big {
+  font-family: var(--display); font-weight: 800; font-size: clamp(38px, 5.2vw, 62px);
+  letter-spacing: -.05em; line-height: .95; margin-top: 8px; font-variant-numeric: tabular-nums;
+}
+.tile .n { font-size: 13px; color: var(--ink-2); margin-top: 8px; }
+.tile h3 { font-family: var(--display); font-weight: 600; font-size: 19px; letter-spacing: -.02em; margin: 0 0 3px; }
+.tile .sub { font-size: 13px; color: var(--ink-2); margin: 0 0 18px; max-width: 52ch; }
+
+.rank { display: flex; flex-direction: column; gap: 10px; }
+.rk { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; font-size: 13.5px; }
+.rk .tr { grid-column: 1 / -1; height: 7px; background: var(--card-2); border-radius: 999px; overflow: hidden; }
+.rk .fl { display: block; height: 100%; background: var(--blue-soft); transform-origin: left center; border-radius: 999px; }
+.rk.lead .fl { background: var(--blue); }
+.rk .vl { font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+.chartwrap { width: 100%; }
+.chart { width: 100%; height: auto; display: block; }
+
+.alert { border: 2px solid var(--coral); background: transparent; }
+.alert h3 { color: var(--coral); }
+
+/* Toast */
+.toast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+  background: var(--ink); color: var(--ground); border-radius: 999px;
+  padding: 11px 14px 11px 20px; display: flex; align-items: center; gap: 14px;
+  font-size: 13.5px; box-shadow: var(--shadow-lift); z-index: 50;
+}
+.toast[hidden] { display: none; }
+.toast button {
+  font: inherit; font-size: 13px; font-weight: 600; border: 0; border-radius: 999px;
+  background: var(--ground); color: var(--ink); padding: 5px 13px; cursor: pointer;
+}
+</style>
+
+<header class="top">
+  <div class="mark"><i></i>job-platform</div>
+  <div class="segs" id="segs">
+    <span class="thumb" id="thumb"></span>
+    <button data-view="triage" aria-current="page">Triage</button>
+    <button data-view="board">Board</button>
+    <button data-view="sent">Sent</button>
+  </div>
+  <div class="right">
+    <select class="ctl" aria-label="Search term">
+      <option>platform engineer</option>
+      <option>data engineer</option>
+      <option>security engineer</option>
+    </select>
+    <select class="ctl" id="theme" aria-label="Colour theme">
+      <option value="system">System</option>
+      <option value="light">Light</option>
+      <option value="dark">Dark</option>
+    </select>
+  </div>
+</header>
+
+<div class="stage">
+  <section class="view" id="view-triage">
+    <div class="triage">
+      <div>
+        <div class="progress">
+          <span class="txt" id="progressTxt">1 of 8</span>
+          <span class="bar"><i id="progressBar" style="width:12.5%"></i></span>
+          <span class="txt">248 above your threshold</span>
+        </div>
+        <div class="deck" id="deck"></div>
+        <div class="actions">
+          <button class="act pass" id="btnPass">Not for me <kbd>&larr;</kbd></button>
+          <button class="act primary" id="btnKeep">Shortlist <kbd>&rarr;</kbd></button>
+          <button class="act" id="btnWrite">Write the application <kbd>&uarr;</kbd></button>
+        </div>
+        <p class="hint">Drag the card, or use the arrow keys. Nothing here is sent anywhere.</p>
+      </div>
+
+      <aside class="queue">
+        <h3>Up next</h3>
+        <div class="qlist" id="qlist"></div>
+        <div class="tally">
+          <div><div class="k">Shortlisted</div><div class="v blue" id="tallyKeep">0</div></div>
+          <div><div class="k">Passed</div><div class="v coral" id="tallyPass">0</div></div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <section class="view" id="view-board" hidden></section>
+  <section class="view" id="view-sent" hidden></section>
+</div>
+
+<div class="toast" id="toast" hidden><span id="toastTxt"></span><button id="undo">Undo</button></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/gsap.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/Draggable.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/Flip.min.js"></script>
+<script>
+const DATA = {
+  summary: { cumulative: 18742, newInLastRun: 412, prevNew: 366, seenInLastRun: 3918, days: 47,
+    remote: 0.342, salaryColumns: 0.216, salaryKnown: 0.589, median: 72000, fromProse: 0.63 },
+  trend: [{ d: '20 Aug', n: 298 }, { d: '21 Aug', n: 341 }, { d: '22 Aug', n: 302 }, { d: '23 Aug', n: 96 },
+    { d: '24 Aug', n: 74 }, { d: '25 Aug', n: 388 }, { d: '26 Aug', n: 412 }, { d: '27 Aug', n: 377 },
+    { d: '28 Aug', n: 349 }, { d: '29 Aug', n: 310 }, { d: '30 Aug', n: 88 }, { d: '31 Aug', n: 71 },
+    { d: '1 Sep', n: 366 }, { d: '2 Sep', n: 412 }],
+  sites: [{ name: 'LinkedIn', n: 1614 }, { name: 'Indeed', n: 1102 }, { name: 'Glassdoor', n: 617 },
+    { name: 'freehire.me', n: 402 }, { name: 'ZipRecruiter', n: 183 }],
+  skills: [{ name: 'Python', n: 1204 }, { name: 'AWS', n: 986 }, { name: 'Kubernetes', n: 743 },
+    { name: 'TypeScript', n: 690 }, { name: 'Terraform', n: 512 }, { name: 'SQL', n: 498 }],
+  areas: [{ name: 'Backend', n: 1880 }, { name: 'Cloud and platform', n: 1402 }, { name: 'Data', n: 1120 },
+    { name: 'Frontend', n: 764 }, { name: 'Security', n: 318 }],
+  arrangement: [{ name: 'On-site', n: 1764 }, { name: 'Hybrid', n: 1402 }, { name: 'Remote', n: 752 }],
+  matches: [
+    { id: 1, score: 91, title: 'Senior Platform Engineer', company: 'Sky', work: 'Hybrid', salary: '£85k–£95k', where: 'Osterley, London', verdict: 'Strong', unmet: 1,
+      axes: [['Essential skills', 82], ['Other skills', 64], ['Seniority', 100], ['Experience', 88], ['Working arrangement', 100], ['Salary', 71]],
+      rationale: 'Nine of their eleven stated requirements are covered, including the two they lead with. The gap is Terraform at a level they call essential, and you have Bicep and Pulumi, which reads as adjacent rather than equivalent.',
+      strengths: ['Kubernetes at the depth the advert asks for', 'Azure and AWS both named, they want either', 'Platform team leadership matches the reporting line'],
+      gaps: ['Terraform named essential, not in your profile', 'They ask for on-call rotation experience'] },
+    { id: 2, score: 88, title: 'Backend Engineer (Go)', company: 'Monzo', work: 'Remote', salary: '£80k–£100k', where: 'UK remote', verdict: 'Fair', unmet: 2,
+      axes: [['Essential skills', 68], ['Other skills', 72], ['Seniority', 100], ['Experience', 92], ['Working arrangement', 100], ['Salary', 88]],
+      rationale: 'Strong on distributed systems and the domain, thin on Go itself. Your profile shows C# and Python at depth; the advert treats Go as learnable but lists two years of it under essentials.',
+      strengths: ['Event-driven architecture, named three times in the advert', 'Fintech domain experience'],
+      gaps: ['Go, two years listed as essential', 'gRPC not shown anywhere in your profile'] },
+    { id: 3, score: 84, title: 'Cloud Engineer', company: 'BT Group', work: 'On-site', salary: '£70k–£78k', where: 'Ipswich', verdict: 'Strong', unmet: 0,
+      axes: [['Essential skills', 94], ['Other skills', 70], ['Seniority', 88], ['Experience', 84], ['Working arrangement', 40], ['Salary', 62]],
+      rationale: 'Everything they call essential is covered. The friction is location: five days on-site in Ipswich against a remote preference, and the band sits below what you asked for.',
+      strengths: ['Every essential requirement met', 'Azure certification they name explicitly'],
+      gaps: ['Five days on-site', 'Band tops out below your stated floor'] },
+    { id: 4, score: 79, title: 'Senior Software Engineer', company: 'Deliveroo', work: 'Hybrid', salary: '£90k–£110k', where: 'Farringdon, London', verdict: null, unmet: 1,
+      axes: [['Essential skills', 76], ['Other skills', 68], ['Seniority', 92], ['Experience', 86], ['Working arrangement', 100], ['Salary', 90]],
+      rationale: '', strengths: [], gaps: [] },
+    { id: 5, score: 76, title: 'DevOps Engineer', company: 'Capgemini', work: 'Hybrid', salary: '£65k–£75k', where: 'Manchester', verdict: 'Weak', unmet: 3,
+      axes: [['Essential skills', 52], ['Other skills', 58], ['Seniority', 70], ['Experience', 80], ['Working arrangement', 100], ['Salary', 48]],
+      rationale: 'The title matches and little else does. Three essentials are unmet and the band is well under your floor, so the score is carried by axes the advert barely states.',
+      strengths: ['CI/CD pipeline ownership'], gaps: ['Ansible', 'Jenkins', 'SC clearance required before start'] },
+    { id: 6, score: 74, title: 'Data Platform Engineer', company: 'Ocado', work: 'Remote', salary: '£75k–£88k', where: 'UK remote', verdict: 'Strong', unmet: 0,
+      axes: [['Essential skills', 86], ['Other skills', 66], ['Seniority', 92], ['Experience', 78], ['Working arrangement', 100], ['Salary', 74]],
+      rationale: 'A quieter advert than its neighbours, and everything it does state, you have. Fully remote and the band clears your floor.',
+      strengths: ['Spark and Parquet, both named', 'Fully remote'], gaps: [] },
+    { id: 7, score: 71, title: 'Site Reliability Engineer', company: 'Starling Bank', work: 'Hybrid', salary: 'Not stated', where: 'Cardiff', verdict: 'Fair', unmet: 1,
+      axes: [['Essential skills', 74], ['Other skills', 62], ['Seniority', 84], ['Experience', 80], ['Working arrangement', 100]],
+      rationale: 'No salary stated, so that axis was dropped rather than scored. On what the advert does say the fit is good, and the one gap is a tool rather than a discipline.',
+      strengths: ['Observability stack matches theirs', 'Incident command experience'], gaps: ['Prometheus named, you show Azure Monitor'] },
+    { id: 8, score: 58, title: 'Lead Engineer, Payments', company: 'Wise', work: 'On-site', salary: '£95k–£115k', where: 'Shoreditch, London', verdict: 'Strong', unmet: 2, thin: true,
+      axes: [['Essential skills', 46], ['Other skills', 50], ['Seniority', 96], ['Experience', 94], ['Working arrangement', 40], ['Salary', 96]],
+      rationale: 'The lowest score here and the most interesting card in the deck. The advert states very little, so the arithmetic had little to score, but what it does say is leadership and payments at scale, and both are the strongest parts of your record.',
+      strengths: ['Ten years, five of them leading teams', 'Payments domain, end to end', 'Band is the highest on your shortlist'],
+      gaps: ['Advert names Java, you have C#', 'Four days on-site in London'] }
+  ],
+  submissions: [
+    { company: 'Sky', title: 'Senior Platform Engineer', phase: 'Acknowledged', days: 4, stale: false,
+      events: [['2 Sep', 'Acknowledged', 'read from email'], ['29 Aug', 'Sent through the employer system', 'you']] },
+    { company: 'Monzo', title: 'Backend Engineer (Go)', phase: 'Screening booked', days: 1, stale: false,
+      events: [['1 Sep', 'Screening booked for 8 September', 'read from email'], ['30 Aug', 'Acknowledged', 'read from email'], ['28 Aug', 'Sent', 'you']] },
+    { company: 'Ocado', title: 'Data Platform Engineer', phase: 'Sent', days: 15, stale: true,
+      events: [['18 Aug', 'Sent through the board', 'you']] },
+    { company: 'Capgemini', title: 'DevOps Engineer', phase: 'Rejected', days: 9, stale: false,
+      events: [['24 Aug', 'Rejected', 'read from email'], ['16 Aug', 'Sent', 'you']] }
+  ]
+};
+
+const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+const fmt = (n) => n.toLocaleString('en-GB');
+
+/* --- the deck ------------------------------------------------------------ */
+const deck = $('#deck');
+let queue = DATA.matches.map((m) => m.id);
+let decided = [];          /* [{ id, kept }] most recent last - drives undo */
+let dragger = null;
+
+function cardHtml(m) {
+  return '<div class="verdict-stamp keep">Shortlist</div><div class="verdict-stamp pass">Pass</div>' +
+    '<div class="head"><div><h2 class="role">' + m.title + '</h2>' +
+    '<div class="co">' + m.company + ' &middot; ' + m.where + '</div></div>' +
+    '<div class="fig"><b>' + m.score + '</b><span>fit</span></div></div>' +
+    '<div class="chips">' +
+    '<span class="chip">' + m.work + '</span>' +
+    '<span class="chip">' + m.salary + '</span>' +
+    (m.verdict === 'Strong' ? '<span class="chip good">Model: strong</span>' :
+      m.verdict === 'Weak' ? '<span class="chip coral">Model: weak</span>' :
+      m.verdict ? '<span class="chip">Model: fair</span>' : '<span class="chip">Not read yet</span>') +
+    (m.unmet ? '<span class="chip coral">' + m.unmet + ' unmet</span>' : '') +
+    (m.thin ? '<span class="chip">Thin advert</span>' : '') +
+    '</div>' +
+    '<div class="body"><div><h4 class="mini">How the score was reached</h4>' +
+    '<div class="axes">' + m.axes.map(([nm, v]) =>
+      '<div class="ax"><span class="nm">' + nm + '</span><span class="vl">' + v + '</span>' +
+      '<span class="tr"><i class="fl" style="width:' + v + '%"></i></span></div>').join('') +
+    '</div><p class="sub" style="font-size:12px;color:var(--ink-3);margin-top:14px">' +
+    'Axes the advert said nothing about are left out entirely rather than scored zero.</p></div>' +
+    '<div class="scrollable"><h4 class="mini">What the model said</h4>' +
+    (m.verdict
+      ? '<p class="quote">' + m.rationale + '</p>' +
+        (m.strengths.length ? '<h4 class="mini">Lands well</h4><ul class="tight">' + m.strengths.map((x) => '<li>' + x + '</li>').join('') + '</ul>' : '') +
+        (m.gaps.length ? '<h4 class="mini">Worth knowing</h4><ul class="tight">' + m.gaps.map((x) => '<li>' + x + '</li>').join('') + '</ul>' : '')
+      : '<p class="quote">Not read yet. The model reads the highest-scoring unassessed roles each night, so this one is judged by the arithmetic alone for now.</p>') +
+    '</div></div>';
+}
+
+function buildDeck() {
+  deck.innerHTML = DATA.matches.map((m) =>
+    '<article class="mcard" data-id="' + m.id + '" aria-label="' + m.title + ' at ' + m.company + '">' +
+    cardHtml(m) + '</article>').join('');
+  layout(false);
+}
+
+function cardFor(id) { return deck.querySelector('[data-id="' + id + '"]'); }
+
+function layout(animate) {
+  DATA.matches.forEach((m) => {
+    const el = cardFor(m.id);
+    const i = queue.indexOf(m.id);
+    el.classList.toggle('top', i === 0);
+    if (i === -1) { gsap.set(el, { pointerEvents: 'none', zIndex: 0 }); return; }
+    const props = {
+      y: i * 14, scale: 1 - i * 0.035, opacity: i < 3 ? 1 : 0,
+      zIndex: 100 - i, rotate: 0, x: 0,
+      pointerEvents: i === 0 ? 'auto' : 'none'
+    };
+    if (animate && !REDUCED) gsap.to(el, Object.assign({ duration: .45, ease: 'power3.out' }, props));
+    else gsap.set(el, props);
+  });
+
+  if (dragger) { dragger.kill(); dragger = null; }
+  const top = queue.length ? cardFor(queue[0]) : null;
+  if (top && !REDUCED) makeDraggable(top);
+  if (top && !REDUCED) {
+    gsap.from(top.querySelectorAll('.ax .fl'), { scaleX: 0, duration: .5, stagger: .04, ease: 'power2.out' });
+  }
+  renderQueue();
+  renderProgress();
+  if (!queue.length) setTimeout(showDone, REDUCED ? 0 : 480);
+}
+
+function makeDraggable(el) {
+  dragger = Draggable.create(el, {
+    type: 'x,y',
+    onDrag() {
+      const t = Math.max(-1, Math.min(1, this.x / 150));
+      gsap.set(el, { rotate: t * 7 });
+      gsap.set(el.querySelector('.verdict-stamp.keep'), { opacity: Math.max(0, t) });
+      gsap.set(el.querySelector('.verdict-stamp.pass'), { opacity: Math.max(0, -t) });
+    },
+    onRelease() {
+      if (Math.abs(this.x) > 140) decide(this.x > 0);
+      else gsap.to(el, {
+        x: 0, y: 0, rotate: 0, duration: .4, ease: 'elastic.out(1, .6)',
+        onStart: () => gsap.to(el.querySelectorAll('.verdict-stamp'), { opacity: 0, duration: .2 })
+      });
+    }
+  })[0];
+}
+
+function decide(kept) {
+  if (!queue.length) return;
+  const id = queue.shift();
+  const el = cardFor(id);
+  decided.push({ id, kept });
+
+  const fly = { x: kept ? 700 : -700, rotate: kept ? 16 : -16, opacity: 0, duration: .45, ease: 'power2.in' };
+  if (REDUCED) gsap.set(el, { opacity: 0 });
+  else {
+    gsap.to(el.querySelector(kept ? '.verdict-stamp.keep' : '.verdict-stamp.pass'), { opacity: 1, duration: .12 });
+    gsap.to(el, fly);
+  }
+
+  const m = DATA.matches.find((x) => x.id === id);
+  toast((kept ? 'Shortlisted ' : 'Passed on ') + m.title + ' at ' + m.company);
+  layout(true);
+  bumpTallies();
+}
+
+function undo() {
+  const last = decided.pop();
+  if (!last) return;
+  queue.unshift(last.id);
+  const el = cardFor(last.id);
+  if (!el) { buildDeck(); bumpTallies(); $('#toast').hidden = true; return; }
+  gsap.set(el, { opacity: 0, x: last.kept ? 700 : -700 });
+  gsap.set(el.querySelectorAll('.verdict-stamp'), { opacity: 0 });
+  layout(true);
+  bumpTallies();
+  $('#toast').hidden = true;
+}
+
+function bumpTallies() {
+  const keep = decided.filter((d) => d.kept).length;
+  const pass = decided.length - keep;
+  [['#tallyKeep', keep], ['#tallyPass', pass]].forEach(([sel, v]) => {
+    const node = $(sel);
+    node.textContent = v;
+    if (!REDUCED) gsap.fromTo(node, { scale: 1.35 }, { scale: 1, duration: .35, ease: 'back.out(3)' });
+  });
+}
+
+function renderQueue() {
+  $('#qlist').innerHTML = DATA.matches.map((m) => {
+    const i = queue.indexOf(m.id);
+    const done = i === -1;
+    const cls = done ? 'done' : i === 0 ? 'now' : '';
+    const state = done
+      ? (decided.find((d) => d.id === m.id) || {}).kept ? 'shortlisted' : 'passed'
+      : m.company;
+    return '<button class="qrow ' + cls + '" data-jump="' + m.id + '">' +
+      '<span class="sc">' + m.score + '</span>' +
+      '<span class="nm">' + m.title + '<small>' + state + '</small></span></button>';
+  }).join('');
+}
+
+function renderProgress() {
+  const done = DATA.matches.length - queue.length;
+  const shown = Math.min(done + 1, DATA.matches.length);
+  $('#progressTxt').textContent = (queue.length ? shown : DATA.matches.length) + ' of ' + DATA.matches.length;
+  const w = (done / DATA.matches.length * 100) + '%';
+  if (REDUCED) $('#progressBar').style.width = w;
+  else gsap.to('#progressBar', { width: w, duration: .5, ease: 'power2.out' });
+}
+
+function showDone() {
+  const keep = decided.filter((d) => d.kept).length;
+  deck.innerHTML = '<div class="mcard done-state" style="position:relative">' +
+    '<h2>That is the deck.</h2>' +
+    '<p>You shortlisted ' + keep + ' of ' + DATA.matches.length + '. The next sweep runs tonight and scores ' +
+    'everything ingested since this morning.</p>' +
+    '<div class="actions" style="margin-top:0"><button class="act primary" id="again">Start again</button></div></div>';
+  if (!REDUCED) gsap.from('.done-state > *', { opacity: 0, y: 12, duration: .5, stagger: .07, ease: 'power2.out' });
+  $('#again').onclick = () => { queue = DATA.matches.map((m) => m.id); decided = []; buildDeck(); bumpTallies(); };
+}
+
+let toastTimer;
+function toast(text) {
+  const t = $('#toast');
+  $('#toastTxt').textContent = text;
+  t.hidden = false;
+  if (!REDUCED) gsap.fromTo(t, { y: 16, opacity: 0 }, { y: 0, opacity: 1, duration: .3, ease: 'power3.out' });
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.hidden = true; }, 3600);
+}
+
+$('#btnKeep').onclick = () => decide(true);
+$('#btnPass').onclick = () => decide(false);
+$('#btnWrite').onclick = () => {
+  const m = DATA.matches.find((x) => x.id === queue[0]);
+  if (m) toast('Writing a CV and cover letter for ' + m.title + '. It appears under Sent when it is ready.');
+};
+$('#undo').onclick = undo;
+
+$('#qlist').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-jump]');
+  if (!b) return;
+  const id = Number(b.dataset.jump);
+  const i = queue.indexOf(id);
+  if (i > 0) { queue.splice(i, 1); queue.unshift(id); layout(true); }
+});
+
+document.addEventListener('keydown', (e) => {
+  if ($('#view-triage').hidden) return;
+  if (e.target.matches('input, select, textarea')) return;
+  if (e.key === 'ArrowRight') { e.preventDefault(); decide(true); }
+  if (e.key === 'ArrowLeft') { e.preventDefault(); decide(false); }
+  if (e.key === 'ArrowUp') { e.preventDefault(); $('#btnWrite').click(); }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }
+});
+
+/* --- the board ----------------------------------------------------------- */
+function rank(items, lead) {
+  const max = Math.max(...items.map((i) => i.n));
+  return '<div class="rank">' + items.map((it, i) =>
+    '<div class="rk' + (i === 0 && lead !== false ? ' lead' : '') + '">' +
+    '<span>' + it.name + '</span><span class="vl">' + fmt(it.n) + '</span>' +
+    '<span class="tr"><i class="fl" style="width:' + (it.n / max * 100) + '%"></i></span></div>').join('') + '</div>';
+}
+
+function columns(data) {
+  const W = 680, H = 200, L = 4, R = 4, T = 16, B = 22;
+  const max = Math.max(...data.map((d) => d.n));
+  const step = (W - L - R) / data.length;
+  const bw = step * 0.62;
+  const y = (n) => T + (1 - n / max) * (H - T - B);
+  return '<svg viewBox="0 0 ' + W + ' ' + H + '" class="chart">' +
+    '<style>.lbl{font-family:var(--mono);font-size:9px;fill:var(--ink-3)}' +
+    '.col{transform-box:fill-box;transform-origin:50% 100%}</style>' +
+    data.map((d, i) => {
+      const x = L + i * step + (step - bw) / 2;
+      const last = i === data.length - 1;
+      return '<rect class="col" x="' + x.toFixed(1) + '" y="' + y(d.n).toFixed(1) + '" rx="3" width="' + bw.toFixed(1) +
+        '" height="' + (H - B - y(d.n)).toFixed(1) + '" fill="' + (last ? 'var(--blue)' : d.n < 150 ? 'var(--rule)' : 'var(--blue-soft)') + '"/>';
+    }).join('') +
+    data.map((d, i) => (i % 3 === 0 || i === data.length - 1)
+      ? '<text x="' + (L + i * step + step / 2).toFixed(1) + '" y="' + (H - 6) + '" text-anchor="middle" class="lbl">' + d.d + '</text>'
+      : '').join('') + '</svg>';
+}
+
+const S = DATA.summary;
+$('#view-board').innerHTML = [
+  '<div class="board">',
+  '<div class="tile loud b4"><div class="k">New in last run</div>',
+  '<div class="big" data-count="412">0</div><div class="n">13% more than the day before</div></div>',
+  '<div class="tile b4"><div class="k">Distinct postings</div>',
+  '<div class="big" data-count="18742">0</div><div class="n">across 47 days of history</div></div>',
+  '<div class="tile b4"><div class="k">Median salary</div>',
+  '<div class="big">£<span data-count="72" data-suffix="k">0</span></div>',
+  '<div class="n">63% of it read out of the prose, not a salary column</div></div>',
+
+  '<div class="tile b8"><h3>New postings per scrape day</h3>',
+  '<p class="sub">First sighting, not the date the board printed. The flat pairs are weekends.</p>',
+  '<div class="chartwrap">' + columns(DATA.trend) + '</div></div>',
+
+  '<div class="tile b4"><h3>Where they came from</h3>',
+  '<p class="sub">Boards producing results in the last run.</p>' + rank(DATA.sites) + '</div>',
+
+  '<div class="tile b4"><h3>Skills in demand</h3>',
+  '<p class="sub">Concepts named by the most postings.</p>' + rank(DATA.skills) + '</div>',
+
+  '<div class="tile b4"><h3>Areas in demand</h3>',
+  '<p class="sub">The shape under the scatter, and the one figure that needs the concept graph.</p>' +
+  rank(DATA.areas) + '</div>',
+
+  '<div class="tile b4"><h3>How the work happens</h3>',
+  '<p class="sub">The three-way split a remote flag cannot express.</p>' + rank(DATA.arrangement, false) + '</div>',
+
+  '<div class="tile alert b12"><h3>Two columns came back empty</h3>',
+  '<p class="sub"><code>job_level</code> and <code>company_industry</code> were empty in every row of the last run, ',
+  'and 44 of 3,918 rows would not parse. A column that drops to zero usually means a board changed its markup ',
+  'and the scraper degraded without failing.</p>',
+  '<div class="chips"><span class="chip coral">job_level &middot; 0%</span>',
+  '<span class="chip coral">company_industry &middot; 0%</span>',
+  '<span class="chip">salary_source &middot; 18.4%</span>',
+  '<span class="chip">company_rating &middot; 22.1%</span></div></div>',
+  '</div>'
+].join('');
+
+/* --- sent ---------------------------------------------------------------- */
+$('#view-sent').innerHTML = [
+  '<div class="board">',
+  '<div class="tile b12"><h3>What was actually sent</h3>',
+  '<p class="sub">The status is a fold over the event log and staleness is derived from it, never stored. ',
+  'The platform records a submission; it never submits one.</p></div>',
+  DATA.submissions.map((a) =>
+    '<div class="tile b6"><div style="display:flex;align-items:flex-start;gap:14px">' +
+    '<div style="flex:1"><h3>' + a.title + '</h3><div class="sub" style="margin:0">' + a.company + '</div></div>' +
+    '<span class="chip ' + (a.stale ? 'coral' : a.phase === 'Rejected' ? '' : 'good') + '">' +
+    (a.stale ? 'quiet ' + a.days + ' days' : a.phase) + '</span></div>' +
+    '<div style="margin-top:16px;border-left:2px solid var(--rule);padding-left:16px">' +
+    a.events.map(([when, what, who]) =>
+      '<div style="display:flex;gap:14px;font-size:13.5px;padding:4px 0;color:var(--ink-2)">' +
+      '<span class="vl" style="font-family:var(--mono);font-size:12px;color:var(--ink-3);width:52px;flex:none">' + when + '</span>' +
+      '<span>' + what + '</span>' +
+      '<span style="margin-left:auto;font-size:12px;color:var(--ink-3)">' + who + '</span></div>').join('') +
+    '</div></div>').join(''),
+  '</div>'
+].join('');
+
+/* --- view switching ------------------------------------------------------ */
+const thumb = $('#thumb');
+
+function moveThumb(btn) {
+  const r = btn.getBoundingClientRect();
+  const base = $('#segs').getBoundingClientRect();
+  gsap.to(thumb, { x: r.left - base.left - 3, width: r.width, duration: REDUCED ? 0 : .4, ease: 'power3.out' });
+}
+
+function countUp(scope) {
+  $$('[data-count]', scope).forEach((node) => {
+    const target = parseFloat(node.dataset.count);
+    const suffix = node.dataset.suffix || '';
+    if (REDUCED) { node.textContent = fmt(target) + suffix; return; }
+    const o = { v: 0 };
+    gsap.to(o, { v: target, duration: 1.1, ease: 'power2.out',
+      onUpdate: () => { node.textContent = fmt(Math.round(o.v)) + suffix; } });
+  });
+}
+
+function show(name, btn) {
+  const next = $('#view-' + name);
+  const current = $$('.view').find((v) => !v.hidden);
+  $$('#segs button').forEach((b) => b.setAttribute('aria-current', b === btn ? 'page' : 'false'));
+  moveThumb(btn);
+  if (current === next) return;
+
+  const swap = () => {
+    current.hidden = true;
+    next.hidden = false;
+    countUp(next);
+    if (REDUCED) return;
+    gsap.from(next.querySelectorAll('.tile, .triage > *'), { opacity: 0, y: 14, duration: .5, stagger: .04, ease: 'power3.out' });
+    gsap.from(next.querySelectorAll('.rk .fl'), { scaleX: 0, duration: .6, stagger: .03, ease: 'power2.out', delay: .12 });
+    gsap.from(next.querySelectorAll('.col'), { scaleY: 0, duration: .55, stagger: .025, ease: 'power2.out', delay: .12 });
+  };
+
+  if (REDUCED) { swap(); return; }
+  gsap.to(current, { opacity: 0, duration: .16, onComplete: () => {
+    gsap.set(current, { clearProps: 'opacity' });
+    swap();
+    window.scrollTo({ top: 0 });
+  } });
+}
+
+$$('#segs button').forEach((b) => { b.onclick = () => show(b.dataset.view, b); });
+moveThumb($('#segs button'));
+if (document.fonts && document.fonts.ready) {
+  document.fonts.ready.then(() => moveThumb($('#segs button[aria-current="page"]')));
+}
+window.addEventListener('resize', () => moveThumb($('#segs button[aria-current="page"]')));
+
+$('#theme').onchange = (e) => {
+  const v = e.target.value;
+  if (v === 'system') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', v);
+};
+
+/* Magnetic action buttons: the pointer pulls them a couple of pixels. */
+if (!REDUCED) {
+  $$('.act').forEach((btn) => {
+    btn.addEventListener('mousemove', (e) => {
+      const r = btn.getBoundingClientRect();
+      gsap.to(btn, {
+        x: (e.clientX - r.left - r.width / 2) * 0.16,
+        y: (e.clientY - r.top - r.height / 2) * 0.24,
+        duration: .4, ease: 'power2.out'
+      });
+    });
+    btn.addEventListener('mouseleave', () => gsap.to(btn, { x: 0, y: 0, duration: .5, ease: 'elastic.out(1, .5)' }));
+  });
+}
+
+/* --- load ---------------------------------------------------------------- */
+buildDeck();
+bumpTallies();
+if (!REDUCED) {
+  gsap.from('.top > *', { opacity: 0, y: -8, duration: .5, stagger: .06, ease: 'power3.out' });
+  gsap.from('.mcard.top', { y: 40, opacity: 0, duration: .6, ease: 'power3.out' });
+  gsap.from('.qrow', { opacity: 0, x: 12, duration: .4, stagger: .04, delay: .2, ease: 'power2.out' });
+  gsap.from('.actions .act', { opacity: 0, y: 10, duration: .45, stagger: .06, delay: .3, ease: 'power3.out' });
+}
+</script>

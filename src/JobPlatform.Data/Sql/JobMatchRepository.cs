@@ -36,6 +36,7 @@ public sealed record MatchRow(
     string? Rationale,
     DateTimeOffset ScoredAtUtc,
     DateTimeOffset? AssessedAtUtc,
+    DateTimeOffset? DismissedAtUtc,
     string? ComponentsJson,
     string? MatchedJson,
     string? GapsJson,
@@ -300,6 +301,12 @@ public sealed class JobMatchRepository(JobsDbContext db)
             }
             else if (entity.Score != result.Score)
             {
+                // The arithmetic moved, so everything the model concluded from the old
+                // arithmetic is stale. DismissedAtUtc is deliberately NOT in this list: the
+                // candidate's "no" is a fact about them and the posting, not a conclusion
+                // drawn from a number, and clearing it here would put every dismissed posting
+                // back at the top of the shortlist on the first night its score shifted by a
+                // point. Pinned by A_re_scored_pair_stays_dismissed.
                 entity.Verdict = null;
                 entity.AssessmentScore = null;
                 entity.Rationale = null;
@@ -404,7 +411,14 @@ public sealed class JobMatchRepository(JobsDbContext db)
                 // posting with no description resolves no concepts, so it cannot clear the concept
                 // floor, so it scores low. The stratified sample lives exactly where they are.
                 && m.Posting!.Description != null
-                && m.Posting.Description != "");
+                && m.Posting.Description != ""
+                // Dismissed pairs, in the query for the same reason and with the same failure
+                // if they are not: a band ordered by posting id would keep drawing the same
+                // dismissed rows into every sample and getting nothing usable back. This is
+                // also the whole point of the column - the budget is forty judgements a night,
+                // and spending one on a posting the candidate has already said no to is a
+                // judgement not spent on a posting they have not seen.
+                && m.DismissedAtUtc == null);
 
         if (maximumScore is { } ceiling)
         {
@@ -524,6 +538,7 @@ public sealed class JobMatchRepository(JobsDbContext db)
         bool assessedOnly,
         int limit,
         int offset,
+        bool dismissed = false,
         CancellationToken ct = default)
     {
         var query = db.JobMatches
@@ -534,6 +549,13 @@ public sealed class JobMatchRepository(JobsDbContext db)
         {
             query = query.Where(m => m.AssessedAtUtc != null);
         }
+
+        // Either the shortlist or the dismissed pile, never both. A list that mixes them puts
+        // the postings you have already said no to back among the ones you have not seen,
+        // which is the state this column exists to end.
+        query = dismissed
+            ? query.Where(m => m.DismissedAtUtc != null)
+            : query.Where(m => m.DismissedAtUtc == null);
 
         return await query
             .OrderByDescending(m => m.RankScore)
@@ -561,6 +583,7 @@ public sealed class JobMatchRepository(JobsDbContext db)
                 m.Rationale,
                 m.ScoredAtUtc,
                 m.AssessedAtUtc,
+                m.DismissedAtUtc,
                 m.ComponentsJson,
                 m.MatchedJson,
                 m.GapsJson,
@@ -764,6 +787,7 @@ public sealed class JobMatchRepository(JobsDbContext db)
                 m.Rationale,
                 m.ScoredAtUtc,
                 m.AssessedAtUtc,
+                m.DismissedAtUtc,
                 m.ComponentsJson,
                 m.MatchedJson,
                 m.GapsJson,
@@ -783,6 +807,85 @@ public sealed class JobMatchRepository(JobsDbContext db)
             .Where(p => p.ExtractedAtUtc != null || p.Concepts.Any())
             .Select(p => p.Id)
             .ToListAsync(ct);
+
+    /// <summary>
+    /// What this candidate's own matched band asks for, by concept.
+    /// </summary>
+    /// <remarks>
+    /// The supply half of the skills gap. Scoped to one profile and one score floor, so it
+    /// lands on the <c>(ProfileId, Score)</c> index rather than reading the assertion table
+    /// whole - which is what <see cref="JobPostingQueryRepository.GetConceptDemandAsync"/>
+    /// exists to avoid and why that one takes a bounded key list. The keys this returns are
+    /// that list: the corpus figure is context for concepts the candidate's band already
+    /// names, never an aggregate over all 222.
+    ///
+    /// <para>
+    /// Counts distinct postings rather than assertion rows, for the same reason the corpus
+    /// query does: a concept the board tagged and the description also mentioned is two rows
+    /// for one posting, and counting both would make thoroughly-recorded concepts look more
+    /// in demand than they are.
+    /// </para>
+    ///
+    /// <para>
+    /// Dismissed pairs are excluded. A concept only asked for by postings the candidate has
+    /// already said no to is not a gap in their profile; it is a gap in a job they do not
+    /// want, and putting it at the top of the list would be advice to chase work they have
+    /// just rejected.
+    /// </para>
+    /// </remarks>
+    public async Task<IReadOnlyDictionary<string, int>> GetInBandConceptDemandAsync(
+        long profileId, int minimumScore, CancellationToken ct = default)
+    {
+        var rows = await db.JobMatches
+            .AsNoTracking()
+            .Where(m => m.ProfileId == profileId
+                && m.Score >= minimumScore
+                && m.DismissedAtUtc == null)
+            .SelectMany(m => m.Posting!.Concepts)
+            .GroupBy(c => c.Concept!.ConceptKey)
+            .Select(g => new { g.Key, Count = g.Select(c => c.PostingId).Distinct().Count() })
+            .ToListAsync(ct);
+
+        return rows.ToDictionary(r => r.Key, r => r.Count, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Records that the candidate is not interested in a posting, or takes it back.
+    /// </summary>
+    /// <remarks>
+    /// Idempotent, and deliberately not an event log. A dismissal has no history worth
+    /// keeping: the question it answers is "is this pair on the shortlist", and the second
+    /// dismissal of the same posting says nothing the first did not. Submissions are an
+    /// append-only log because what was sent and when is a record somebody may need to
+    /// defend; what you scrolled past is not.
+    ///
+    /// <para>
+    /// Returns false where the pair does not exist for this profile, which the endpoint turns
+    /// into a 404. Silently succeeding on a posting that was never scored would let a client
+    /// believe it had suppressed something it had not.
+    /// </para>
+    /// </remarks>
+    public async Task<bool> SetDismissedAsync(
+        long profileId, long postingId, DateTimeOffset? dismissedAtUtc, CancellationToken ct = default)
+    {
+        var entity = await db.JobMatches
+            .FirstOrDefaultAsync(m => m.ProfileId == profileId && m.PostingId == postingId, ct);
+
+        if (entity is null)
+        {
+            return false;
+        }
+
+        // Only when it changes. The sweep already avoids touching rows that did not move, for
+        // the same reason: this database is billed by wall-clock time.
+        if (entity.DismissedAtUtc != dismissedAtUtc)
+        {
+            entity.DismissedAtUtc = dismissedAtUtc;
+            await db.SaveChangesAsync(ct);
+        }
+
+        return true;
+    }
 
     /// <summary>
     /// One pair in full, for the writing pass.

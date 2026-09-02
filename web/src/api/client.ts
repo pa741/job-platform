@@ -5,7 +5,7 @@ import type {
   ProfileResponse, RunResponse, ScraperHealth, SearchTermResponse, SourceComposition,
   AiCallResponse, AiCallTotalsResponse,
   ScraperSearchRequest, ScraperSearchListResponse, ScraperSearchOptionsResponse,
-  Submission, SubmissionEvent,
+  SkillGapResponse, Submission, SubmissionEvent,
 } from './types';
 
 /** Thrown for any non-2xx response, carrying the RFC 9457 detail the API returns. */
@@ -295,6 +295,28 @@ export class JobPlatformApi {
 
   match = (postingId: number) => this.request<MatchDetail>(`/api/v1/matches/${postingId}`);
 
+  /**
+   * Sets, or clears, "not interested" on one match.
+   *
+   * A PUT because it sets a state rather than appending to a log, so a client retrying one it
+   * is unsure landed gets the same answer the second time. The undo is the same call with
+   * `false` - a dismissal that cannot be taken back is one nobody will risk using.
+   */
+  /**
+   * What the candidate's own matched band asks for that their profile does not hold.
+   *
+   * Per-principal and SQL-backed, so it carries no output cache and must never sit on a
+   * bootstrap or polling path - load it when the market page renders, not before.
+   */
+  skillGap = (searchTerm?: string, minScore?: number) =>
+    this.request<SkillGapResponse>(
+      `/api/v1/matches/skill-gap${JobPlatformApi.query({ searchTerm, minScore })}`);
+
+  setMatchDismissed = (postingId: number, dismissed: boolean) =>
+    this.request<{ postingId: number; dismissedAtUtc: string | null }>(
+      `/api/v1/matches/${postingId}/dismissed`,
+      { method: 'PUT', body: JSON.stringify({ dismissed }) });
+
   applications = (limit = 25) =>
     this.request<{ items: ApplicationSummary[] }>(
       `/api/v1/applications${JobPlatformApi.query({ limit })}`);
@@ -335,7 +357,26 @@ export class JobPlatformApi {
     const headers = new Headers({ Accept: 'application/pdf' });
     if (token) headers.set('Authorization', `Bearer ${token}`);
 
-    const response = await fetch(this.applicationPdfUrl(id, kind), { headers });
+    // The same deadline every other call carries. This one used a bare fetch with no
+    // AbortController, so the single download in the product was the single request that
+    // could hang forever - against endpoints that render the PDF per request out of a
+    // database which pauses when idle, which is exactly where a request hangs.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+
+    let response: Response;
+    try {
+      response = await fetch(this.applicationPdfUrl(id, kind), {
+        headers, signal: controller.signal,
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new ApiTimeoutError(DEFAULT_TIMEOUT_MS);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
 
     if (!response.ok) {
       throw new ApiError(response.status, `Could not download the PDF (${response.status}).`);
@@ -352,6 +393,8 @@ export interface MatchQuery {
   assessedOnly?: boolean;
   limit?: number;
   offset?: number;
+  /** The dismissed pile instead of the shortlist. Never both - see the repository. */
+  dismissed?: boolean;
 }
 
 export interface PostingQuery {

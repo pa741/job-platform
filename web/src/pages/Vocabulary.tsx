@@ -14,11 +14,17 @@ import { Card, ErrorNote, Meter, StatTile } from '../components/Primitives';
  * `concepts.json`. The source composition is the only honest measure of what each pass
  * contributes, and it existed solely as a column nothing read.
  */
-export function Vocabulary({ api, searchTerm }: { api: JobPlatformApi; searchTerm: string | undefined }) {
+export function Vocabulary({ api, searchTerm, concept, onOpenConcept }: {
+  api: JobPlatformApi;
+  searchTerm: string | undefined;
+  /** From the URL: `/market/vocabulary/:key`. Walking the graph is navigation, not state. */
+  concept: string | undefined;
+  onOpenConcept: (key: string) => void;
+}) {
   return (
     <div className="grid">
       <Provenance api={api} searchTerm={searchTerm} />
-      <Explorer api={api} searchTerm={searchTerm} />
+      <Explorer api={api} searchTerm={searchTerm} concept={concept} onOpenConcept={onOpenConcept} />
     </div>
   );
 }
@@ -212,20 +218,39 @@ const RELATION_NOTE: Record<ConceptRelation, string> = {
   VariantOf: 'A spelling or packaging of the same underlying thing.',
 };
 
-function Explorer({ api, searchTerm }: { api: JobPlatformApi; searchTerm: string | undefined }) {
+/**
+ * The concept graph, walkable.
+ *
+ * The selected concept lives in the URL rather than in state, so a concept has an address:
+ * walking the graph is navigation and always was — it is the closest thing to a link in this
+ * app, and it was the one part of the dashboard that could not be shared.
+ *
+ * The caller replaces rather than pushes, so following six edges does not cost six presses of
+ * Back to leave the page.
+ */
+function Explorer({ api, searchTerm, concept, onOpenConcept }: {
+  api: JobPlatformApi;
+  searchTerm: string | undefined;
+  concept: string | undefined;
+  onOpenConcept: (key: string) => void;
+}) {
   const [all, setAll] = useState<ConceptListItem[]>();
   const [version, setVersion] = useState<number>();
-  const [selected, setSelected] = useState<string>();
   const [detail, setDetail] = useState<ConceptDetail>();
   const [filter, setFilter] = useState('');
   const [error, setError] = useState<unknown>();
+
+  // The route wins where it names one; otherwise the first skill, so the pane is never empty.
+  const [fallback, setFallback] = useState<string>();
+  const selected = concept ?? fallback;
+  const setSelected = onOpenConcept;
 
   useEffect(() => {
     api.concepts()
       .then((r) => {
         setAll(r.items);
         setVersion(r.version);
-        setSelected((current) => current ?? r.items.find((c) => c.kind === 'Skill')?.concept);
+        setFallback((current) => current ?? r.items.find((c) => c.kind === 'Skill')?.concept);
       })
       .catch(setError);
   }, [api]);

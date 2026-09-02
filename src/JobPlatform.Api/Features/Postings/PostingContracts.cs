@@ -106,6 +106,19 @@ public sealed record PostingSummary
     /// </summary>
     public bool? FakeFreshness { get; init; }
 
+    /// <summary>
+    /// How many people the board says have applied. The competition signal.
+    /// </summary>
+    /// <remarks>
+    /// On the list rather than only on the detail, which is where it sat while being parsed,
+    /// normalised and stored without ever reaching a screen: it is a number you sort a
+    /// shortlist by, and a field only the detail endpoint carries can never be one.
+    ///
+    /// Sparse - LinkedIn is the only board that publishes it - so null means "not stated" and
+    /// never zero. Rendered as a badge rather than a column for that reason.
+    /// </remarks>
+    public int? ApplicantCount { get; init; }
+
     public DateTimeOffset FirstSeenUtc { get; init; }
     public DateTimeOffset LastSeenUtc { get; init; }
     public int SeenCount { get; init; }
@@ -142,22 +155,13 @@ public sealed record PostingDetail
     /// Verbatim applicant caption, e.g. "Over 200 applicants". LinkedIn only.
     /// </summary>
     /// <remarks>
-    /// Kept beside <see cref="ApplicantCount"/> rather than replaced by it, for the same reason
-    /// the raw salary columns sit beside the annualised ones: "Over 200" and "200" are not the
-    /// same statement, and only the caption says which one the board actually made.
+    /// Kept beside <see cref="PostingSummary.ApplicantCount"/> rather than replaced by it, for
+    /// the same reason the raw salary columns sit beside the annualised ones: "Over 200" and
+    /// "200" are not the same statement, and only the caption says which one the board
+    /// actually made. The parsed figure lives on the summary, which this type nests, so a
+    /// client reading the detail has both without either being duplicated on the wire.
     /// </remarks>
     public string? Applicants { get; init; }
-
-    /// <summary>
-    /// The figure parsed out of <see cref="Applicants"/>. The competition signal.
-    /// </summary>
-    /// <remarks>
-    /// The single most decision-relevant number on a posting after salary, and it was being
-    /// parsed, normalised and stored without ever reaching a screen. Sparse - LinkedIn is the
-    /// only board that publishes it - so a client must treat null as "not stated" rather than
-    /// as zero.
-    /// </remarks>
-    public int? ApplicantCount { get; init; }
 
     /// <summary>Openings this listing covers, where the board says. Naukri and freehire.</summary>
     public int? VacancyCount { get; init; }

@@ -79,6 +79,13 @@ export function Profile({ api, onSaved }: { api: JobPlatformApi; onSaved?: () =>
     <div className="grid">
       {error ? <ErrorNote error={error} /> : null}
 
+      <p className="lede-note" style={{ margin: 0 }}>
+        A save is a replace, not a merge, and it changes the text the extractor reads: your
+        scored matches are recomputed on tonight&rsquo;s sweep and the model&rsquo;s verdicts on
+        them are cleared. Worth knowing before deleting a job — the arithmetic comes back
+        tomorrow morning, the judgements take longer.
+      </p>
+
       <Card
         title="About you"
         subtitle={
@@ -418,6 +425,18 @@ function Skills({ declared, onChange, extracted, extractedAtUtc }: {
       )}
 
       <h3 style={{ fontSize: 13, marginTop: 18 }}>Read from what you wrote</h3>
+
+      {/* The half worth checking. These are inferences about the candidate drawn from their
+          own prose, and each one scores against every posting until it is corrected - so the
+          phrase it was read from is shown beside it rather than in a column somebody has to
+          scroll to. It is the same treatment a posting's assertions get, for the same reason:
+          an inference nobody can check is a claim, not evidence. */}
+      <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+        What the extractor concluded about you, with the phrase behind each one. An inference
+        you disagree with is scoring against every posting until you change the prose it came
+        from.
+      </p>
+
       {extracted.length === 0 ? (
         <p className="muted" style={{ fontSize: 13 }}>
           {extractedAtUtc
@@ -425,21 +444,26 @@ function Skills({ declared, onChange, extracted, extractedAtUtc }: {
             : 'Save the form and your prose is read for skills you did not list.'}
         </p>
       ) : (
-        <div className="scroll-x">
-          <table>
-            <thead>
-              <tr><th>Skill</th><th>Level</th><th>Read from</th></tr>
-            </thead>
-            <tbody>
-              {extracted.map((skill) => (
-                <tr key={skill.conceptKey}>
-                  <td>{skill.label}</td>
-                  <td>{skill.level}</td>
-                  <td className="muted">{skill.evidence ?? '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="assertions">
+          {extracted.map((skill) => (
+            <div className="assertion" key={skill.conceptKey}>
+              <div className="assertion-top">
+                <span className="assertion-label">{skill.label}</span>
+                <span className="src" title="A judgement the model made from your own words">
+                  Model
+                </span>
+                <span className="stamp">{skill.level}</span>
+              </div>
+              {skill.evidence
+                ? <div className="assertion-evidence">&ldquo;{skill.evidence}&rdquo;</div>
+                : (
+                  <div className="assertion-evidence none">
+                    No phrase recorded. An inference with nothing behind it is the one to look
+                    at first.
+                  </div>
+                )}
+            </div>
+          ))}
         </div>
       )}
     </Card>

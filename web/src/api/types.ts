@@ -72,6 +72,16 @@ export interface PostingSummary {
   postingAgeDays: number | null;
   repostCount: number | null;
   fakeFreshness: boolean | null;
+
+  /**
+   * How many people the board says have applied. The competition signal.
+   *
+   * On the list rather than only on the detail: it is a number you sort a shortlist by, and
+   * a field only the detail endpoint carries can never be one. Sparse — LinkedIn is the only
+   * board that publishes it — so null means "not stated", never zero.
+   */
+  applicantCount: number | null;
+
   firstSeenUtc: string;
   lastSeenUtc: string;
   seenCount: number;
@@ -80,16 +90,13 @@ export interface PostingSummary {
 }
 
 export interface PostingDetail {
-  /** Verbatim applicant caption, e.g. "Over 200 applicants". LinkedIn only. */
-  applicants: string | null;
-
   /**
-   * The figure parsed out of `applicants`. The competition signal.
+   * Verbatim applicant caption, e.g. "Over 200 applicants". LinkedIn only.
    *
-   * Sparse — LinkedIn is the only board that publishes it — so null means "not stated",
-   * never zero.
+   * The parsed figure is `summary.applicantCount`. "Over 200" and "200" are not the same
+   * statement, and only the caption says which one the board actually made.
    */
-  applicantCount: number | null;
+  applicants: string | null;
 
   /** Openings this listing covers, where the board says. Naukri and freehire. */
   vacancyCount: number | null;
@@ -231,11 +238,25 @@ export interface FieldFill {
   fillRate: number;
 }
 
+/**
+ * A column empty in every row of the last run, and when it was last populated.
+ *
+ * Two faults present the same symptom and need opposite responses. `lastFilledUtc` set means
+ * the column was arriving and stopped — a board changed its markup. Null means no run within
+ * the history window had it populated, which is a column the scraper does not emit yet, and
+ * is not something that broke.
+ */
+export interface EmptyColumn {
+  field: string;
+  lastFilledUtc: string | null;
+  lastFillRate: number | null;
+}
+
 export interface ScraperHealth {
   searchTerm: string;
   lastScrapedAtUtc: string | null;
   status: 'healthy' | 'degraded' | 'unknown';
-  emptyColumns: string[];
+  emptyColumns: EmptyColumn[];
   sparseColumns: FieldFill[];
   fieldFillRates: Record<string, number>;
   rowsInLastRun: number;
@@ -437,6 +458,15 @@ export interface MatchSummary {
 
   scoredAtUtc: string;
   assessedAtUtc: string | null;
+
+  /**
+   * When the candidate said they were not interested. Null means they have not.
+   *
+   * Present on every row although the default list returns only undismissed ones: the
+   * dismissed pile is the same shape read with `dismissed=true`, and a client showing it
+   * needs to say when each was set aside.
+   */
+  dismissedAtUtc: string | null;
 }
 
 export interface MatchComponent {
@@ -796,4 +826,52 @@ export interface ScraperSearchOptionsResponse {
   freehireFilterKeys: string[];
   maxHoursOld: number;
   maxResultsWanted: number;
+}
+
+/**
+ * The join, run backwards: what the candidate's matched band asks for that they do not hold.
+ *
+ * The only figure on the market view that is about the reader rather than about the corpus,
+ * and the only one that changes what they would do next. It exists because postings and
+ * profiles are extracted into the same vocabulary, which makes this a set difference.
+ */
+export interface SkillGapResponse {
+  /** The score floor the band was taken at, so the numbers are readable. */
+  minScore: number;
+  searchTerm: string | null;
+  items: SkillGapItem[];
+}
+
+export interface SkillGapItem {
+  concept: string;
+  label: string;
+  /** `Skill` or `Qualification`. Never `Domain` - nothing is tagged with one directly. */
+  kind: string;
+
+  /**
+   * Postings among this candidate's matches that name it. The number to rank by.
+   *
+   * Read instead of `corpusPostings`, not beside it: the corpus figure says what the market
+   * wants, this says what the market wants of them, and the concept at the top of the corpus
+   * list is invariably one they already hold.
+   */
+  matchPostings: number;
+
+  /** Postings across the corpus that name it. Context, and always the larger. */
+  corpusPostings: number;
+
+  /** The nearest concept the profile does hold, or null where there is none. */
+  held: string | null;
+  heldLabel: string | null;
+
+  /**
+   * How `held` relates to `concept`: `Specialisation`, `Generalisation`, `Implied`, `Related`
+   * or `Superseded` - the same decision the match breakdown reports, so the two pages cannot
+   * disagree about the same pair. Null means nothing in the profile touches it at all, which
+   * is the gap with no partial credit behind it.
+   */
+  relation: string | null;
+
+  /** What that relation is worth before the candidate's own strength, 0-1. */
+  credit: number;
 }

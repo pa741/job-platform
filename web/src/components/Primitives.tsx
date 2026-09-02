@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { NamedCount } from '../api/types';
 
 export function Card({ title, subtitle, children, actions }: {
   title?: string; subtitle?: string; children: ReactNode; actions?: ReactNode;
@@ -77,19 +78,6 @@ export function Meter({ label, ratio, caption }: { label: string; ratio: number;
   );
 }
 
-export function Legend({ items }: { items: { name: string; color: string }[] }) {
-  return (
-    <div className="legend">
-      {items.map((item) => (
-        <span key={item.name}>
-          <i style={{ background: item.color }} aria-hidden="true" />
-          {item.name}
-        </span>
-      ))}
-    </div>
-  );
-}
-
 export function ErrorNote({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   const message = error instanceof Error ? error.message : String(error);
   const detail = (error as { detail?: string })?.detail;
@@ -136,5 +124,87 @@ export function Field({ label, hint, children }: {
       {children}
       {hint && <span className="field-hint">{hint}</span>}
     </label>
+  );
+}
+
+/**
+ * A ranked list: name, value, and a proportional rule beneath.
+ *
+ * Replaces the Recharts `RankedBar`. This was never a chart — it is a name, a number and a
+ * bar whose length is a ratio, which is three DOM nodes and a percentage. Rendering it through
+ * a charting library cost a 110KB dependency an SVG axis nobody read, and it could not put the
+ * value on the same baseline as the label.
+ *
+ * The bar is 6px on a real track rather than a 2px rule: at 2px against the card it measured
+ * 1.57:1, and this is the most-used mark on the page. The number is always written out, so the
+ * bar reinforces rather than encodes.
+ */
+export function RankList({ items, unit, max = 12 }: {
+  items: NamedCount[]; unit?: string; max?: number;
+}) {
+  const rows = items.slice(0, max);
+
+  if (rows.length === 0) return <div className="empty">Nothing to rank yet.</div>;
+
+  const top = Math.max(...rows.map((r) => r.count), 1);
+
+  return (
+    <div className="rank">
+      {rows.map((row) => (
+        <div key={row.name}>
+          <div className="rank-row">
+            <span className="nm">{row.name}</span>
+            <span className="vl">
+              {row.count.toLocaleString()}{unit ? ` ${unit}` : ''}
+            </span>
+          </div>
+          <div className="measure">
+            <i style={{ width: `${(row.count / top) * 100}%` }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Part-to-whole, as one bar and a key.
+ *
+ * Five categorical slots in fixed order, never cycled: a sixth category folds into "Other"
+ * rather than reusing slot one, which would make two things one colour. Every share is written
+ * out beside its name, so the bar is never the only encoding — the segments below a few per
+ * cent are a handful of pixels and no hue survives that.
+ */
+export function SplitBar({ data, emptyMessage }: {
+  data: Record<string, number>; emptyMessage: string;
+}) {
+  const entries = Object.entries(data).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+
+  if (entries.length === 0) return <div className="empty">{emptyMessage}</div>;
+
+  const shown: [string, number][] = entries.length <= 5
+    ? entries
+    : [...entries.slice(0, 4), ['Other', entries.slice(4).reduce((sum, [, n]) => sum + n, 0)]];
+
+  const total = shown.reduce((sum, [, n]) => sum + n, 0);
+  const slot = (i: number) => `var(--series-${i + 1}, var(--text-muted))`;
+
+  return (
+    <>
+      <div className="split">
+        {shown.map(([name, count], i) => (
+          <i key={name} style={{ flex: count, background: slot(i) }} title={`${name}: ${count}`} />
+        ))}
+      </div>
+      <div className="keys">
+        {shown.map(([name, count], i) => (
+          <div key={name}>
+            <i style={{ background: slot(i) }} aria-hidden="true" />
+            <span>{name}</span>
+            <b>{Math.round((count / total) * 100)}%</b>
+          </div>
+        ))}
+      </div>
+    </>
   );
 }

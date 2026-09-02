@@ -474,6 +474,23 @@ mechanism, and it is derived from the corpus rather than guessed at.
 
 ### Dashboard (`web/`)
 
+- **`tokens.css` is a contract, not just a palette.** `chartTheme.ts` resolves
+  `--series-1..4`, `--seq-250..650`, `--gridline`, `--axis`, `--text-muted`, `--surface-1`
+  and `--text-primary` **by name**. Adding tokens is fine; renaming or shadowing one of those
+  with a parallel vocabulary leaves the charts holding one theme's palette across a toggle,
+  which is the exact failure `useChartTokens` was written to prevent and which nothing tests.
+- **The motion budget is four things**: the nav marker, the drawer, an expanding entry, and
+  chart marks on first mount. Everything animates from a state the DOM already rests in, so
+  `prefers-reduced-motion` skips rather than shortens. **No count-ups on figures** - a page
+  mid-animation and a page legitimately reading zero are indistinguishable, and the lede spent
+  the first second of every visit saying the scrapers had found none.
+- **Indicators move by transform, and are placed with `set` on first paint.** Animating
+  `width` is a layout property once a frame; tweening from zero on mount leaves the selected
+  label sitting on a zero-width pill, reading as white-on-white until the tween lands.
+- **Routing is the History API over an in-repo router**, not a dependency:
+  `staticwebapp.config.json` already rewrites navigation and 404s to `/index.html`. Page
+  changes and opening a posting push; filter changes and walking the concept graph replace, or
+  Back steps through every keystroke somebody typed into a search box.
 - **Chart colours are validated, not chosen.** The categorical slots in
   `src/theme/tokens.css` clear CVD-separation and contrast gates in both modes. Never
   substitute a hex by eye - colour-vision separation is not something the eye can check, and

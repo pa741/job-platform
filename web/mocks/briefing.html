@@ -1,0 +1,2401 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Market Briefing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Karla:ital,wght@0,400;0,500;0,600;1,400&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap">
+
+<style>
+/* ---------------------------------------------------------------------------
+   Market Briefing - the full dashboard.
+
+   The direction: the platform opens as something written. A sentence that says
+   what happened, then the evidence. Every page keeps that shape.
+
+   Three rules this revision exists to enforce.
+
+   1. CHART COLOUR IS INHERITED, NOT INVENTED. The categorical slots below are
+      copied verbatim from src/theme/tokens.css, which is a validated palette -
+      it clears CVD separation and contrast in both modes. An earlier revision
+      of this mock invented five tints of two hues and cycled them modulo the
+      slot count; two of those slots measured 1.02:1 against each other, which
+      is the same colour twice. Never substitute a hex by eye here, and never
+      generate a fifth category: a fifth folds into Other.
+
+   2. NOTHING ON SCREEN MAY CLAIM WHAT THE SYSTEM DOES NOT DO. The enums are
+      the API's enums (CandidacyVerdict, AssertionSource, DemandPolarity,
+      AiCallOutcome). Where a number cannot be computed from what the pipeline
+      records - money, for one - it is not shown.
+
+   3. MOTION IS BUDGETED. Four things animate: the nav marker, the drawer, an
+      expanding entry, and chart marks on first mount. Figures never count up:
+      a page mid-animation and a page legitimately reading zero looked
+      identical, and the lede spent a second saying the scrapers found nothing.
+   --------------------------------------------------------------------------- */
+:root {
+  color-scheme: light;
+
+  /* Surfaces and ink */
+  --paper: #EFF1EE;
+  --card: #FFFFFF;
+  --ink: #16181A;
+  --ink-2: #565B5C;       /* 6.89:1 on card */
+  --ink-3: #686E6C;       /* 5.20:1 on card, 4.58:1 on paper - AA at 13px */
+  --rule: #D6DAD5;        /* borders only */
+  --rule-soft: #E5E8E3;   /* hairlines inside a card */
+  --track: #E2E5E1;       /* the ground a datum sits in - never a border */
+  --on-ink: #F3F5F2;
+
+  /* Interaction. Not a data colour: nothing in a chart may use it. */
+  --accent: #22407A;
+  --accent-soft: #C3CFE4;
+
+  /* Status. Fixed, never themed into a series slot. */
+  --oxide: #A8542B;       /* attention, and only attention */
+  --oxide-soft: #E8D3C6;
+  --good: #1F6B3E;
+
+  /* Categorical slots, copied from src/theme/tokens.css. In fixed order.
+     Never cycle; a fifth category folds into --series-other. */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-other: #767b79;
+
+  /* One bar, one ramp step. Clears 3:1 against --track in both themes. */
+  --bar: #2a78d6;
+  --mark-quiet: #8C938B;  /* recessive marks - weekends, dropped axes */
+
+  --lift: 0 20px 50px rgba(22, 24, 26, .13), 0 2px 6px rgba(22, 24, 26, .05);
+  --scrim: rgba(22, 24, 26, .34);
+
+  --display: "Newsreader", Georgia, "Times New Roman", serif;
+  --sans: "Karla", "Helvetica Neue", Arial, sans-serif;
+  --mono: "DM Mono", ui-monospace, Menlo, monospace;
+
+  /* Type scale. Seven steps. Nothing between them. */
+  --t-micro: 11px;
+  --t-small: 13px;
+  --t-body-2: 14px;
+  --t-body: 15px;
+  --t-title: 16px;
+  --t-lede: 20px;
+  --t-display: 24px;
+  --t-figure: 34px;
+
+  /* Spacing scale. Eight steps. Nothing between them. */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px;
+  --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px;
+}
+
+/* Dark is designed, not inverted. Every value below was measured against the
+   surface it actually lands on; --ink-3's dark value is deliberately lighter
+   than its light value, which is what the flipped version got wrong. */
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --paper: #15171A;
+    --card: #1C1F22;
+    --ink: #E9EAE6;
+    --ink-2: #A5AAA8;
+    --ink-3: #868C8A;     /* 4.83:1 on card, 5.24:1 on paper */
+    --rule: #3A3F42;
+    --rule-soft: #292D30;
+    --track: #2B2F32;
+    --on-ink: #15171A;
+
+    --accent: #93AEE0;
+    --accent-soft: #33455F;
+
+    --oxide: #D99163;
+    --oxide-soft: #6B4531;
+    --good: #67B98A;
+
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-other: #9a9f9d;
+
+    --bar: #3987e5;
+    --mark-quiet: #5E6366;
+
+    --lift: 0 20px 50px rgba(0, 0, 0, .5), 0 2px 6px rgba(0, 0, 0, .3);
+    --scrim: rgba(0, 0, 0, .58);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #15171A;
+  --card: #1C1F22;
+  --ink: #E9EAE6;
+  --ink-2: #A5AAA8;
+  --ink-3: #868C8A;
+  --rule: #3A3F42;
+  --rule-soft: #292D30;
+  --track: #2B2F32;
+  --on-ink: #15171A;
+  --accent: #93AEE0;
+  --accent-soft: #33455F;
+  --oxide: #D99163;
+  --oxide-soft: #6B4531;
+  --good: #67B98A;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-other: #9a9f9d;
+  --bar: #3987e5;
+  --mark-quiet: #5E6366;
+  --lift: 0 20px 50px rgba(0, 0, 0, .5), 0 2px 6px rgba(0, 0, 0, .3);
+  --scrim: rgba(0, 0, 0, .58);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--t-body);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+code { font-family: var(--mono); font-size: .92em; }
+a { color: var(--accent); text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 var(--s5); }
+@media (max-width: 620px) { .wrap { padding: 0 var(--s4); } }
+
+/* One micro-label, used everywhere. There were twelve near-identical
+   definitions across four sizes; below 11px an uppercase mono cap height drops
+   under 8px, which is where the contrast failures were. */
+.kicker, .band .k, .filters .lbl, .field .lbl, th, .src, .keyline,
+.appgroup > h3, .sheet h3, h4.mini, .tagline, .dateline, .result-count {
+  font-family: var(--mono);
+  font-size: var(--t-micro);
+  letter-spacing: .04em;
+  color: var(--ink-3);
+  font-weight: 400;
+}
+.kicker, .band .k, .filters .lbl, .field .lbl, th,
+.appgroup > h3, .sheet h3, h4.mini, .tagline { text-transform: uppercase; }
+.tagline { color: var(--oxide); }
+
+/* Chrome ------------------------------------------------------------------ */
+.chrome { position: sticky; top: 0; z-index: 40; background: var(--paper); border-bottom: 1px solid var(--rule); }
+.bar { display: flex; align-items: center; gap: var(--s5); padding: var(--s4) 0 0; }
+
+h1.mark {
+  font-family: var(--display); font-weight: 400; font-size: 22px; margin: 0;
+  letter-spacing: -.01em; white-space: nowrap;
+}
+h1.mark span { color: var(--ink-3); }
+
+.sections {
+  position: relative; display: flex; gap: 2px; padding: 3px;
+  background: var(--card); border: 1px solid var(--rule); border-radius: 999px;
+}
+.sections button {
+  position: relative; z-index: 1; border: 0; background: transparent; font: inherit;
+  font-size: var(--t-small); font-weight: 500; color: var(--ink-2); cursor: pointer;
+  padding: 7px 16px; border-radius: 999px; min-height: 32px;
+}
+.sections button:hover { color: var(--ink); }
+.sections button[aria-current="true"] { color: var(--on-ink); }
+.sections .thumb {
+  position: absolute; z-index: 0; top: 3px; bottom: 3px; left: 3px;
+  background: var(--ink); border-radius: 999px;
+  transform-origin: left center; width: 1px;
+}
+
+.bar .right { margin-left: auto; display: flex; align-items: center; gap: var(--s3); }
+.dateline { text-align: right; line-height: 1.35; }
+.dateline b { color: var(--ink-2); font-weight: 400; }
+.dateline b.stale { color: var(--oxide); }
+
+select.ctl {
+  font-family: var(--mono); font-size: 12px; color: var(--ink-2);
+  background: var(--card); border: 1px solid var(--rule); border-radius: 999px;
+  padding: 7px 12px; cursor: pointer; min-height: 34px;
+}
+select.ctl:hover { color: var(--ink); border-color: var(--ink-3); }
+
+nav.pages { display: flex; gap: var(--s5); position: relative; margin-top: var(--s1); }
+nav.pages button {
+  border: 0; background: transparent; font: inherit; font-size: var(--t-body-2); cursor: pointer;
+  color: var(--ink-3); padding: 10px 0 12px; white-space: nowrap;
+}
+nav.pages button:hover { color: var(--ink); }
+nav.pages button[aria-current="page"] { color: var(--ink); }
+nav.pages .marker {
+  position: absolute; bottom: -1px; height: 2px; background: var(--accent);
+  left: 0; width: 1px; transform-origin: left center;
+}
+
+.burger {
+  display: none; margin-left: auto; border: 1px solid var(--rule); background: var(--card);
+  border-radius: 999px; width: 44px; height: 44px; cursor: pointer; position: relative;
+}
+.burger i { position: absolute; left: 13px; width: 18px; height: 1.5px; background: var(--ink); border-radius: 2px; display: block; }
+.burger i:nth-child(1) { top: 16px; }
+.burger i:nth-child(2) { top: 21px; }
+.burger i:nth-child(3) { top: 26px; }
+
+.chrome .now { display: none; }
+@media (max-width: 860px) {
+  .sections, nav.pages, .bar .right { display: none; }
+  .burger { display: block; }
+  .bar { padding: var(--s3) 0; }
+  h1.mark { font-size: var(--t-lede); }
+  .chrome .now { display: block; margin-left: var(--s3); }
+}
+@media (max-width: 460px) { .chrome .now { display: none; } }
+
+/* Mobile sheet ------------------------------------------------------------ */
+.sheet {
+  position: fixed; inset: 0; z-index: 60; background: var(--paper);
+  overflow-y: auto; overscroll-behavior: contain; padding: var(--s5) var(--s4) var(--s7);
+}
+.sheet[hidden] { display: none; }
+.sheet .head { display: flex; align-items: center; gap: var(--s3); margin-bottom: var(--s5); }
+.sheet .close {
+  margin-left: auto; border: 1px solid var(--rule); background: var(--card); color: var(--ink);
+  border-radius: 999px; width: 44px; height: 44px; font-size: 20px; cursor: pointer; line-height: 1;
+}
+.sheet section { margin-bottom: var(--s5); }
+.sheet h3 { margin: 0 0 var(--s1); padding-bottom: var(--s2); border-bottom: 1px solid var(--rule); }
+.sheet button.page {
+  display: block; width: 100%; text-align: left; border: 0; background: transparent;
+  font-family: var(--display); font-size: var(--t-display); font-weight: 400; color: var(--ink);
+  padding: 10px 0; cursor: pointer; letter-spacing: -.01em; min-height: 44px;
+}
+.sheet button.page[aria-current="page"] { color: var(--accent); }
+.sheet button.page span { font-family: var(--mono); font-size: var(--t-micro); color: var(--ink-3); margin-left: var(--s2); }
+.sheet .controls { display: flex; gap: var(--s3); flex-wrap: wrap; padding-top: var(--s2); }
+
+/* The lede ---------------------------------------------------------------- */
+.lede {
+  font-family: var(--display); font-weight: 400; font-size: var(--t-lede);
+  line-height: 1.5; letter-spacing: -.005em; max-width: 46ch;
+  margin: var(--s6) 0 var(--s2); text-wrap: pretty;
+}
+@media (min-width: 700px) { .lede { font-size: 23px; } }
+
+/* A figure inside the sentence. A tint rather than an underline: the underline
+   measured 1.38:1 on paper, so the device marking a number as live was
+   invisible. Never applied to a word. */
+.fig {
+  font-family: var(--mono); font-weight: 500; font-size: .78em;
+  color: var(--ink); font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  padding: 1px 5px; border-radius: 3px;
+}
+.fig.warn { background: color-mix(in srgb, var(--oxide) 16%, transparent); color: var(--oxide); }
+
+.lede-note {
+  font-size: var(--t-small); color: var(--ink-3); max-width: 64ch;
+  margin: 0 0 var(--s6); border-left: 2px solid var(--rule); padding-left: var(--s3);
+}
+
+/* Figures band. No vertical rules: the grid wraps, and a right border on a
+   wrapped cell points into empty space. */
+.band {
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+  border-top: 1px solid var(--rule); margin-bottom: var(--s6);
+}
+@media (max-width: 1000px) { .band { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 700px) { .band { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.band > div { padding: var(--s4) var(--s5) var(--s4) 0; border-bottom: 1px solid var(--rule); }
+.band .v {
+  font-family: var(--display); font-weight: 400; font-size: var(--t-figure); line-height: 1.05;
+  letter-spacing: -.02em; margin-top: var(--s1); font-variant-numeric: tabular-nums;
+}
+.band .n { font-size: 12px; color: var(--ink-2); margin-top: var(--s1); }
+
+/* Cards ------------------------------------------------------------------- */
+.grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: var(--s5); }
+.s4 { grid-column: span 4; } .s5 { grid-column: span 5; }
+.s6 { grid-column: span 6; } .s7 { grid-column: span 7; }
+.s8 { grid-column: span 8; } .s12 { grid-column: span 12; }
+@media (max-width: 1080px) and (min-width: 721px) {
+  .s4, .s5 { grid-column: span 6; }
+  .s6, .s7, .s8 { grid-column: span 12; }
+}
+@media (max-width: 720px) { .s4, .s5, .s6, .s7, .s8 { grid-column: span 12; } }
+
+.card {
+  background: var(--card); border: 1px solid var(--rule); border-radius: 2px;
+  padding: var(--s5); min-width: 0;
+}
+.card h2 { font-size: var(--t-title); font-weight: 600; margin: 0; letter-spacing: -.005em; text-wrap: balance; }
+.card h2.big, .drawer h2.big {
+  font-family: var(--display); font-weight: 400; font-size: var(--t-display);
+  letter-spacing: -.015em; text-wrap: balance;
+}
+.kicker { margin-bottom: var(--s1); display: block; }
+.card .sub { font-size: var(--t-small); color: var(--ink-2); margin: var(--s1) 0 var(--s4); max-width: 58ch; }
+.card .sub:last-child { margin-bottom: 0; }
+.alert { border-left: 3px solid var(--oxide); padding-left: 21px; }
+
+/* Ranked list. 6px bar on a real track: the 2px rule measured 1.57:1 against
+   the card and was the primary chart form on the page. */
+.rank { display: flex; flex-direction: column; gap: var(--s3); }
+.rank .row { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: var(--s3); }
+.rank .nm { font-size: var(--t-body-2); }
+.rank .vl { font-family: var(--mono); font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.rank .measure { height: 6px; background: var(--track); margin-top: var(--s1); grid-column: 1 / -1; border-radius: 2px; overflow: hidden; }
+.rank .measure i { display: block; height: 100%; background: var(--bar); transform-origin: left center; }
+
+.chart { width: 100%; height: auto; display: block; }
+.chart .lbl { font-family: var(--mono); font-size: 9.5px; fill: var(--ink-3); }
+.chart .col { transform-box: fill-box; transform-origin: 50% 100%; }
+.axis-note { font-family: var(--mono); font-size: var(--t-micro); color: var(--ink-3); margin-top: var(--s2); }
+
+/* Part-to-whole. Taller segments, a hairline gap, and every share written out
+   beside its name - the bar is reinforcement, never the only encoding. */
+.split { display: flex; height: 14px; gap: 1px; margin: var(--s1) 0 var(--s3); border-radius: 2px; overflow: hidden; }
+.split i { display: block; transform-origin: left center; }
+.keys { display: grid; grid-template-columns: 10px 1fr max-content; gap: var(--s2) var(--s2); align-items: center; max-width: 380px; }
+.keys i { width: 10px; height: 10px; border-radius: 2px; }
+.keys span { font-size: var(--t-small); }
+.keys b { font-family: var(--mono); font-weight: 500; font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+.cols { columns: 2; column-gap: var(--s5); }
+@media (max-width: 900px) { .cols { columns: 1; } }
+.thing {
+  font-family: var(--mono); font-size: 12px; break-inside: avoid;
+  padding: var(--s1) 0; border-bottom: 1px solid var(--rule-soft);
+  display: flex; gap: var(--s2); align-items: baseline;
+}
+.thing .why { color: var(--ink-3); font-family: var(--sans); font-size: 12px; }
+.thing .ct { margin-left: auto; color: var(--ink-2); }
+
+/* Stamps ------------------------------------------------------------------ */
+.stamp {
+  font-family: var(--mono); font-size: var(--t-micro); letter-spacing: .04em;
+  padding: 2px 7px; border: 1px solid var(--rule); border-radius: 2px; color: var(--ink-2);
+  white-space: nowrap; display: inline-block;
+}
+.stamp.good { color: var(--good); border-color: color-mix(in srgb, var(--good) 55%, var(--rule)); }
+.stamp.warn { color: var(--oxide); border-color: color-mix(in srgb, var(--oxide) 55%, var(--rule)); }
+.stamp.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--rule)); }
+
+/* Tables ------------------------------------------------------------------ */
+.scroll-x { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: var(--t-small); }
+th { text-align: left; padding: 0 var(--s3) var(--s2); border-bottom: 1px solid var(--rule); white-space: nowrap; }
+th:first-child, td:first-child { padding-left: 0; }
+th:last-child, td:last-child { padding-right: 0; }
+td { padding: var(--s2) var(--s3); border-bottom: 1px solid var(--rule-soft); vertical-align: baseline; }
+tbody tr.rowlink { cursor: pointer; }
+tbody tr.rowlink:hover td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+td .where { color: var(--ink-3); }
+/* A badge in a right-aligned cell destroys the alignment it is there for, so
+   the flags live in their own column. */
+td.flags { white-space: nowrap; }
+
+/* Filters. Explicit columns: auto-fit fitted seven of eight tracks at the
+   default desktop width and orphaned Sort on a row of its own. */
+.filters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s3); margin-bottom: var(--s5); }
+@media (max-width: 900px) { .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .filters { grid-template-columns: 1fr; } }
+.filters label { display: flex; flex-direction: column; gap: var(--s1); }
+.filters input, .filters select, .field input, .field select, .field textarea, .explorer input {
+  font: inherit; font-size: var(--t-small); color: var(--ink); background: var(--card);
+  border: 1px solid var(--rule); border-radius: 2px; padding: 8px 10px; width: 100%; min-height: 36px;
+}
+.filters input[type="range"] { padding: 0; accent-color: var(--accent); border: 0; background: transparent; min-height: 24px; }
+.result-count { margin: calc(-1 * var(--s3)) 0 var(--s4); }
+
+/* Shortlist entries ------------------------------------------------------- */
+.entry {
+  display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: var(--s5);
+  padding: var(--s5) 0; border-bottom: 1px solid var(--rule-soft);
+}
+.entry .figcol { text-align: left; }
+.entry .score {
+  font-family: var(--display); font-weight: 400; font-size: 40px; line-height: .95;
+  letter-spacing: -.03em; font-variant-numeric: tabular-nums;
+}
+.entry .of { font-family: var(--mono); font-size: var(--t-micro); color: var(--ink-3); }
+.entry .of b { color: var(--ink-2); font-weight: 400; }
+.entry .title {
+  font-family: var(--sans); font-size: var(--t-title); font-weight: 600; margin: 0;
+  background: none; border: 0; padding: 0; color: var(--ink); cursor: pointer; text-align: left;
+}
+.entry .title:hover { color: var(--accent); }
+.entry .meta { font-size: var(--t-small); color: var(--ink-2); margin-top: var(--s1); display: flex; gap: var(--s3); flex-wrap: wrap; align-items: center; }
+.entry .meta .sep { color: var(--rule); }
+.entry .dismiss {
+  margin-left: auto; border: 0; background: transparent; font: inherit; font-size: 12px;
+  color: var(--ink-3); cursor: pointer; padding: 4px 8px; border-radius: 2px; min-height: 28px;
+}
+.entry .dismiss:hover { color: var(--oxide); background: color-mix(in srgb, var(--oxide) 10%, transparent); }
+
+.undobar {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  background: var(--card); border: 1px solid var(--rule); border-left: 3px solid var(--oxide);
+  border-radius: 2px; padding: var(--s3) var(--s4); margin-bottom: var(--s4); font-size: var(--t-small);
+}
+.undobar[hidden] { display: none; }
+.undobar b { font-weight: 600; }
+
+/* A figure in the lede that goes somewhere. The lede is the day's decisions,
+   so the numbers in it are the way into them. */
+button.fig {
+  border: 0; cursor: pointer; font-family: var(--mono); font-weight: 500; font-size: .78em;
+  color: var(--ink); background: color-mix(in srgb, var(--accent) 12%, transparent);
+  padding: 1px 5px; border-radius: 3px; font-variant-numeric: tabular-nums;
+}
+button.fig:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+button.fig.warn { background: color-mix(in srgb, var(--oxide) 16%, transparent); color: var(--oxide); }
+button.fig.warn:hover { background: color-mix(in srgb, var(--oxide) 26%, transparent); }
+
+/* The anti-join: what the market asks for that the profile does not hold. */
+.gap { display: grid; grid-template-columns: minmax(140px, 1fr) auto; gap: var(--s2) var(--s4); padding: var(--s3) 0; border-bottom: 1px solid var(--rule-soft); }
+.gap:last-child { border-bottom: 0; }
+.gap .nm { font-size: var(--t-body-2); font-weight: 600; }
+.gap .counts { font-family: var(--mono); font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.gap .counts b { color: var(--ink); font-weight: 500; }
+.gap .why { grid-column: 1 / -1; font-size: var(--t-small); color: var(--ink-2); margin: 0; max-width: 68ch; }
+.gap .why em { font-style: normal; color: var(--ink); font-weight: 600; }
+
+.expand { grid-column: 2; overflow: hidden; }
+.expand-inner { padding-top: var(--s4); }
+@media (max-width: 620px) {
+  .entry { grid-template-columns: 1fr; gap: var(--s3); }
+  .entry .figcol { display: flex; align-items: baseline; gap: var(--s2); }
+  .expand { grid-column: 1; }
+}
+
+/* One scoring axis. Bar length is the axis WEIGHT, fill is the score: two
+   axes drawn the same length said an axis carrying 34% of the number and one
+   carrying 10% were equally important. */
+.axes { display: flex; flex-direction: column; gap: var(--s2); max-width: 440px; }
+.ax { display: grid; grid-template-columns: minmax(90px, 130px) 1fr auto; gap: var(--s3); align-items: center; font-size: var(--t-small); }
+.ax .nm { color: var(--ink-2); }
+.ax .tr { height: 8px; background: var(--track); border-radius: 2px; overflow: hidden; }
+.ax .fl { display: block; height: 100%; background: var(--bar); transform-origin: left center; }
+.ax .vl { font-family: var(--mono); font-size: 12px; text-align: right; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.ax.dropped .tr { width: 14%; background: repeating-linear-gradient(135deg, var(--track) 0 3px, transparent 3px 6px); }
+
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--s5); }
+.quote { font-family: var(--display); font-size: var(--t-body-2); font-weight: 400; line-height: 1.5; max-width: 52ch; margin: 0 0 var(--s3); }
+h4.mini { margin: var(--s4) 0 var(--s2); }
+h4.mini:first-child { margin-top: 0; }
+ul.tight { margin: 0; padding-left: 17px; }
+ul.tight li { font-size: var(--t-small); color: var(--ink-2); margin: var(--s1) 0; }
+
+button.action, button.quiet {
+  font: inherit; font-size: var(--t-small); border-radius: 2px;
+  padding: 9px 16px; cursor: pointer; min-height: 38px;
+}
+button.action { background: var(--accent); color: var(--on-ink); border: 1px solid var(--accent); }
+button.action:hover { filter: brightness(1.12); }
+button.quiet { background: transparent; color: var(--ink-2); border: 1px solid var(--rule); }
+button.quiet:hover { color: var(--ink); border-color: var(--ink-3); }
+.row-actions { display: flex; gap: var(--s3); margin-top: var(--s4); flex-wrap: wrap; }
+
+/* Applications ------------------------------------------------------------ */
+.appgroup { margin-bottom: var(--s6); }
+.appgroup > h3 { margin: 0 0 var(--s1); padding-bottom: var(--s2); border-bottom: 1px solid var(--rule); }
+.app { padding: var(--s4) 0; border-bottom: 1px solid var(--rule-soft); }
+.app .head { display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap; }
+.app .head h4 { font-size: var(--t-title); font-weight: 600; margin: 0; }
+.app .head .co { color: var(--ink-2); font-size: var(--t-body-2); }
+.app .head .right { margin-left: auto; display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; }
+.log { list-style: none; margin: var(--s3) 0 0; padding: 0 0 0 var(--s4); border-left: 1px solid var(--rule); }
+.log li { position: relative; padding: var(--s1) 0; font-size: var(--t-small); color: var(--ink-2); display: flex; gap: var(--s3); flex-wrap: wrap; }
+.log li::before { content: ""; position: absolute; left: -21px; top: 11px; width: 7px; height: 7px; border-radius: 50%; background: var(--rule); }
+.log li:first-child::before { background: var(--accent); }
+.log .when { font-family: var(--mono); font-size: 12px; color: var(--ink-3); flex: none; width: 54px; }
+.log .who { margin-left: auto; font-size: 12px; color: var(--ink-3); font-style: italic; }
+
+/* Vocabulary explorer ----------------------------------------------------- */
+.explorer { display: grid; grid-template-columns: minmax(200px, 260px) minmax(0, 1fr); gap: var(--s5); }
+@media (max-width: 780px) { .explorer { grid-template-columns: 1fr; } .clist { max-height: 240px; } }
+.explorer input { margin-bottom: var(--s2); }
+.clist { max-height: 420px; overflow-y: auto; border: 1px solid var(--rule); border-radius: 2px; padding: 2px; }
+.clist button {
+  display: block; width: 100%; text-align: left; border: 0; background: transparent;
+  font: inherit; font-size: var(--t-small); color: var(--ink-2); padding: 9px 10px; cursor: pointer;
+  border-bottom: 1px solid var(--rule-soft); min-height: 38px;
+}
+.clist button:last-child { border-bottom: 0; }
+.clist button:hover { background: var(--paper); color: var(--ink); }
+.clist button.on { background: var(--paper); color: var(--ink); font-weight: 600; box-shadow: inset 2px 0 0 var(--accent); }
+.clist .n { float: right; font-family: var(--mono); font-size: 12px; color: var(--ink-3); font-weight: 400; }
+.pillrow { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s1); }
+button.pill {
+  font: inherit; font-size: 12px; color: var(--ink-2); background: transparent;
+  border: 1px solid var(--rule); border-radius: 999px; padding: 5px 12px; cursor: pointer; min-height: 32px;
+}
+button.pill:hover { color: var(--accent); border-color: var(--accent); }
+.keyline { display: block; }
+
+/* Profile ----------------------------------------------------------------- */
+.form { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: var(--s3); }
+.field { display: flex; flex-direction: column; gap: var(--s1); }
+.field textarea { min-height: 76px; resize: vertical; line-height: 1.5; }
+.field .hint { font-size: 12px; color: var(--ink-3); }
+.wide { grid-column: 1 / -1; }
+.item { padding: var(--s4) 0; border-top: 1px solid var(--rule-soft); }
+.item:first-of-type { border-top: 0; }
+.item .head { display: flex; align-items: baseline; gap: var(--s2); flex-wrap: wrap; }
+.item .head h4 { font-size: var(--t-title); font-weight: 600; margin: 0; }
+.item .head .co { color: var(--ink-2); font-size: var(--t-body-2); }
+.item .head .when { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
+.chips { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s3); }
+.chip {
+  font-size: 12px; padding: 5px 12px; border-radius: 999px; background: var(--paper);
+  border: 1px solid var(--rule); color: var(--ink-2); display: inline-flex; gap: var(--s2); align-items: center;
+}
+.chip b { font-weight: 500; color: var(--ink); }
+.chip .keyline { display: inline; }
+.chip button {
+  border: 0; background: transparent; color: var(--ink-3); cursor: pointer;
+  font-size: var(--t-body); line-height: 1; width: 24px; height: 24px; border-radius: 50%;
+}
+.chip button:hover { color: var(--oxide); background: var(--card); }
+
+/* Searches ---------------------------------------------------------------- */
+.search-row { display: flex; align-items: flex-start; gap: var(--s4); padding: var(--s4) 0; border-bottom: 1px solid var(--rule-soft); flex-wrap: wrap; }
+.search-row h4 { font-size: var(--t-title); font-weight: 600; margin: 0; }
+.switch {
+  width: 44px; height: 26px; border-radius: 999px; background: var(--track);
+  border: 1px solid var(--ink-3); position: relative; cursor: pointer; flex: none;
+}
+.switch[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
+.switch i { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--card); display: block; border: 1px solid var(--ink-3); }
+.switch[aria-checked="true"] i { border-color: var(--accent); }
+
+/* Drawer ------------------------------------------------------------------ */
+.scrim { position: fixed; inset: 0; background: var(--scrim); z-index: 55; }
+.scrim[hidden], .drawer[hidden] { display: none; }
+.drawer {
+  position: fixed; top: 0; right: 0; height: 100dvh; width: min(560px, 94vw);
+  background: var(--card); border-left: 1px solid var(--rule); z-index: 56;
+  overflow-y: auto; overscroll-behavior: contain; padding: var(--s5) var(--s5) var(--s7);
+  box-shadow: var(--lift);
+}
+.drawer .close {
+  position: absolute; top: var(--s4); right: var(--s4); border: 1px solid var(--rule);
+  background: var(--paper); color: var(--ink); border-radius: 999px;
+  width: 40px; height: 40px; cursor: pointer; font-size: var(--t-lede); line-height: 1;
+}
+.drawer h2.big { margin: 0 64px var(--s1) 0; }
+.drawer .co { color: var(--ink-2); font-size: var(--t-body-2); margin-bottom: var(--s4); }
+
+/* Provenance is a WORD, never a hue. The source of an assertion is three
+   named things, not a scale, and the earlier revision painted an inference in
+   the same orange as a broken scraper. The key is printed, not hidden in a
+   title attribute no keyboard can reach. */
+.srckey { display: flex; flex-wrap: wrap; gap: var(--s3); padding: var(--s3) 0; border-bottom: 1px solid var(--rule); margin-bottom: var(--s2); }
+.srckey div { font-size: 12px; color: var(--ink-3); display: flex; gap: var(--s2); align-items: baseline; }
+.src { border: 1px solid var(--rule); border-radius: 2px; padding: 1px 6px; color: var(--ink-2); white-space: nowrap; }
+.assertion { padding: var(--s3) 0; border-bottom: 1px solid var(--rule-soft); }
+.assertion .top { display: flex; align-items: baseline; gap: var(--s2); flex-wrap: wrap; }
+.assertion .lab { font-weight: 600; font-size: var(--t-body-2); }
+.assertion .ev { font-family: var(--display); font-size: var(--t-body-2); color: var(--ink-2); margin-top: var(--s1); line-height: 1.45; }
+.assertion .ev.none { font-family: var(--sans); font-size: 12px; color: var(--ink-3); }
+/* Demand strength is ordinal, so it is carried by weight, not by colour. */
+.pol { font-size: 12px; }
+.pol.Required { color: var(--ink); font-weight: 600; }
+.pol.Preferred { color: var(--ink-2); }
+.pol.Mentioned { color: var(--ink-3); }
+.pol.Unspecified { color: var(--ink-3); font-style: italic; }
+
+/* The waking-database state. Not a page-level spinner: metrics come from
+   Cosmos and are always warm, everything else is serverless SQL that pauses
+   when idle, and that split is exactly what lets half a page work. */
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+.waking {
+  grid-column: 1 / -1;
+  border: 1px solid var(--rule); border-left: 3px solid var(--oxide);
+  border-radius: 2px; background: var(--card); padding: var(--s5); margin-bottom: var(--s4);
+}
+.waking h2 { font-size: var(--t-title); font-weight: 600; margin: 0 0 var(--s2); }
+.waking p { font-size: var(--t-small); color: var(--ink-2); margin: 0 0 var(--s3); max-width: 62ch; }
+.waking .cosmos { border-top: 1px solid var(--rule-soft); padding-top: var(--s3); margin-top: var(--s3); }
+.waking .cosmos p { color: var(--ink-3); margin: 0; }
+.waking[data-busy="1"] { border-left-color: var(--accent); }
+.spin {
+  animation: spin .8s linear infinite;
+  display: inline-block; width: 11px; height: 11px; border-radius: 50%;
+  border: 2px solid var(--accent-soft); border-top-color: var(--accent); vertical-align: -1px;
+  margin-right: var(--s2);
+}
+footer.foot {
+  margin: var(--s7) 0 var(--s6); padding-top: var(--s4); border-top: 1px solid var(--rule);
+  font-family: var(--mono); font-size: var(--t-micro); color: var(--ink-3);
+  display: flex; gap: var(--s4); flex-wrap: wrap;
+}
+.view[hidden] { display: none; }
+.empty { padding: var(--s6) 0; color: var(--ink-3); font-size: var(--t-body-2); max-width: 60ch; }
+</style>
+
+<header class="chrome">
+  <div class="wrap">
+    <div class="bar">
+      <h1 class="mark">job-platform <span>briefing</span></h1>
+      <span class="now kicker" id="nowLabel">Shortlist</span>
+
+      <div class="sections" id="sections">
+        <span class="thumb" id="thumb"></span>
+        <button data-section="you" aria-current="true">You</button>
+        <button data-section="market" aria-current="false">Market</button>
+        <button data-section="system" aria-current="false">System</button>
+      </div>
+
+      <div class="right">
+        <div class="dateline" id="freshness"></div>
+        <select class="ctl" id="term" aria-label="Search term">
+          <option>platform engineer</option>
+          <option>data engineer</option>
+          <option>security engineer</option>
+        </select>
+        <select class="ctl" id="theme" aria-label="Colour theme">
+          <option value="system">System</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </div>
+
+      <button class="burger" id="burger" aria-label="Open menu" aria-expanded="false">
+        <i></i><i></i><i></i>
+      </button>
+    </div>
+
+    <nav class="pages" id="pages" aria-label="Page"><span class="marker" id="marker"></span></nav>
+  </div>
+</header>
+
+<div class="sheet" id="sheet" hidden role="dialog" aria-modal="true" aria-label="Menu">
+  <div class="head">
+    <h2 class="mark" style="font-family:var(--display);font-weight:400;font-size:22px;margin:0">job-platform <span style="color:var(--ink-3)">briefing</span></h2>
+    <button class="close" id="sheetClose" aria-label="Close menu">&times;</button>
+  </div>
+  <div id="sheetBody"></div>
+  <div class="dateline" id="freshness2" style="text-align:left;margin-bottom:16px"></div>
+  <div class="controls">
+    <select class="ctl" aria-label="Search term">
+      <option>platform engineer</option>
+      <option>data engineer</option>
+      <option>security engineer</option>
+    </select>
+    <select class="ctl" id="theme2" aria-label="Colour theme">
+      <option value="system">Theme: system</option>
+      <option value="light">Theme: light</option>
+      <option value="dark">Theme: dark</option>
+    </select>
+  </div>
+</div>
+
+<main class="wrap">
+  <div class="view" id="view-briefing" hidden></div>
+  <div class="view" id="view-postings" hidden></div>
+  <div class="view" id="view-vocabulary" hidden></div>
+  <div class="view" id="view-shortlist"></div>
+  <div class="view" id="view-applications" hidden></div>
+  <div class="view" id="view-profile" hidden></div>
+  <div class="view" id="view-searches" hidden></div>
+  <div class="view" id="view-calls" hidden></div>
+</main>
+
+<div class="wrap"><footer class="foot" id="foot"></footer></div>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" hidden role="dialog" aria-modal="true" aria-label="Posting detail"></aside>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/gsap.min.js"></script>
+<script>
+/* =========================================================================
+   Data. Invented, but shaped like what the API actually returns - the enums
+   below are the API's enums, not plausible-sounding substitutes.
+   ========================================================================= */
+const DATA = {
+  summary: {
+    cumulative: 18742, newInLastRun: 412, prevNew: 366, seenInLastRun: 3918, invalid: 44,
+    days: 47, remote: 0.342, salaryColumns: 0.216, salaryKnown: 0.589,
+    medianStated: 72000, fromProse: 0.63,
+    scrapedHoursAgo: 4, sweepHoursAgo: 5, newSinceSweep: 412
+  },
+  trend: [
+    { d: '20 Aug', n: 298, weekend: false }, { d: '21 Aug', n: 341, weekend: false },
+    { d: '22 Aug', n: 302, weekend: false }, { d: '23 Aug', n: 96, weekend: true },
+    { d: '24 Aug', n: 74, weekend: true }, { d: '25 Aug', n: 388, weekend: false },
+    { d: '26 Aug', n: 412, weekend: false }, { d: '27 Aug', n: 377, weekend: false },
+    { d: '28 Aug', n: 349, weekend: false }, { d: '29 Aug', n: 310, weekend: false },
+    { d: '30 Aug', n: 88, weekend: true }, { d: '31 Aug', n: 71, weekend: true },
+    { d: '1 Sep', n: 366, weekend: false }, { d: '2 Sep', n: 412, weekend: false }
+  ],
+  sites: [{ name: 'LinkedIn', n: 1614 }, { name: 'Indeed', n: 1102 }, { name: 'Glassdoor', n: 617 },
+    { name: 'freehire.me', n: 402 }, { name: 'ZipRecruiter', n: 183 }],
+  skills: [{ name: 'Python', n: 1204 }, { name: 'AWS', n: 986 }, { name: 'Kubernetes', n: 743 },
+    { name: 'TypeScript', n: 690 }, { name: 'Azure', n: 641 }, { name: 'Terraform', n: 512 },
+    { name: 'SQL', n: 498 }, { name: 'React', n: 431 }],
+  areas: [{ name: 'Backend', n: 1880 }, { name: 'Cloud and platform', n: 1402 }, { name: 'Data', n: 1120 },
+    { name: 'Frontend', n: 764 }, { name: 'Security', n: 318 }],
+  seniority: [{ name: 'Mid', n: 1412 }, { name: 'Senior', n: 1206 }, { name: 'Junior', n: 512 },
+    { name: 'Lead', n: 288 }, { name: 'Principal', n: 94 }],
+  arrangement: [{ name: 'On-site', n: 1764 }, { name: 'Hybrid', n: 1402 }, { name: 'Remote', n: 752 }],
+  posters: [{ name: 'Capgemini', n: 84 }, { name: 'Accenture', n: 71 }, { name: 'BT Group', n: 58 },
+    { name: 'Sky', n: 44 }, { name: 'Deloitte', n: 39 }],
+  health: {
+    /* Two different faults with the same symptom, named apart. `lastFilled`
+       null means the column never arrived at all, which is not a regression. */
+    columns: [
+      { f: 'job_level', lastFilled: '28 Aug', wasAt: 0.94 },
+      { f: 'company_industry', lastFilled: null, wasAt: null }
+    ],
+    sparse: [{ f: 'salary_source', r: 0.184 }, { f: 'company_rating', r: 0.221 }]
+  },
+  /* Ranked by how many postings name a form, not by total occurrences: one
+     advert repeating a word twenty times is one employer's habit. */
+  unresolved: [{ form: 'ci/cd', reason: 'a genuine gap', n: 212 }, { form: 'go', reason: 'needs context', n: 188 },
+    { form: 'agile delivery', reason: 'a genuine gap', n: 141 }, { form: 'r', reason: 'needs context', n: 96 },
+    { form: 'full stack', reason: 'a genuine gap', n: 88 }, { form: 'c', reason: 'needs context', n: 61 }],
+
+  postings: [
+    { id: 41209, title: 'Senior Platform Engineer', company: 'Sky', where: 'Osterley, London', board: 'LinkedIn',
+      firstSeen: '2 Sep', boardSays: '2 Sep', repost: false, low: 85000, high: 95000, interval: 'year',
+      salarySource: 'column', work: 'Hybrid', level: 'Senior', concepts: ['skill.kubernetes', 'skill.azure', 'skill.terraform'],
+      clearance: false, applicants: 41,
+      insight: [
+        ['Kubernetes', 'Taxonomy', 'Required', 'You will own our Kubernetes platform end to end, from the control plane up.'],
+        ['Terraform', 'Taxonomy', 'Required', 'Essential: strong Terraform, and the judgement to know when not to reach for it.'],
+        ['Azure', 'Taxonomy', 'Preferred', 'Our estate runs across Azure and AWS in roughly equal measure.'],
+        ['Hybrid', 'Board', 'Unspecified', null],
+        ['Seniority: Senior', 'Model', 'Unspecified', 'No level in the columns. Read from the title and the eight-year requirement.'],
+        ['Cloud and platform', 'Rollup', 'Required', 'Closure over Kubernetes, Azure and Terraform.']
+      ] },
+    { id: 41188, title: 'Backend Engineer (Go)', company: 'Monzo', where: 'UK remote', board: 'LinkedIn',
+      firstSeen: '2 Sep', boardSays: '2 Sep', repost: false, low: 80000, high: 100000, interval: 'year',
+      salarySource: 'column', work: 'Remote', level: 'Senior', concepts: ['skill.go', 'skill.aws'],
+      clearance: false, applicants: 128,
+      insight: [
+        ['Go', 'Taxonomy', 'Required', 'Two years of production Go is essential for this one.'],
+        ['gRPC', 'Taxonomy', 'Preferred', 'Services talk to each other over gRPC.'],
+        ['AWS', 'Board', 'Unspecified', null],
+        ['Remote', 'Taxonomy', 'Unspecified', 'Fully remote within the UK.'],
+        ['Backend', 'Rollup', 'Required', 'Closure over Go and gRPC.']
+      ] },
+    { id: 41154, title: 'Cloud Engineer', company: 'BT Group', where: 'Ipswich', board: 'Indeed',
+      firstSeen: '1 Sep', boardSays: '1 Sep', repost: false, low: 70000, high: 78000, interval: 'year',
+      salarySource: 'column', work: 'On-site', level: 'Mid', concepts: ['skill.azure', 'skill.terraform'],
+      clearance: false, applicants: null,
+      insight: [
+        ['Azure', 'Taxonomy', 'Required', 'AZ-104 or equivalent demonstrable Azure experience.'],
+        ['Terraform', 'Taxonomy', 'Required', 'Infrastructure is defined in Terraform, no exceptions.'],
+        ['On-site', 'Taxonomy', 'Unspecified', 'Five days a week at our Adastral Park site.'],
+        ['Seniority: Mid', 'Model', 'Unspecified', 'Three to five years asked for, no seniority word in the title.']
+      ] },
+    { id: 41140, title: 'Data Platform Engineer', company: 'Ocado', where: 'UK remote', board: 'freehire.me',
+      firstSeen: '1 Sep', boardSays: '1 Sep', repost: false, low: 75000, high: 88000, interval: 'year',
+      salarySource: 'prose', work: 'Remote', level: 'Senior', concepts: ['skill.python', 'skill.sql'],
+      clearance: false, applicants: null,
+      insight: [
+        ['Spark', 'Taxonomy', 'Required', 'Our pipelines are Spark on Databricks.'],
+        ['Python', 'Taxonomy', 'Required', 'Python is the language of the platform.'],
+        ['Salary £75,000 to £88,000', 'Model', 'Unspecified', 'Read out of the prose: “the band for this role is £75k to £88k”. No salary column was supplied.'],
+        ['Remote', 'Board', 'Unspecified', null],
+        ['Data', 'Rollup', 'Required', 'Closure over Spark, Python and Parquet.']
+      ] },
+    { id: 41102, title: 'DevOps Engineer', company: 'Capgemini', where: 'Manchester', board: 'Indeed',
+      firstSeen: '12 Aug', boardSays: '31 Aug', repost: true, low: 65000, high: 75000, interval: 'year',
+      salarySource: 'column', work: 'Hybrid', level: 'Mid', concepts: ['skill.terraform'],
+      clearance: true, applicants: null,
+      insight: [
+        ['SC clearance', 'Taxonomy', 'Required', 'You must hold, or be eligible for, SC clearance before starting.'],
+        ['Ansible', 'Taxonomy', 'Required', 'Configuration management with Ansible.'],
+        ['Jenkins', 'Taxonomy', 'Required', 'Our pipelines are Jenkins, and there are a lot of them.'],
+        ['Security', 'Rollup', 'Required', 'Closure over SC clearance.']
+      ] },
+    { id: 41077, title: 'Site Reliability Engineer', company: 'Starling Bank', where: 'Cardiff', board: 'Glassdoor',
+      firstSeen: '31 Aug', boardSays: '31 Aug', repost: false, low: null, high: null, interval: null,
+      salarySource: null, work: 'Hybrid', level: 'Senior', concepts: ['skill.kubernetes'],
+      clearance: false, applicants: null,
+      insight: [
+        ['Prometheus', 'Taxonomy', 'Required', 'Observability is Prometheus, Grafana and a lot of care.'],
+        ['Kubernetes', 'Taxonomy', 'Required', 'Everything is on Kubernetes.'],
+        ['Hybrid', 'Board', 'Unspecified', null],
+        ['Incident command', 'Model', 'Preferred', 'You will take the pager, and sometimes the incident.']
+      ] },
+    { id: 41044, title: 'Lead Engineer, Payments', company: 'Wise', where: 'Shoreditch, London', board: 'LinkedIn',
+      firstSeen: '30 Aug', boardSays: '30 Aug', repost: false, low: 95000, high: 115000, interval: 'year',
+      salarySource: 'column', work: 'On-site', level: 'Lead', concepts: ['skill.java'],
+      clearance: false, applicants: 12,
+      insight: [
+        ['Java', 'Board', 'Unspecified', null],
+        ['Leading a team', 'Taxonomy', 'Required', 'You will lead a team of six.'],
+        ['On-site', 'Taxonomy', 'Unspecified', 'Four days a week in Shoreditch.'],
+        ['Backend', 'Rollup', 'Required', 'Closure over Java.']
+      ] },
+    { id: 41020, title: 'Platform Engineer', company: 'Deliveroo', where: 'Farringdon, London', board: 'ZipRecruiter',
+      firstSeen: '4 Aug', boardSays: '30 Aug', repost: true, low: 90000, high: 110000, interval: 'year',
+      salarySource: 'column', work: 'Hybrid', level: 'Senior', concepts: ['skill.go', 'skill.kubernetes'],
+      clearance: false, applicants: 203,
+      insight: [
+        ['Go', 'Taxonomy', 'Required', 'Go, and a willingness to read a lot of it.'],
+        ['Kubernetes', 'Taxonomy', 'Required', 'A large multi-tenant Kubernetes estate.'],
+        ['Hybrid', 'Taxonomy', 'Unspecified', 'Three days a week in Farringdon.'],
+        ['Cloud and platform', 'Rollup', 'Required', 'Closure over Go and Kubernetes.']
+      ] },
+    { id: 40988, title: 'Infrastructure Engineer', company: 'Deloitte', where: 'Belfast', board: 'Indeed',
+      firstSeen: '29 Aug', boardSays: '29 Aug', repost: false, low: null, high: null, interval: null,
+      salarySource: null, work: 'On-site', level: 'Mid', concepts: ['skill.terraform'],
+      clearance: true, applicants: null,
+      insight: [
+        ['SC clearance', 'Taxonomy', 'Required', 'Candidates must be SC cleared or clearable.'],
+        ['VMware', 'Taxonomy', 'Required', 'A large VMware estate, migrating slowly.'],
+        ['Terraform', 'Taxonomy', 'Preferred', 'New build is Terraform.'],
+        ['On-site', 'Board', 'Unspecified', null]
+      ] },
+    { id: 40961, title: 'Senior Data Engineer', company: 'Accenture', where: 'Edinburgh', board: 'Glassdoor',
+      firstSeen: '29 Aug', boardSays: '29 Aug', repost: false, low: 68000, high: 82000, interval: 'year',
+      salarySource: 'prose', work: 'Hybrid', level: 'Senior', concepts: ['skill.python', 'skill.sql'],
+      clearance: false, applicants: null,
+      insight: [
+        ['Databricks', 'Taxonomy', 'Required', 'Databricks, and the appetite to make it behave.'],
+        ['SQL', 'Taxonomy', 'Required', 'Strong SQL is non-negotiable.'],
+        ['Salary £68,000 to £82,000', 'Model', 'Unspecified', 'Read out of the prose: “£68,000 – £82,000 depending on experience”.'],
+        ['Data', 'Rollup', 'Required', 'Closure over Databricks, SQL and Python.']
+      ] },
+    { id: 40940, title: 'Cloud Consultant (outside IR35)', company: 'Version 1', where: 'Bristol', board: 'Indeed',
+      firstSeen: '28 Aug', boardSays: '28 Aug', repost: false, low: 600, high: 650, interval: 'day',
+      salarySource: 'column', work: 'Hybrid', level: 'Senior', concepts: ['skill.azure', 'skill.terraform'],
+      clearance: false, applicants: null,
+      insight: [
+        ['Day rate £600 to £650', 'Board', 'Unspecified', null],
+        ['Outside IR35', 'Taxonomy', 'Unspecified', 'This engagement has been determined outside IR35.'],
+        ['Azure', 'Taxonomy', 'Required', 'Azure landing zones, at scale.'],
+        ['Cloud and platform', 'Rollup', 'Required', 'Closure over Azure and Terraform.']
+      ] }
+  ],
+
+  /* AssertionSource, in descending order of trust. Board tags carry no phrase,
+     which is why evidence is null rather than invented. Rollup is not a source
+     at all - it is the closure walk - and is listed apart for that reason. */
+  sources: [
+    { name: 'Board', share: 0.31, note: 'The employer’s own structured tagging, taken from the board’s fields. Highest trust and no phrase to show: nobody wrote a sentence, somebody ticked a box.' },
+    { name: 'Taxonomy', share: 0.52, note: 'A string match against the vocabulary, with the phrase it matched. It refuses to guess: go, c and r stay unresolved without surrounding context, because a wrong key is indistinguishable from a right one once stored.' },
+    { name: 'Model', share: 0.17, note: 'A judgement, batched many postings to a call. Skipped entirely when no provider is configured, which is why the two above have to stand on their own.' }
+  ],
+  gradedShare: 0.68,
+  polarities: [
+    { name: 'Required', n: 41 }, { name: 'Preferred', n: 27 }, { name: 'Mentioned', n: 12 }, { name: 'Unspecified', n: 20 }
+  ],
+
+  /* Demand keyed by concept, with the count restricted to postings that score
+     for this candidate. The corpus number says what the market asks for; the
+     in-band number says what the market asks *you* for, and only the second one
+     is worth acting on. */
+  demand: [
+    { key: 'skill.python', postings: 1204, inBand: 96 }, { key: 'skill.aws', postings: 986, inBand: 88 },
+    { key: 'skill.kubernetes', postings: 743, inBand: 71 }, { key: 'skill.typescript', postings: 690, inBand: 34 },
+    { key: 'skill.azure', postings: 641, inBand: 64 }, { key: 'skill.terraform', postings: 512, inBand: 61 },
+    { key: 'skill.sql', postings: 498, inBand: 40 }, { key: 'skill.react', postings: 431, inBand: 12 },
+    { key: 'skill.docker', postings: 402, inBand: 44 }, { key: 'skill.go', postings: 288, inBand: 29 },
+    { key: 'skill.java', postings: 264, inBand: 18 }, { key: 'qual.sc-clearance', postings: 214, inBand: 22 },
+    { key: 'skill.helm', postings: 96, inBand: 9 }, { key: 'skill.bicep', postings: 88, inBand: 7 }
+  ],
+
+  concepts: [
+    { key: 'area.backend', label: 'Backend', kind: 'Area', n: 1880, narrower: ['skill.python', 'skill.go', 'skill.java'], broader: [], related: [],
+      note: 'An area, not a skill. Nothing is tagged with it directly; it is what the closure gives you when a posting names Python or Go.' },
+    { key: 'area.cloud-platform', label: 'Cloud and platform', kind: 'Area', n: 1402, narrower: ['skill.kubernetes', 'skill.terraform', 'skill.aws', 'skill.azure'], broader: [], related: [], note: '' },
+    { key: 'area.data', label: 'Data', kind: 'Area', n: 1120, narrower: ['skill.sql', 'skill.python'], broader: [], related: [], note: '' },
+    { key: 'area.frontend', label: 'Frontend', kind: 'Area', n: 764, narrower: ['skill.react', 'skill.typescript'], broader: [], related: [], note: '' },
+    { key: 'area.security', label: 'Security', kind: 'Area', n: 318, narrower: ['qual.sc-clearance'], broader: [], related: [], note: '' },
+    { key: 'skill.python', label: 'Python', kind: 'Skill', n: 1204, broader: ['area.backend', 'area.data'], narrower: [], related: [],
+      note: 'Sits under two areas, which is why the areas do not sum to the corpus.' },
+    { key: 'skill.aws', label: 'AWS', kind: 'Skill', n: 986, broader: ['area.cloud-platform'], narrower: [], related: ['skill.azure'], note: '' },
+    { key: 'skill.kubernetes', label: 'Kubernetes', kind: 'Skill', n: 743, broader: ['area.cloud-platform'], narrower: ['skill.helm'], related: ['skill.docker'], note: '' },
+    { key: 'skill.typescript', label: 'TypeScript', kind: 'Skill', n: 690, broader: ['area.frontend'], narrower: [], related: ['skill.react'], note: '' },
+    { key: 'skill.azure', label: 'Azure', kind: 'Skill', n: 641, broader: ['area.cloud-platform'], narrower: [], related: ['skill.aws'], note: '' },
+    { key: 'skill.terraform', label: 'Terraform', kind: 'Skill', n: 512, broader: ['area.cloud-platform'], narrower: [], related: ['skill.bicep'], note: '' },
+    { key: 'skill.sql', label: 'SQL', kind: 'Skill', n: 498, broader: ['area.data'], narrower: [], related: [], note: '' },
+    { key: 'skill.react', label: 'React', kind: 'Skill', n: 431, broader: ['area.frontend'], narrower: [], related: ['skill.typescript'],
+      note: 'The resolver will not take the bare word from prose. “React calmly in stressful situations” is an English verb, and it appeared often enough to matter.' },
+    { key: 'skill.docker', label: 'Docker', kind: 'Skill', n: 402, broader: ['area.cloud-platform'], narrower: [], related: ['skill.kubernetes'], note: '' },
+    { key: 'skill.go', label: 'Go', kind: 'Skill', n: 288, broader: ['area.backend'], narrower: [], related: [],
+      note: 'Only resolved with surrounding context. The bare word is refused, which costs recall and buys the vocabulary its credibility.' },
+    { key: 'skill.java', label: 'Java', kind: 'Skill', n: 264, broader: ['area.backend'], narrower: [], related: [], note: '' },
+    { key: 'qual.sc-clearance', label: 'SC clearance', kind: 'Qualification', n: 214, broader: ['area.security'], narrower: [], related: [],
+      note: 'A qualification rather than a skill: it cannot be picked up before an application closes, so a gap here is disqualifying in a way a tool never is.' },
+    { key: 'skill.helm', label: 'Helm', kind: 'Skill', n: 96, broader: ['skill.kubernetes'], narrower: [], related: [], note: '' },
+    { key: 'skill.bicep', label: 'Bicep', kind: 'Skill', n: 88, broader: ['area.cloud-platform'], narrower: [], related: ['skill.terraform'],
+      note: 'Supersedes ARM templates. A profile holding this satisfies an ARM requirement through the Superseded relation, and the match breakdown names that relation rather than claiming an exact hit.' }
+  ],
+
+  /* Deliberately NOT in descending score order: the list is ordered by fusion,
+     which is the claim the copy makes and the earlier revision quietly failed
+     to demonstrate. `axes` is [name, score, weight] - two axes drawn the same
+     length said a 34% axis and a 10% axis were equally important.
+     `relations` is how a held concept satisfied a required one. */
+  matches: [
+    { id: 1, score: 91, coverage: 0.82, arrived: null, changed: null, title: 'Senior Platform Engineer', company: 'Sky', work: 'Hybrid',
+      salary: '£85k–£95k', verdict: 'Strong', unmet: 1,
+      axes: [['Essential skills', 82, .34], ['Other skills', 64, .12], ['Seniority', 100, .10], ['Experience', 88, .14], ['Working arrangement', 100, .12], ['Salary', 71, .18]],
+      relations: [['Bicep', 'Terraform', 'Related'], ['Helm', 'Kubernetes', 'Specialisation']],
+      rationale: 'Nine of their eleven stated requirements are covered, including the two they lead with. The gap is Terraform at a level they call essential, and you have Bicep, which the graph records as related rather than equivalent.',
+      strengths: ['Kubernetes at the depth the advert asks for', 'Azure and AWS both named, they want either', 'Platform team leadership matches the reporting line'],
+      gaps: ['Terraform named Required, not in your profile', 'They ask for on-call rotation experience'] },
+    { id: 3, score: 84, coverage: 0.79, arrived: 'overnight', changed: null, title: 'Cloud Engineer', company: 'BT Group', work: 'On-site',
+      salary: '£70k–£78k', verdict: 'Strong', unmet: 0,
+      axes: [['Essential skills', 94, .34], ['Other skills', 70, .12], ['Seniority', 88, .10], ['Experience', 84, .14], ['Working arrangement', 40, .12], ['Salary', 62, .18]],
+      relations: [['Azure', 'Azure', 'Exact'], ['Bicep', 'ARM templates', 'Superseded']],
+      rationale: 'Everything they call Required is covered. The friction is location: five days on-site in Ipswich against a remote preference, and the band sits below what you asked for.',
+      strengths: ['Every Required assertion met', 'Azure certification they name explicitly'],
+      gaps: ['Five days on-site', 'Band tops out below your stated floor'] },
+    { id: 2, score: 88, coverage: 0.74, arrived: null, changed: null, title: 'Backend Engineer (Go)', company: 'Monzo', work: 'Remote',
+      salary: '£80k–£100k', verdict: 'Possible', unmet: 2,
+      axes: [['Essential skills', 68, .34], ['Other skills', 72, .12], ['Seniority', 100, .10], ['Experience', 92, .14], ['Working arrangement', 100, .12], ['Salary', 88, .18]],
+      relations: [['Python', 'Go', 'Related']],
+      rationale: 'Strong on distributed systems and the domain, thin on Go itself. Your profile shows C# and Python at depth; the advert treats Go as learnable but lists two years of it as Required.',
+      strengths: ['Event-driven architecture, named three times in the advert', 'Fintech domain experience'],
+      gaps: ['Go, two years, Required', 'gRPC not shown anywhere in your profile'] },
+    { id: 8, score: 58, coverage: 0.44, arrived: null, changed: 'The model reread this last night and moved it from Weak to Strong.', title: 'Lead Engineer, Payments', company: 'Wise', work: 'On-site',
+      salary: '£95k–£115k', verdict: 'Strong', unmet: 2,
+      axes: [['Essential skills', 46, .34], ['Other skills', 50, .12], ['Seniority', 96, .10], ['Experience', 94, .14], ['Working arrangement', 40, .12], ['Salary', 96, .18]],
+      relations: [['C#', 'Java', 'Related']],
+      rationale: 'The lowest score on the page and the entry the ordering exists for. The advert states very little, so the arithmetic had little to score, but what it does say is leadership and payments at scale, and both are the strongest parts of your record.',
+      strengths: ['Ten years, five of them leading teams', 'Payments domain, end to end', 'Band is the highest on your shortlist'],
+      gaps: ['Advert names Java, you have C#', 'Four days on-site in London'] },
+    { id: 6, score: 74, coverage: 0.77, arrived: 'overnight', changed: null, title: 'Data Platform Engineer', company: 'Ocado', work: 'Remote',
+      salary: '£75k–£88k', verdict: 'Strong', unmet: 0,
+      axes: [['Essential skills', 86, .34], ['Other skills', 66, .12], ['Seniority', 92, .10], ['Experience', 78, .14], ['Working arrangement', 100, .12], ['Salary', 74, .18]],
+      relations: [['Python', 'Python', 'Exact'], ['SQL', 'Data modelling', 'Implied']],
+      rationale: 'A quieter advert than its neighbours, and everything it does state, you have. Fully remote and the band clears your floor.',
+      strengths: ['Spark and Parquet, both named', 'Fully remote'], gaps: [] },
+    { id: 9, score: 69, coverage: 0.31, arrived: 'overnight', changed: null, title: 'Engineering Lead', company: 'Trainline', work: 'Hybrid',
+      salary: '£88k–£102k', verdict: 'Unknown', unmet: 0,
+      axes: [['Essential skills', 60, .34], ['Other skills', 55, .12], ['Seniority', 94, .10], ['Experience', 90, .14], ['Working arrangement', 100, .12], ['Salary', 84, .18]],
+      relations: [],
+      rationale: 'The model read this one and would not commit. Four paragraphs about culture and one sentence of requirements: there is little here to agree with and little to disagree with. Unknown is a judgement that was made, not a place in the queue.',
+      strengths: [], gaps: [] },
+    { id: 4, score: 79, coverage: 0.71, arrived: null, changed: null, title: 'Senior Software Engineer', company: 'Deliveroo', work: 'Hybrid',
+      salary: '£90k–£110k', verdict: null, unmet: 1,
+      axes: [['Essential skills', 76, .34], ['Other skills', 68, .12], ['Seniority', 92, .10], ['Experience', 86, .14], ['Working arrangement', 100, .12], ['Salary', 90, .18]],
+      relations: [['Kubernetes', 'Kubernetes', 'Exact']],
+      rationale: '', strengths: [], gaps: [] },
+    { id: 7, score: 71, coverage: 0.58, arrived: null, changed: null, title: 'Site Reliability Engineer', company: 'Starling Bank', work: 'Hybrid',
+      salary: 'not stated', verdict: 'Possible', unmet: 1,
+      axes: [['Essential skills', 74, .41], ['Other skills', 62, .15], ['Seniority', 84, .12], ['Experience', 80, .17], ['Working arrangement', 100, .15], ['Salary', null, 0]],
+      relations: [['Azure Monitor', 'Prometheus', 'Related']],
+      rationale: 'No salary stated, so that axis was dropped and the remaining weights renormalised rather than a zero being scored. On what the advert does say the fit is good, and the one gap is a tool rather than a discipline.',
+      strengths: ['Observability stack matches theirs', 'Incident command experience'], gaps: ['Prometheus Required, you show Azure Monitor'] },
+    { id: 5, score: 76, coverage: 0.66, arrived: null, changed: null, title: 'DevOps Engineer', company: 'Capgemini', work: 'Hybrid',
+      salary: '£65k–£75k', verdict: 'Weak', unmet: 3,
+      axes: [['Essential skills', 52, .34], ['Other skills', 58, .12], ['Seniority', 70, .10], ['Experience', 80, .14], ['Working arrangement', 100, .12], ['Salary', 48, .18]],
+      relations: [],
+      rationale: 'The title matches and little else does. Three Required assertions are unmet and the band is well under your floor, so the score is carried by axes the advert barely states.',
+      strengths: ['CI/CD pipeline ownership'], gaps: ['Ansible', 'Jenkins', 'SC clearance required before start'] }
+  ],
+
+  submissions: [
+    { group: 'Live', company: 'Sky', title: 'Senior Platform Engineer', phase: 'Acknowledged', days: 4, closed: false, stale: false,
+      events: [['2 Sep', 'Acknowledged', 'read from email'], ['29 Aug', 'Sent through the employer system', 'you']] },
+    { group: 'Live', company: 'Monzo', title: 'Backend Engineer (Go)', phase: 'Screening booked', days: 1, closed: false, stale: false,
+      events: [['1 Sep', 'Screening booked for 8 September', 'read from email'], ['30 Aug', 'Acknowledged', 'read from email'], ['28 Aug', 'Sent', 'you']] },
+    { group: 'Live', company: 'Ocado', title: 'Data Platform Engineer', phase: 'Sent', days: 15, closed: false, stale: true,
+      events: [['18 Aug', 'Sent through the board', 'you']] },
+    { group: 'Closed', company: 'Capgemini', title: 'DevOps Engineer', phase: 'Rejected', days: 9, closed: true, stale: false,
+      events: [['24 Aug', 'Rejected', 'read from email'], ['16 Aug', 'Sent', 'you']] }
+  ],
+  drafts: [
+    { company: 'Wise', title: 'Lead Engineer, Payments', written: 'written 1 Sep', revision: 2, channel: 'the employer’s own system', urlSource: 'Posting' },
+    { company: 'Starling Bank', title: 'Site Reliability Engineer', written: 'written 31 Aug', revision: 1, channel: 'the job board', urlSource: 'MatchedOnAnotherBoard' }
+  ],
+
+  searches: [
+    { term: 'platform engineer', slug: 'platform-engineer', where: 'United Kingdom',
+      boards: ['LinkedIn', 'Indeed', 'Glassdoor', 'freehire.me', 'ZipRecruiter'], rows: 3918,
+      last: 'today, 04:12', on: true, published: true, publishedUtc: 'today, 04:02', hoursOld: 72, wanted: 400 },
+    { term: 'data engineer', slug: 'data-engineer', where: 'United Kingdom',
+      boards: ['LinkedIn', 'Indeed'], rows: 2104,
+      last: 'today, 04:12', on: true, published: true, publishedUtc: 'today, 04:02', hoursOld: 72, wanted: 250 },
+    { term: 'security engineer', slug: 'security-engineer', where: 'London',
+      boards: ['LinkedIn', 'Glassdoor'], rows: 881,
+      last: '28 Aug, 04:09', on: false, published: false, publishedUtc: '28 Aug, 04:02', hoursOld: 48, wanted: 150 }
+  ],
+
+  profile: {
+    name: 'Pablo D.', headline: 'Platform engineer', where: 'Manchester', rtw: 'United Kingdom, no sponsorship needed',
+    arrangement: 'Remote or hybrid', maxDaysInOffice: 2, floor: 80000, notice: 'One month', levels: 'Senior or lead',
+    experience: [
+      { role: 'Platform Engineer', company: 'Auto Trader', when: '2022 – present',
+        text: 'Owned the Kubernetes platform four product teams deploy onto. Moved the estate from hand-rolled manifests to a paved road, and took deploy time from forty minutes to six.' },
+      { role: 'Senior Software Engineer', company: 'The Hut Group', when: '2019 – 2022',
+        text: 'Payments and order capture, .NET and Azure. Led the team that took card processing in-house, which is the piece of work the payments adverts keep matching against.' },
+      { role: 'Software Engineer', company: 'Zuto', when: '2016 – 2019',
+        text: 'Backend services in C#, and the first person there to put anything in a container.' }
+    ],
+    education: [{ role: 'BSc Computer Science', company: 'University of Manchester', when: '2012 – 2016', text: 'First class.' }],
+    projects: [
+      { role: 'job-platform', company: 'Personal', when: '2026',
+        text: 'The thing you are looking at. Scraper on a NAS, everything else on Azure, one concept graph shared by postings and profiles so matching is a join.' },
+      { role: 'ppdm', company: 'Personal', when: '2024',
+        text: 'A parquet-backed store for time series that did not need a database.' }
+    ],
+    certifications: [
+      { role: 'AZ-305 Azure Solutions Architect', company: 'Microsoft', when: '2024' },
+      { role: 'CKA Certified Kubernetes Administrator', company: 'CNCF', when: '2023' }
+    ],
+    links: ['github.com/pa741', 'linkedin.com/in/pablo-d', 'pablo.dev'],
+    declared: [['skill.kubernetes', 'Expert, 6 years'], ['skill.azure', 'Expert, 8 years'], ['skill.docker', 'Expert, 7 years'],
+      ['skill.python', 'Working, 4 years'], ['skill.sql', 'Working, 9 years'], ['skill.bicep', 'Working, 3 years']],
+    /* The half the model read out of the prose, with the phrase it read it
+       from. This is what makes an inference checkable by the candidate, and
+       it is the side of the profile they most need to see. */
+    extracted: [
+      ['skill.helm', 'moved the estate from hand-rolled manifests to a paved road'],
+      ['skill.typescript', 'the first person there to put anything in a container'],
+      ['skill.react', null]
+    ]
+  },
+
+  /* AiCallOutcome: Succeeded | PartiallyDiscarded | Failed. `discarded` is the
+     number the ledger exists for - answers paid for and thrown away. There is
+     no money on this page: the API records tokens, and no unit price is stored
+     anywhere in the system. */
+  calls: [
+    { t: '04:12:07', purpose: 'Extraction batch', model: 'gpt-5.6-luna', items: 10, out: 'Succeeded', discarded: 0, tok: 84210, reasoning: 12040, ms: 6240, reason: null },
+    { t: '04:11:58', purpose: 'Extraction batch', model: 'gpt-5.6-luna', items: 10, out: 'PartiallyDiscarded', discarded: 3, tok: 81964, reasoning: 11890, ms: 5980, reason: 'Three answers did not align to a posting id and were dropped' },
+    { t: '04:10:31', purpose: 'Match assessment', model: 'gpt-5.6-luna', items: 1, out: 'Succeeded', discarded: 0, tok: 31420, reasoning: 9870, ms: 4110, reason: null },
+    { t: '04:09:02', purpose: 'Match assessment', model: 'gpt-5.6-luna', items: 1, out: 'Failed', discarded: 1, tok: 30886, reasoning: 9120, ms: 3980, reason: '429 from the deployment, postings 41188 and 41154 unassessed' },
+    { t: '23:40:16', purpose: 'Application draft', model: 'gpt-5.6-sol', items: 1, out: 'Succeeded', discarded: 0, tok: 12408, reasoning: 4210, ms: 9120, reason: null }
+  ],
+  callTotals: { calls: 41, succeeded: 38, partial: 2, failed: 1, tokens: 1240000, reasoning: 380000, discarded: 11, medianMs: 5100 }
+};
+
+const SECTIONS = [
+  { id: 'you', label: 'You', pages: [['shortlist', 'Shortlist'], ['applications', 'Applications'], ['profile', 'Profile']] },
+  { id: 'market', label: 'Market', pages: [['briefing', 'Briefing'], ['postings', 'Postings'], ['vocabulary', 'Vocabulary']] },
+  { id: 'system', label: 'System', pages: [['searches', 'Searches'], ['calls', 'Model calls']] }
+];
+
+const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+const fmt = (n) => n.toLocaleString('en-GB');
+const money = (n) => '£' + n.toLocaleString('en-GB');
+const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+const conceptOf = (key) => DATA.concepts.find((c) => c.key === key);
+const labelOf = (key) => (conceptOf(key) || { label: key }).label;
+const SERIES = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)', 'var(--series-other)'];
+
+/* =========================================================================
+   Shared marks
+   ========================================================================= */
+function rank(items, unit) {
+  const max = Math.max(...items.map((i) => i.n));
+  return '<div class="rank">' + items.map((it) =>
+    '<div><div class="row"><span class="nm">' + it.name + '</span>' +
+    '<span class="vl">' + fmt(it.n) + (unit ? ' ' + unit : '') + '</span></div>' +
+    '<div class="measure"><i style="width:' + (it.n / max * 100) + '%"></i></div></div>').join('') + '</div>';
+}
+
+/* Five categorical slots, in fixed order, never cycled. A sixth category
+   folds into Other rather than getting a generated hue. */
+function splitBar(items) {
+  const total = items.reduce((s, i) => s + i.n, 0);
+  const shown = items.length <= 5 ? items
+    : items.slice(0, 4).concat([{ name: 'Other', n: items.slice(4).reduce((s, i) => s + i.n, 0) }]);
+  return '<div class="split">' + shown.map((it, i) =>
+    '<i style="flex:' + it.n + ';background:' + SERIES[i] + '"></i>').join('') + '</div>' +
+    '<div class="keys">' + shown.map((it, i) =>
+      '<i style="background:' + SERIES[i] + '"></i><span>' + it.name + '</span>' +
+      '<b>' + Math.round(it.n / total * 100) + '%</b>').join('') + '</div>';
+}
+
+/* Weekends are coloured from the calendar, not from `n < 150`: a magnitude
+   threshold renders a failed Tuesday as a Saturday. */
+function columns(data) {
+  const W = 660, H = 210, L = 34, R = 6, T = 12, B = 26;
+  const max = Math.ceil(Math.max(...data.map((d) => d.n)) / 100) * 100;
+  const step = (W - L - R) / data.length;
+  const bw = step * 0.56;
+  const y = (n) => T + (1 - n / max) * (H - T - B);
+
+  const grid = [0, max / 2, max].map((v) =>
+    '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(v) + '" y2="' + y(v) + '" stroke="var(--rule-soft)"/>' +
+    '<text x="' + (L - 7) + '" y="' + (y(v) + 3.5) + '" text-anchor="end" class="lbl">' + v + '</text>').join('');
+
+  const bars = data.map((d, i) => {
+    const x = L + i * step + (step - bw) / 2;
+    return '<rect class="col" x="' + x.toFixed(1) + '" y="' + y(d.n).toFixed(1) + '" width="' + bw.toFixed(1) +
+      '" height="' + (H - B - y(d.n)).toFixed(1) + '" fill="' + (d.weekend ? 'var(--mark-quiet)' : 'var(--bar)') + '"></rect>';
+  }).join('');
+
+  const ticks = data.map((d, i) => (i % 3 === 0 || i === data.length - 1)
+    ? '<text x="' + (L + i * step + step / 2).toFixed(1) + '" y="' + (H - 8) + '" text-anchor="middle" class="lbl">' + d.d + '</text>'
+    : '').join('');
+
+  return '<svg viewBox="0 0 ' + W + ' ' + H + '" class="chart" role="img" ' +
+    'aria-label="New postings per scrape day over fourteen days, weekends recessive">' + grid + bars + ticks + '</svg>';
+}
+
+function card(span, kicker, title, sub, body) {
+  return '<section class="card ' + span + '"><span class="kicker">' + kicker + '</span>' +
+    '<h2>' + title + '</h2><p class="sub">' + sub + '</p>' + (body || '') + '</section>';
+}
+
+function figure(k, value, note) {
+  return '<div><span class="k">' + k + '</span><div class="v">' + value + '</div><div class="n">' + note + '</div></div>';
+}
+
+/* =========================================================================
+   Freshness. An age, not a time: "scraped 04:12" looks identical whether the
+   NAS ran this morning or has been off for a day.
+   ========================================================================= */
+const S = DATA.summary;
+const stale = S.scrapedHoursAgo > 26;
+const freshnessHtml =
+  'Wed 2 September 2026<br>scraped <b class="' + (stale ? 'stale' : '') + '">' +
+  S.scrapedHoursAgo + ' hours ago</b>';
+$('#freshness').innerHTML = freshnessHtml;
+$('#freshness2').innerHTML = freshnessHtml.replace('<br>', ' &middot; ');
+$('#foot').innerHTML =
+  '<span>Corpus scraped ' + S.scrapedHoursAgo + ' hours ago</span>' +
+  '<span>Matches scored ' + S.sweepHoursAgo + ' hours ago</span>' +
+  '<span>Metrics polled every 60s</span>' +
+  '<button class="quiet" id="sleepToggle" style="margin-left:auto" ' +
+  'title="Mock control. The deployed default is a serverless database that pauses when idle.">' +
+  'Demo: pause the database</button>';
+
+/* =========================================================================
+   The anti-join: what the corpus asks for that the profile does not hold.
+
+   A set difference over two tables of the same shape, which is the whole
+   payoff of postings and profiles sharing one vocabulary. Every other figure
+   on this page is about the corpus; this one is about the reader, and it is
+   the only one that changes what they would do next.
+
+   The near-miss walk matters as much as the difference: "you do not have
+   Terraform" is a fact, and "you hold Bicep, which the graph records as
+   Related rather than equivalent, so it earns partial credit and never full"
+   is the same fact with something to do about it.
+   ========================================================================= */
+const held = new Set(
+  DATA.profile.declared.map((d) => d[0]).concat(DATA.profile.extracted.map((e) => e[0]))
+);
+
+function nearMiss(key) {
+  const c = conceptOf(key);
+  if (!c) return null;
+  const down = c.narrower.find((k) => held.has(k));
+  if (down) return { key: down, rel: 'Specialisation' };
+  const side = c.related.find((k) => held.has(k));
+  if (side) return { key: side, rel: 'Related' };
+  const back = DATA.concepts.find((x) => held.has(x.key) && x.related.includes(key));
+  if (back) return { key: back.key, rel: 'Related' };
+  const up = c.broader.find((k) => held.has(k));
+  if (up) return { key: up, rel: 'Generalisation' };
+  return null;
+}
+
+const REL_CONSEQUENCE = {
+  Specialisation: 'satisfies it outright and scores as a full hit',
+  Generalisation: 'is broader than what they ask for, so it earns partial credit',
+  Related: 'is recorded as comparable rather than equivalent, so it earns partial credit and never full'
+};
+
+function antiJoinRows() {
+  return DATA.demand
+    .filter((d) => !held.has(d.key))
+    .sort((a, b) => b.inBand - a.inBand)
+    .map((d) => {
+      const c = conceptOf(d.key);
+      const near = nearMiss(d.key);
+      let why;
+      if (c.kind === 'Qualification') {
+        why = 'A qualification, not a skill: it cannot be picked up before an application closes, so this is a ' +
+          'filter on what you can apply to rather than something to learn. <em>' + d.inBand + ' of your matches ' +
+          'are gated behind it.</em>';
+      } else if (near) {
+        why = 'You hold <em>' + labelOf(near.key) + '</em>, which the graph records as <em>' + near.rel +
+          '</em> &mdash; it ' + REL_CONSEQUENCE[near.rel] + '.';
+      } else {
+        why = 'Nothing in your profile touches it, by any relation in the graph. This is the gap with no ' +
+          'partial credit behind it.';
+      }
+      return '<div class="gap"><span class="nm">' + c.label + '</span>' +
+        '<span class="counts"><b>' + d.inBand + '</b> of your 248 &middot; ' + fmt(d.postings) + ' in the corpus</span>' +
+        '<p class="why">' + why + '</p></div>';
+    }).join('');
+}
+
+/* =========================================================================
+   Briefing
+   ========================================================================= */
+const pctUp = Math.round((S.newInLastRun - S.prevNew) / S.prevNew * 100);
+const neverShipped = DATA.health.columns.filter((c) => c.lastFilled === null);
+const regressed = DATA.health.columns.filter((c) => c.lastFilled !== null);
+
+$('#view-briefing').innerHTML = [
+  '<p class="lede">This morning the scrapers found <span class="fig">' + fmt(S.newInLastRun) + '</span> new postings ',
+  'across five boards, <span class="fig">' + pctUp + '%</span> more than yesterday, and one column that was ',
+  '<span class="fig warn">94% full</span> last week came back empty.</p>',
+
+  '<p class="lede-note">A column that was filled and is now empty is a board changing its markup. A column that ',
+  'has never been filled is a field the scraper does not emit yet, and warning about it would be crying wolf. ',
+  'The health card below names which fault each one is.</p>',
+
+  '<div class="band">',
+  figure('Distinct postings', fmt(S.cumulative), 'across ' + S.days + ' days of history'),
+  figure('Seen in last run', fmt(S.seenInLastRun), S.invalid + ' rows would not parse'),
+  figure('Salary in the columns', '21.6%', 'as the boards delivered it'),
+  figure('Salary known', '58.9%', 'after reading descriptions'),
+  figure('Median stated salary', '£72k', 'of the 58.9% that state one &mdash; see the note below'),
+  '</div>',
+
+  '<div class="grid">',
+
+  '<section class="card s12" data-sql="The skills gap"><span class="kicker">The join, run backwards</span>',
+  '<h2>What the market asks for that you do not hold</h2>',
+  '<p class="sub">A set difference over two tables of the same shape &mdash; the concepts postings ask for, less ' +
+  'the concepts your profile holds. Ranked by how many of <em>your</em> 248 matches name each one, not by how ' +
+  'often the corpus does: Python leads the corpus and is already in your profile, which makes it the least ' +
+  'useful number on this page.</p>',
+  antiJoinRows(),
+  '<p class="sub" style="margin-top:16px">This is the only figure on this page that is about you rather than ' +
+  'about the corpus, and it exists because postings and profiles are extracted into the same vocabulary. ' +
+  'Without that, comparing them would be a similarity score rather than a join.</p>',
+  '</section>',
+
+  card('s8', 'Scrape days', 'New postings per day',
+    'Postings whose first sighting was that day. Weekends are marked from the calendar, so a flat Tuesday reads as a scrape that failed rather than as a quiet market.',
+    columns(DATA.trend) + '<div class="axis-note">14 days &middot; first sighting &middot; recessive columns are weekends</div>'),
+  card('s4', 'Sources', 'Where they came from', 'Boards producing results in the last run.', rank(DATA.sites)),
+
+  card('s4', 'Demand', 'Skills in demand', 'Concepts named by the most postings.', rank(DATA.skills)),
+  card('s4', 'Demand, rolled up', 'Areas in demand',
+    'A different question from the list beside it, not a summary of it. Individual tools scatter; the rollup is what says whether the market wants backend or data people.',
+    rank(DATA.areas)),
+  card('s4', 'Shape of the work', 'How the work happens', 'The three-way split a remote flag cannot express.',
+    splitBar(DATA.arrangement) + '<h4 class="mini">Seniority mix</h4>' + splitBar(DATA.seniority)),
+
+  card('s6', 'Volume, not demand', 'Who posts most',
+    'Counted by postings published, which is not the same as hiring most. The top of this list is consistently the outsourcers, who post continuously against a bench.',
+    rank(DATA.posters)),
+
+  '<div class="card s6"><span class="kicker">Read this before the median</span>',
+  '<h2>What the salary figure is, and is not</h2>',
+  '<p class="sub">The median above is over the 58.9% of postings that state a salary at all. Postings that state ' +
+  'one skew low &mdash; agencies and public sector publish bands, and the roles that do not publish are ' +
+  'disproportionately the ones above your floor. Read it as a floor on the visible market, never as the market.</p>',
+  splitBar([{ name: 'Stated in a salary column', n: 216 }, { name: 'Found by reading the prose', n: 373 }, { name: 'Not stated anywhere', n: 411 }]),
+  '</div>',
+
+  '<div class="card s7 alert"><span class="kicker tagline">Scraper health &middot; degraded</span>',
+  '<h2>One column regressed, one never shipped</h2>',
+  '<p class="sub">' + regressed.map((c) => '<code>' + c.f + '</code> was ' + Math.round(c.wasAt * 100) +
+  '% filled until ' + c.lastFilled + ' and is now empty in every row &mdash; that is a board changing its markup.').join(' ') +
+  ' ' + neverShipped.map((c) => '<code>' + c.f + '</code> has never been filled in ' + S.days +
+  ' days, which means the scraper does not emit it yet rather than that anything broke.').join(' ') +
+  ' ' + S.invalid + ' of ' + fmt(S.seenInLastRun) + ' rows would not parse at all.</p>',
+  '<h4 class="mini">Sparse &mdash; arriving, in under a quarter of rows</h4>',
+  rank(DATA.health.sparse.map((f) => ({ name: f.f, n: Math.round(f.r * 1000) / 10 })), '% filled'),
+  '</div>',
+
+  '<div class="card s5"><span class="kicker">Blind spots</span>',
+  '<h2>What the vocabulary could not place</h2>',
+  '<p class="sub">Surface forms the resolver saw and declined to guess at, counted by how many <em>postings</em> ' +
+  'name each one rather than by total occurrences &mdash; one advert repeating a word twenty times is one ' +
+  'employer&rsquo;s habit, twenty adverts saying it once is a gap. The two reasons need opposite responses: an ' +
+  'ambiguous form needs context, not an entry.</p>',
+  '<div class="cols">' + DATA.unresolved.map((u) =>
+    '<div class="thing"><b>' + u.form + '</b><span class="why">' + u.reason + '</span>' +
+    '<span class="ct">' + u.n + ' postings</span></div>').join('') + '</div></div>',
+  '</div>'
+].join('');
+
+/* =========================================================================
+   Postings
+   ========================================================================= */
+const LEVELS = ['Junior', 'Mid', 'Senior', 'Lead', 'Principal'];
+const filters = { q: '', board: '', concept: '', level: '', work: '', minSalary: '', interval: '', sort: 'firstSeen' };
+
+function conceptOptions() {
+  const areas = DATA.concepts.filter((c) => c.kind === 'Area');
+  const rest = DATA.concepts.filter((c) => c.kind !== 'Area');
+  return '<optgroup label="Areas">' + areas.map((c) =>
+    '<option value="' + c.key + '">' + c.label + ' (' + fmt(c.n) + ')</option>').join('') + '</optgroup>' +
+    '<optgroup label="Skills and qualifications">' + rest.map((c) =>
+      '<option value="' + c.key + '">' + c.label + ' (' + fmt(c.n) + ')</option>').join('') + '</optgroup>';
+}
+
+const annual = (p) => p.low == null ? null : (p.interval === 'day' ? p.high * 220 : p.high);
+
+function matchesFilters(p) {
+  const f = filters;
+  if (f.q && !(p.title + ' ' + p.company).toLowerCase().includes(f.q.toLowerCase())) return false;
+  if (f.board && p.board !== f.board) return false;
+  if (f.concept) {
+    const direct = p.concepts.includes(f.concept);
+    const viaArea = p.concepts.some((k) => (conceptOf(k) || { broader: [] }).broader.includes(f.concept));
+    if (!direct && !viaArea) return false;
+  }
+  if (f.level && LEVELS.indexOf(p.level) < LEVELS.indexOf(f.level)) return false;
+  if (f.work && p.work !== f.work) return false;
+  if (f.interval && (p.interval || 'year') !== f.interval) return false;
+  if (f.minSalary) { const a = annual(p); if (a == null || a < Number(f.minSalary)) return false; }
+  return true;
+}
+
+function salaryCell(p) {
+  if (p.low == null) return '<td class="num">not stated</td>';
+  const unit = p.interval === 'day' ? '/day' : '';
+  const lo = p.interval === 'day' ? '£' + p.low : money(p.low);
+  const hi = p.interval === 'day' ? '£' + p.high : money(p.high);
+  return '<td class="num">' + lo + ' – ' + hi + unit + '</td>';
+}
+
+function postingRows() {
+  let rows = DATA.postings.filter(matchesFilters);
+  if (filters.sort === 'salary') rows = rows.slice().sort((a, b) => (annual(b) || 0) - (annual(a) || 0));
+  if (filters.sort === 'company') rows = rows.slice().sort((a, b) => a.company.localeCompare(b.company));
+
+  if (!rows.length) {
+    return '<tr><td colspan="7"><div class="empty">Nothing matches those facets. Every count beside a facet is ' +
+      'what the API counted over the corpus, so a zero here means the corpus really is empty for that combination.</div></td></tr>';
+  }
+
+  return rows.map((p) =>
+    '<tr class="rowlink" data-posting="' + p.id + '" tabindex="0">' +
+    '<td>' + p.title + ' <span class="where">' + p.where + '</span></td>' +
+    '<td>' + p.company + '</td>' +
+    '<td>' + p.board + '</td>' +
+    '<td class="num">' + p.firstSeen + '</td>' +
+    salaryCell(p) +
+    '<td>' + p.work + ' &middot; ' + p.level + '</td>' +
+    '<td class="flags">' +
+    (p.repost ? '<span class="stamp warn">board says ' + p.boardSays + '</span> ' : '') +
+    (p.salarySource === 'prose' ? '<span class="stamp">from prose</span> ' : '') +
+    (p.interval === 'day' ? '<span class="stamp">day rate</span> ' : '') +
+    (p.clearance ? '<span class="stamp warn">clearance</span> ' : '') +
+    (p.applicants != null ? '<span class="stamp">' + p.applicants + ' applicants</span>' : '') +
+    '</td></tr>').join('');
+}
+
+function renderPostingsTable() {
+  $('#postingBody').innerHTML = postingRows();
+  const n = DATA.postings.filter(matchesFilters).length;
+  $('#postingCount').textContent = n + ' of ' + DATA.postings.length + ' loaded, ' +
+    fmt(S.cumulative) + ' in the corpus';
+}
+
+$('#view-postings').innerHTML = '<div data-sql="The postings table">' + [
+  '<p class="lede">Eighteen thousand postings, <span class="fig">' + fmt(S.seenInLastRun) + '</span> of them seen ',
+  'again this morning.</p>',
+  '<p class="lede-note">The date column is when <em>we</em> first saw a posting, not the date the board prints. ',
+  'Where those disagree the board&rsquo;s claim is shown as a flag, because a refreshed date is the most common ',
+  'way a three-week-old advert presents itself as new. Day rates are flagged too: a £600/day contract annualises ',
+  'to £132,000 and is not a £132,000 salary.</p>',
+
+  '<div class="filters">',
+  '<label><span class="lbl">Title or company</span><input id="f-q" placeholder="e.g. platform"></label>',
+  '<label><span class="lbl">Board</span><select id="f-board"><option value="">All boards</option>' +
+    DATA.sites.map((s) => '<option>' + s.name + '</option>').join('') + '</select></label>',
+  '<label><span class="lbl">Skill or area</span><select id="f-concept"><option value="">Any</option>' + conceptOptions() + '</select></label>',
+  '<label><span class="lbl">Seniority</span><select id="f-level"><option value="">Any</option>' +
+    LEVELS.map((l) => '<option value="' + l + '">' + l + ' or above</option>').join('') + '</select></label>',
+  '<label><span class="lbl">Working</span><select id="f-work"><option value="">Any</option>' +
+    '<option>Remote</option><option>Hybrid</option><option>On-site</option></select></label>',
+  '<label><span class="lbl">Engagement</span><select id="f-interval"><option value="">Any</option>' +
+    '<option value="year">Permanent</option><option value="day">Day rate</option></select></label>',
+  '<label><span class="lbl">Minimum, annualised</span><input id="f-salary" type="number" step="5000" placeholder="80000"></label>',
+  '<label><span class="lbl">Sort</span><select id="f-sort"><option value="firstSeen">First seen</option>' +
+    '<option value="salary">Salary</option><option value="company">Company</option></select></label>',
+  '</div>',
+
+  '<p class="result-count" id="postingCount"></p>',
+  '<div class="scroll-x"><table><thead><tr>',
+  '<th scope="col">Role</th><th scope="col">Company</th><th scope="col">Board</th>',
+  '<th scope="col" class="num">First seen</th><th scope="col" class="num">Salary</th>',
+  '<th scope="col">Working</th><th scope="col">Flags</th></tr></thead>',
+  '<tbody id="postingBody"></tbody></table></div>',
+  '<p class="lede-note" style="margin-top:24px">Open any row to see what the platform believes about that posting ',
+  'and the sentence it read each belief from.</p>'
+].join('') + '</div>';
+
+const SRC_KEY = [
+  ['Board', 'the employer&rsquo;s own tagging &mdash; no phrase, somebody ticked a box'],
+  ['Taxonomy', 'a string match against the vocabulary, with the phrase it matched'],
+  ['Model', 'a judgement, with the phrase it was judged from'],
+  ['Rollup', 'not an assertion &mdash; the closure walk over the graph']
+];
+
+let lastFocus = null;
+
+let currentPostingId = null;
+let drawerFromPush = false;
+
+function openPosting(id) {
+  if (currentPostingId === id) return;
+  const p = DATA.postings.find((x) => x.id === id);
+  currentPostingId = id;
+  lastFocus = document.activeElement;
+
+  $('#drawer').innerHTML = [
+    '<button class="close" id="drawerClose" aria-label="Close">&times;</button>',
+    '<span class="kicker">Posting ' + p.id + ' &middot; ' + p.board + '</span>',
+    '<h2 class="big">' + p.title + '</h2>',
+    '<div class="co">' + p.company + ' &middot; ' + p.where + '</div>',
+    '<div class="chips" style="margin-bottom:16px">',
+    '<span class="chip">' + p.work + '</span><span class="chip">' + p.level + '</span>',
+    '<span class="chip">' + (p.low == null ? 'Salary not stated'
+      : (p.interval === 'day' ? '£' + p.low + ' – £' + p.high + '/day' : money(p.low) + ' – ' + money(p.high))) + '</span>',
+    (p.applicants != null ? '<span class="chip"><b>' + p.applicants + '</b> applicants</span>' : ''),
+    '</div>',
+
+    '<h4 class="mini">What the platform believes, and why</h4>',
+    '<div class="srckey">' + SRC_KEY.map(([n, d]) =>
+      '<div><span class="src">' + n + '</span>' + d + '</div>').join('') + '</div>',
+
+    p.insight.map(([label, src, pol, evidence]) =>
+      '<div class="assertion"><div class="top"><span class="lab">' + label + '</span>' +
+      '<span class="src">' + src + '</span>' +
+      '<span class="pol ' + pol + '">' + pol + '</span></div>' +
+      (evidence
+        ? '<div class="ev">' + evidence + '</div>'
+        : '<div class="ev none">No phrase to show. The board published this as a field, which is why it is ' +
+          'trusted above a string match and why there is nothing to quote.</div>') +
+      '</div>').join(''),
+
+    '<h4 class="mini">Where this came from</h4>',
+    '<div class="assertion" style="border:0"><div class="ev none">',
+    'First seen ' + p.firstSeen + ' on ' + p.board + '.' +
+    (p.repost ? ' The board reports ' + p.boardSays + '; we have held identical text since ' + p.firstSeen + '.' : '') +
+    ' Cross-board duplicates are keyed on title, company and city &mdash; the city is required, because merging ' +
+    'without it hands you the apply link for another city&rsquo;s vacancy.</div></div>',
+
+    '<div class="row-actions">',
+    '<button class="quiet">Open the advert</button>',
+    '<button class="quiet">Queue for tonight&rsquo;s sweep</button></div>',
+    '<p class="sub" style="color:var(--ink-3);margin-top:12px">Scoring runs on a timer, not on a page load. ',
+    'A shortlist that costs model calls to browse is one nobody can afford to look at.</p>'
+  ].join('');
+
+  $('#scrim').hidden = false;
+  $('#drawer').hidden = false;
+  $('#drawerClose').onclick = closeDrawer;
+  $('#drawerClose').focus();
+
+  if (REDUCED) return;
+  gsap.fromTo('#scrim', { opacity: 0 }, { opacity: 1, duration: .18 });
+  gsap.fromTo('#drawer', { xPercent: 100 }, { xPercent: 0, duration: .3, ease: 'power3.out' });
+}
+
+function hideDrawer() {
+  if ($('#drawer').hidden) return;
+  currentPostingId = null;
+  const done = () => {
+    $('#drawer').hidden = true;
+    $('#scrim').hidden = true;
+    if (lastFocus && lastFocus.focus) lastFocus.focus();
+  };
+  if (REDUCED) { done(); return; }
+  gsap.to('#drawer', { xPercent: 100, duration: .24, ease: 'power2.in', onComplete: () => {
+    gsap.set('#drawer', { clearProps: 'transform' });
+    done();
+  } });
+  gsap.to('#scrim', { opacity: 0, duration: .2 });
+}
+
+/* The drawer is a route, not a widget: closing it walks history back so the
+   browser's own Back button and the close button do the same thing. */
+function closeDrawer() {
+  if ($('#drawer').hidden) return;
+  if (drawerFromPush) { drawerFromPush = false; history.back(); }
+  else go('postings');
+}
+
+/* =========================================================================
+   Vocabulary
+   ========================================================================= */
+let selectedConcept = 'skill.kubernetes';
+
+function conceptDetail(key) {
+  const c = conceptOf(key);
+  const pills = (keys, empty) => keys.length
+    ? '<div class="pillrow">' + keys.map((k) => '<button class="pill" data-goto="' + k + '">' + labelOf(k) + '</button>').join('') + '</div>'
+    : '<p class="sub" style="margin:4px 0 0">' + empty + '</p>';
+
+  return '<span class="keyline">' + c.key + '</span>' +
+    '<h2 class="big" style="margin:2px 0 4px">' + c.label + '</h2>' +
+    '<p class="sub">' + c.kind + ' &middot; named by ' + fmt(c.n) + ' postings in the last run' +
+    (c.kind === 'Area' ? ', every one of them through something underneath it' : '') + '.</p>' +
+    (c.note ? '<p class="sub" style="max-width:60ch">' + c.note + '</p>' : '') +
+    '<h4 class="mini">Broader</h4>' + pills(c.broader, 'Nothing above this. It is a root of the graph.') +
+    '<h4 class="mini">Narrower</h4>' + pills(c.narrower, 'Nothing below this. It is a leaf.') +
+    '<h4 class="mini">Related</h4>' + pills(c.related, 'No sideways edges recorded.') +
+    '<h4 class="mini">Why the closure matters</h4>' +
+    '<p class="sub" style="max-width:62ch">A profile holding a narrower concept satisfies a posting asking for a ' +
+    'broader one, and the match breakdown names the relation it used &mdash; Exact, Specialisation, ' +
+    'Generalisation, Implied, Related or Superseded &mdash; rather than claiming an exact hit. That is the whole ' +
+    'reason postings and profiles share one vocabulary: matching becomes a join.</p>';
+}
+
+function conceptList(filterText) {
+  const q = (filterText || '').toLowerCase();
+  return DATA.concepts
+    .filter((c) => !q || c.label.toLowerCase().includes(q) || c.key.includes(q))
+    .map((c) => '<button data-concept="' + c.key + '" class="' + (c.key === selectedConcept ? 'on' : '') + '">' +
+      c.label + '<span class="n">' + fmt(c.n) + '</span></button>').join('');
+}
+
+$('#view-vocabulary').innerHTML = '<div data-sql="The concept graph">' + [
+  '<p class="lede">One vocabulary, <span class="fig">222</span> concepts, shared by every posting and every profile.</p>',
+  '<p class="lede-note">Three passes write assertions that look identical once stored. Separating them is the only ',
+  'way to know whether a claim is the employer&rsquo;s own tagging, a string match, or something a model decided.</p>',
+
+  '<div class="grid">',
+
+  '<div class="card s5"><span class="kicker">The headline</span>',
+  '<h2>' + Math.round(DATA.gradedShare * 100) + '% of assertions carry a strength</h2>',
+  '<p class="sub">Everything else is <em>Unspecified</em>. That share is the number to watch: near zero means the ' +
+  'model pass has not run, and every match is then weighing &ldquo;mentioned once in passing&rdquo; exactly the ' +
+  'same as &ldquo;must have&rdquo;.</p>',
+  splitBar(DATA.polarities),
+  '</div>',
+
+  '<section class="card s7"><span class="kicker">Provenance</span>',
+  '<h2>Where what we know comes from</h2>',
+  '<p class="sub">Share of assertions written in the last run, by the pass that wrote them, in descending order ' +
+  'of trust.</p>',
+  '<div class="split">' + DATA.sources.map((p, i) =>
+    '<i style="flex:' + Math.round(p.share * 100) + ';background:' + SERIES[i] + '"></i>').join('') + '</div>',
+  DATA.sources.map((p, i) =>
+    '<div style="margin-top:16px"><div style="display:flex;align-items:baseline;gap:8px">' +
+    '<i style="width:10px;height:10px;border-radius:2px;background:' + SERIES[i] + ';display:block"></i>' +
+    '<b style="font-size:14px">' + p.name + '</b>' +
+    '<span style="margin-left:auto;font-family:var(--mono);font-size:12.5px;color:var(--ink-2)">' +
+    Math.round(p.share * 100) + '%</span></div>' +
+    '<p class="sub" style="margin:4px 0 0">' + p.note + '</p></div>').join(''),
+  '</section>',
+
+  '<section class="card s12"><span class="kicker">The graph</span>',
+  '<h2>The concept graph</h2>',
+  '<p class="sub">A DAG with a materialised closure. Walk it: every pill below is a live edge.</p>',
+  '<div class="explorer">',
+  '<div><input id="conceptFilter" placeholder="Filter concepts" aria-label="Filter concepts">',
+  '<div class="clist" id="conceptList">' + conceptList() + '</div></div>',
+  '<div id="conceptDetail">' + conceptDetail(selectedConcept) + '</div>',
+  '</div></section>',
+  '</div>'
+].join('') + '</div>';
+
+function selectConcept(key) {
+  if (selectedConcept === key && $('#conceptDetail').innerHTML) {
+    replaceRoute('vocabulary', key);
+    return;
+  }
+  selectedConcept = key;
+  replaceRoute('vocabulary', key);
+  $('#conceptList').innerHTML = conceptList($('#conceptFilter').value);
+  $('#conceptDetail').innerHTML = conceptDetail(key);
+  const on = $('#conceptList button.on');
+  if (on) on.scrollIntoView({ block: 'nearest' });
+  /* On a narrow screen the list sits above the detail, so scrolling the list
+     alone leaves the answer below the fold and the tap looks inert. */
+  if (window.innerWidth <= 780) $('#conceptDetail').scrollIntoView({ block: 'start', behavior: REDUCED ? 'auto' : 'smooth' });
+}
+
+/* =========================================================================
+   Shortlist
+   ========================================================================= */
+let minScore = 40;
+let assessedOnly = false;
+const byScore = DATA.matches.slice().sort((a, b) => b.score - a.score).map((m) => m.id);
+
+function entryHtml(m, rankIndex) {
+  const scorePlace = byScore.indexOf(m.id) + 1;
+  const moved = scorePlace !== rankIndex + 1;
+  return '<article class="entry" data-match="' + m.id + '">' +
+    '<div class="figcol"><div class="score">' + m.score + '</div>' +
+    '<div class="of">ranked <b>' + (rankIndex + 1) + '</b>' + (moved ? ', scores <b>' + scorePlace + '</b>' : '') + '</div></div>' +
+    '<div><button class="title" aria-expanded="false">' + m.title + '</button>' +
+    '<div class="meta"><span>' + m.company + '</span><span class="sep">/</span>' +
+    '<span>' + m.work + '</span><span class="sep">/</span><span>' + m.salary + '</span>' +
+    verdictStamp(m) +
+    (m.unmet ? '<span class="stamp warn">' + m.unmet + ' unmet</span>' : '') +
+    '<span class="stamp">' + Math.round(m.coverage * 100) + '% assessed</span>' +
+    (m.arrived ? '<span class="stamp on">new ' + m.arrived + '</span>' : '') +
+    (m.changed ? '<span class="stamp on">verdict changed</span>' : '') +
+    '<button class="dismiss" data-dismiss="' + m.id + '">Not for me</button>' +
+    '</div>' +
+    (m.changed ? '<p class="sub" style="margin:8px 0 0">' + m.changed + '</p>' : '') +
+    '<div class="expand" style="height:0"><div class="expand-inner">' + matchDetail(m) + '</div></div></div></article>';
+}
+
+/* CandidacyVerdict is Weak | Possible | Strong | Unknown. Unknown is a
+   judgement that came back inconclusive, and null is no judgement at all;
+   collapsing them loses the distinction the enum exists to carry. */
+function verdictStamp(m) {
+  if (m.verdict === null) return '<span class="stamp">not judged yet</span>';
+  if (m.verdict === 'Unknown') return '<span class="stamp">judged inconclusive</span>';
+  const cls = m.verdict === 'Strong' ? 'good' : m.verdict === 'Weak' ? 'warn' : '';
+  return '<span class="stamp ' + cls + '">' + m.verdict + '</span>';
+}
+
+const RELATION_NOTE = {
+  Exact: 'the same concept', Specialisation: 'you hold something more specific',
+  Generalisation: 'you hold something broader', Implied: 'implied by what you hold',
+  Related: 'comparable, not equivalent', Superseded: 'you hold the successor'
+};
+
+function matchDetail(m) {
+  const maxW = Math.max(...m.axes.map((a) => a[2]));
+  return '<div class="two"><div><h4 class="mini">How the score was reached</h4>' +
+    '<p class="sub" style="margin-top:0">Bar length is how much each axis weighs; the fill is how well it scored.</p>' +
+    '<div class="axes">' +
+    m.axes.map(([nm, v, w]) => w === 0
+      ? '<div class="ax dropped"><span class="nm">' + nm + '</span><span class="tr"></span>' +
+        '<span class="vl">dropped</span></div>'
+      : '<div class="ax"><span class="nm">' + nm + '</span>' +
+        '<span class="tr" style="width:' + (w / maxW * 100) + '%"><i class="fl" style="width:' + v + '%"></i></span>' +
+        '<span class="vl">' + v + '% &times; ' + w.toFixed(2) + '</span></div>').join('') +
+    '</div><p class="sub" style="margin-top:12px">An axis the advert says nothing about is dropped and the ' +
+    'remaining weights renormalised, never scored zero &mdash; a zero would show a penalty that was never applied.</p>' +
+    (m.relations.length ? '<h4 class="mini">How your concepts satisfied theirs</h4><ul class="tight">' +
+      m.relations.map(([mine, theirs, rel]) =>
+        '<li><b>' + mine + '</b> &rarr; ' + theirs + ' &mdash; ' + rel + ', ' + RELATION_NOTE[rel] + '</li>').join('') +
+      '</ul>' : '') +
+    '</div>' +
+    '<div>' + (m.verdict !== null
+      ? '<h4 class="mini">What the model said</h4><p class="quote">' + m.rationale + '</p>' +
+        (m.strengths.length ? '<h4 class="mini">Lands well</h4><ul class="tight">' + m.strengths.map((x) => '<li>' + x + '</li>').join('') + '</ul>' : '') +
+        (m.gaps.length ? '<h4 class="mini">Worth knowing</h4><ul class="tight">' + m.gaps.map((x) => '<li>' + x + '</li>').join('') + '</ul>' : '')
+      : '<h4 class="mini">What the model said</h4><p class="quote">Not judged yet. Each night the budget is split ' +
+        'thirty from the top of the ranking and ten drawn evenly across the score bands, so a mid-scoring advert ' +
+        'is reached on its own account rather than waiting behind every higher number.</p>') +
+    '<div class="row-actions"><button class="action">Write CV and cover letter</button>' +
+    '<button class="quiet">Open the advert</button></div></div></div>';
+}
+
+/* Dismissal is the write this list cannot work without. 248 roles clear the
+   threshold; with no way to say no, yesterday's rejects are back at the top
+   tomorrow and the list gets worse every day it is used. */
+const dismissed = new Set();
+let showDismissed = false;
+let lastDismissed = null;
+
+function visibleMatches() {
+  return DATA.matches.filter((m) =>
+    m.score >= minScore &&
+    (!assessedOnly || m.verdict !== null) &&
+    (showDismissed ? dismissed.has(m.id) : !dismissed.has(m.id)));
+}
+
+function renderShortlist() {
+  const rows = visibleMatches();
+  $('#shortlistBody').innerHTML = rows.length
+    ? rows.map(entryHtml).join('')
+    : '<div class="empty">' + (showDismissed
+        ? 'Nothing dismissed yet.'
+        : 'Nothing above ' + minScore + (assessedOnly ? ' that the model has judged' : '') +
+          '. Matches are computed nightly, so a profile saved today is scored tomorrow morning.') + '</div>';
+
+  const n = dismissed.size;
+  const toggle = $('#dismissToggle');
+  if (toggle) {
+    toggle.textContent = showDismissed ? 'Back to the shortlist' : 'Dismissed (' + n + ')';
+    toggle.hidden = n === 0 && !showDismissed;
+  }
+}
+
+function dismiss(id) {
+  const m = DATA.matches.find((x) => x.id === id);
+  const el = $('.entry[data-match="' + id + '"]');
+  dismissed.add(id);
+  lastDismissed = id;
+
+  $('#undoText').innerHTML = 'Dismissed <b>' + m.title + '</b> at ' + m.company +
+    '. Tonight&rsquo;s sweep will spend its judgement budget elsewhere and this role will not come back tomorrow.';
+  $('#undoBar').hidden = false;
+
+  if (REDUCED || !el) { renderShortlist(); return; }
+  gsap.set(el, { overflow: 'hidden' });
+  gsap.to(el, {
+    height: 0, opacity: 0, paddingTop: 0, paddingBottom: 0, borderBottomWidth: 0,
+    duration: .3, ease: 'power2.inOut', onComplete: renderShortlist
+  });
+}
+
+function undoDismiss() {
+  if (lastDismissed == null) return;
+  dismissed.delete(lastDismissed);
+  lastDismissed = null;
+  $('#undoBar').hidden = true;
+  renderShortlist();
+}
+
+/* The landing page. The lede is the day's decisions rather than a report on a
+   corpus the reader is not in: three arrivals, a changed verdict, two unsent
+   drafts and an employer that has gone quiet, each one a way into the thing it
+   names. The market statistics moved to a page you open on purpose. */
+const arrivals = DATA.matches.filter((m) => m.arrived).length;
+const changedVerdicts = DATA.matches.filter((m) => m.changed).length;
+const quiet = DATA.submissions.filter((a) => a.stale);
+
+$('#view-shortlist').innerHTML = '<div data-sql="Your shortlist">' + [
+  '<p class="lede"><button class="fig" data-go="shortlist">' + arrivals + '</button> roles arrived above your ',
+  'line overnight and <button class="fig" data-go="shortlist">' + changedVerdicts + '</button> the model has ',
+  'changed its mind about. <button class="fig" data-go="applications">' + DATA.drafts.length + '</button> drafts ',
+  'are written and unsent, and ' + quiet[0].company + ' has said nothing for ',
+  '<button class="fig warn" data-go="applications">' + quiet[0].days + ' days</button>.</p>',
+
+  '<p class="lede-note">Ordered by overall fit, not by the number on the left &mdash; the score orders the corpus ',
+  'well and inverts inside its own top band, so each entry says where it ranks and where it would have sat on ',
+  'score alone. Scored against the corpus as it stood ' + S.sweepHoursAgo + ' hours ago; ' + fmt(S.newSinceSweep) +
+  ' postings have arrived since and are in tonight&rsquo;s sweep, not this list. One column the scraper tracks ',
+  'came back empty this morning &mdash; <button class="fig warn" data-go="briefing">see Briefing</button>.</p>',
+
+  '<div class="undobar" id="undoBar" hidden><span id="undoText"></span>',
+  '<button class="quiet" id="undoBtn" style="margin-left:auto">Undo</button></div>',
+
+  '<div class="filters" style="grid-template-columns:repeat(3,minmax(0,1fr))">',
+  '<label><span class="lbl">Minimum score <span id="minOut" style="color:var(--accent)">40</span></span>',
+  '<input type="range" id="minScore" min="0" max="90" step="5" value="40"></label>',
+  '<label><span class="lbl">Assessment</span><select id="assessed"><option>All roles</option>',
+  '<option>Only roles the model has judged</option></select></label>',
+  '<div class="field"><span class="lbl">Dismissed</span>',
+  '<button class="quiet" id="dismissToggle" hidden>Dismissed (0)</button></div>',
+  '</div>',
+  '<div id="shortlistBody"></div>'
+].join('') + '</div>';
+
+/* =========================================================================
+   Applications
+   ========================================================================= */
+function appHtml(a) {
+  return '<div class="app"><div class="head"><h4>' + a.title + '</h4><span class="co">' + a.company + '</span>' +
+    '<span class="right">' +
+    (a.stale ? '<span class="stamp warn">quiet ' + a.days + ' days</span>'
+      : '<span class="stamp">' + a.days + ' days ago</span>') +
+    '<span class="stamp ' + (a.closed ? '' : 'good') + '">' + a.phase + '</span></span></div>' +
+    (a.stale ? '<p class="sub" style="margin:8px 0 0">No event for a fortnight. Derived from the log rather than ' +
+      'stored as a column, so it changes the moment anything arrives.</p>' : '') +
+    '<ul class="log">' + a.events.map(([when, what, who]) =>
+      '<li><span class="when">' + when + '</span><span>' + what + '</span><span class="who">' + who + '</span></li>').join('') +
+    '</ul></div>';
+}
+
+const URL_SOURCE = {
+  Posting: 'the apply link the board published for this posting',
+  MatchedOnAnotherBoard: 'an apply link recovered from the same role on another board &mdash; an inference, not a published fact',
+  BoardPosting: 'the board listing itself; no employer link was published'
+};
+
+$('#view-applications').innerHTML = '<div data-sql="Your applications">' + [
+  '<p class="lede">Four applications sent, <span class="fig warn">1</span> gone quiet, and ',
+  '<span class="fig">2</span> drafts waiting on you.</p>',
+  '<p class="lede-note">The status is a fold over the event log and staleness is derived from it, never stored. ',
+  'The platform records what was sent; it never sends anything itself.</p>',
+
+  '<div class="appgroup"><h3>Not sent yet &middot; drafted and waiting</h3>' +
+  DATA.drafts.map((d) =>
+    '<div class="app"><div class="head"><h4>' + d.title + '</h4><span class="co">' + d.company + '</span>' +
+    '<span class="right"><span class="stamp">' + d.written + '</span>' +
+    '<span class="stamp">revision ' + d.revision + '</span>' +
+    '<button class="quiet">Read the draft</button>' +
+    '<button class="quiet">Download PDF</button>' +
+    '<button class="action">Record as sent</button></span></div>' +
+    '<p class="sub" style="margin:8px 0 0">Goes to ' + d.channel + ', via ' + URL_SOURCE[d.urlSource] + '. ' +
+    'Recording it writes one event; it does not submit anything.</p></div>').join('') + '</div>',
+
+  ['Live', 'Closed'].map((g) =>
+    '<div class="appgroup"><h3>' + g + '</h3>' +
+    DATA.submissions.filter((x) => x.group === g).map(appHtml).join('') + '</div>').join('')
+].join('') + '</div>';
+
+/* =========================================================================
+   Profile
+   ========================================================================= */
+const P = DATA.profile;
+const field = (label, value, hint, type) =>
+  '<label class="field"><span class="lbl">' + label + '</span>' +
+  (type === 'area' ? '<textarea>' + esc(value) + '</textarea>' : '<input value="' + esc(value) + '">') +
+  (hint ? '<span class="hint">' + hint + '</span>' : '') + '</label>';
+
+const itemHtml = (it) =>
+  '<div class="item"><div class="head"><h4>' + it.role + '</h4><span class="co">' + it.company + '</span>' +
+  '<span class="when">' + it.when + '</span></div>' +
+  (it.text ? '<p class="sub" style="margin:8px 0 0">' + it.text + '</p>' : '') + '</div>';
+
+$('#view-profile').innerHTML = '<div data-sql="Your profile">' + [
+  '<p class="lede">Form-filled, not an uploaded CV. Every box here is read into the same concepts a posting is.</p>',
+  '<p class="lede-note">A save is a replace, not a merge, and it changes the text the extractor reads: your 248 ' +
+  'scored matches are recomputed tonight and the 61 model judgements are cleared. That is the cost of editing ' +
+  'this page, and it is worth knowing before you delete a job.</p>',
+
+  '<div class="grid">',
+  '<section class="card s6"><span class="kicker">Identity</span><h2>About you</h2>',
+  '<p class="sub">Only what an application needs. Nothing here reaches an employer without you sending it.</p>',
+  '<div class="form">' + field('Name', P.name) + field('Headline', P.headline) +
+  field('Where you are', P.where) + field('Right to work', P.rtw) + '</div></section>',
+
+  '<section class="card s6"><span class="kicker">Constraints</span><h2>What you are looking for</h2>',
+  '<p class="sub">Used to score every posting against you, and the reason a good role in the wrong city scores low.</p>',
+  '<div class="form">' + field('Working arrangement', P.arrangement) +
+  field('Most days in an office', String(P.maxDaysInOffice), 'The difference between hybrid scoring 100 and 40') +
+  field('Salary floor', money(P.floor), 'Below this the salary axis loses, not the whole score') +
+  field('Notice period', P.notice) + '</div></section>',
+
+  '<section class="card s12"><span class="kicker">The richest input there is</span><h2>Experience</h2>',
+  '<p class="sub">What you did, in your own words. It is read for skills and rewritten into tailored bullet points ' +
+  'when an application is generated, so vague entries cost you twice.</p>',
+  P.experience.map(itemHtml).join('') +
+  '<div class="row-actions"><button class="quiet">Add a role</button></div></section>',
+
+  '<section class="card s6"><span class="kicker">Formal</span><h2>Education</h2>',
+  '<p class="sub">Matched against qualification requirements, which behave differently from skills: they cannot ' +
+  'be picked up before an application closes.</p>',
+  P.education.map(itemHtml).join('') + '</section>',
+
+  '<section class="card s6"><span class="kicker">Kept separate on purpose</span><h2>Projects</h2>',
+  '<p class="sub">A posting&rsquo;s requirements match against these just as well as against employment, and for ' +
+  'some people this is the stronger half.</p>',
+  P.projects.map(itemHtml).join('') + '</section>',
+
+  '<section class="card s6"><span class="kicker">Credentials</span><h2>Certifications</h2>',
+  '<p class="sub">Some adverts name one explicitly. Where they do, it scores as an exact hit rather than as evidence.</p>',
+  P.certifications.map(itemHtml).join('') + '</section>',
+
+  '<section class="card s6"><span class="kicker">Public</span><h2>Links</h2>',
+  '<p class="sub">Included verbatim in generated documents.</p>',
+  '<div class="chips">' + P.links.map((l) =>
+    '<span class="chip"><b>' + l + '</b><button aria-label="Remove ' + l + '">&times;</button></span>').join('') + '</div>',
+  '<div class="row-actions"><button class="quiet">Add a link</button></div></section>',
+
+  '<section class="card s6"><span class="kicker">Declared</span><h2>Skills you entered</h2>',
+  '<p class="sub">Concept keys from the shared vocabulary, so a claim here and a requirement in an advert are the ' +
+  'same thing rather than two spellings of it.</p>',
+  '<div class="chips">' + P.declared.map(([k, level]) =>
+    '<span class="chip"><b>' + labelOf(k) + '</b><span class="keyline">' + level + '</span>' +
+    '<button aria-label="Remove ' + labelOf(k) + '">&times;</button></span>').join('') + '</div>',
+  '<div class="row-actions"><button class="quiet">Add a skill</button></div></section>',
+
+  '<section class="card s6"><span class="kicker">Extracted</span><h2>Skills read out of your prose</h2>',
+  '<p class="sub">What the extractor inferred about you, with the phrase it read each one from. This is the half ' +
+  'worth checking: an inference you disagree with is scoring against every posting until you remove it.</p>',
+  P.extracted.map(([k, phrase]) =>
+    '<div class="assertion"><div class="top"><span class="lab">' + labelOf(k) + '</span>' +
+    '<span class="src">Model</span>' +
+    '<button class="pill" style="margin-left:auto">Remove</button></div>' +
+    (phrase ? '<div class="ev">&ldquo;' + phrase + '&rdquo;</div>'
+      : '<div class="ev none">No phrase recorded. An inference with nothing behind it is the one to look at first.</div>') +
+    '</div>').join(''),
+  '</section>',
+
+  '<section class="card s12"><h2>Saving</h2>',
+  '<p class="sub">A save replaces the whole profile. Matches are re-scored on tonight&rsquo;s sweep.</p>',
+  '<div class="row-actions"><button class="action">Save profile</button>' +
+  '<button class="quiet">Discard changes</button></div></section>',
+  '</div>'
+].join('') + '</div>';
+
+/* =========================================================================
+   Searches
+   ========================================================================= */
+$('#view-searches').innerHTML = '<div data-sql="Your searches">' + [
+  '<p class="lede">Three searches, and the scraper rebuilds its configuration from these rather than the other way round.</p>',
+  '<p class="lede-note">This is the page to open when nothing has been scraped yet: it waits on nothing, because ' +
+  'it is about your configuration rather than about the corpus. A failed publish does not fail the save &mdash; ' +
+  'the timestamp below is the record, and republishing is the retry.</p>',
+
+  '<div class="grid"><section class="card s12"><span class="kicker">Configured</span><h2>Your searches</h2>',
+  '<p class="sub">A search is a term, a place and a set of boards. The slug is shown because it is the blob name, ' +
+  'the metrics partition key and the curated Parquet partition &mdash; without it the two views cannot be ' +
+  'reconciled by the person looking at them.</p>',
+  DATA.searches.map((s, i) =>
+    '<div class="search-row">' +
+    '<button class="switch" role="switch" aria-checked="' + s.on + '" data-switch="' + i + '" ' +
+    'aria-label="Enable ' + s.term + '"><i></i></button>' +
+    '<div style="flex:1;min-width:220px"><h4>' + s.term + '</h4>' +
+    '<span class="keyline">' + s.slug + '</span>' +
+    '<div class="sub" style="margin:4px 0 8px">' + s.where + ' &middot; last run ' + s.last +
+    ' &middot; ' + s.hoursOld + 'h window &middot; up to ' + s.wanted + ' results' +
+    (s.on ? '' : ' &middot; disabled, so it costs nothing on the next run') + '</div>' +
+    '<div class="chips" style="margin:0">' + s.boards.map((b) => '<span class="chip">' + b + '</span>').join('') +
+    (s.published
+      ? '<span class="stamp good">published ' + s.publishedUtc + '</span>'
+      : '<span class="stamp warn">not published since ' + s.publishedUtc + '</span>') +
+    '</div></div>' +
+    '<div style="text-align:right;flex:none"><div style="font-family:var(--mono);font-size:19px;' +
+    'font-variant-numeric:tabular-nums">' + fmt(s.rows) + '</div>' +
+    '<span class="keyline">rows last run</span></div></div>').join(''),
+  '<div class="row-actions"><button class="action">Add a search</button>',
+  '<button class="quiet">Republish the scraper configuration</button></div>',
+  '<p class="sub" style="margin-top:16px">One search is not published: the last write to blob storage failed and ' +
+  'the save succeeded anyway. Until it publishes, the NAS runs the previous configuration.</p>',
+  '</section>',
+
+  '<section class="card s7"><span class="kicker">New search</span><h2>Add one</h2>',
+  '<p class="sub">It takes effect on the next scheduled run. There is no coalescing and no cap: a run costs the ' +
+  'sum of every enabled search, so the window and the result count are the two dials that decide the bill.</p>',
+  '<div class="form">',
+  '<label class="field"><span class="lbl">Term</span><input placeholder="e.g. site reliability engineer"></label>',
+  '<label class="field"><span class="lbl">Where</span><input placeholder="United Kingdom"></label>',
+  '<label class="field"><span class="lbl">Window, hours</span><input type="number" value="72"></label>',
+  '<label class="field"><span class="lbl">Results wanted</span><input type="number" value="250"></label>',
+  '<label class="field wide"><span class="lbl">Boards</span><div class="chips" style="margin-top:0">' +
+  DATA.sites.map((s, i) => '<span class="chip"><b>' + s.name + '</b>' +
+    (i < 3 ? '<span class="stamp on">on</span>' : '<span class="stamp">off</span>') + '</span>').join('') + '</div></label>',
+  '</div><div class="row-actions"><button class="action">Add search</button></div></section>',
+
+  '<section class="card s5"><span class="kicker">Remote preference</span><h2>Three states, not two</h2>',
+  '<p class="sub">Remote is left unset by default. Unset means no preference, which is not the same as asking ' +
+  'the board for non-remote roles &mdash; and the boards treat those two requests very differently.</p>',
+  '<div class="chips"><span class="chip"><b>No preference</b><span class="stamp on">current</span></span>' +
+  '<span class="chip">Remote only</span><span class="chip">Exclude remote</span></div></section>',
+  '</div>'
+].join('') + '</div>';
+
+/* =========================================================================
+   Model calls
+   ========================================================================= */
+const T = DATA.callTotals;
+$('#view-calls').innerHTML = [
+  '<p class="lede">Forty-one calls today. <span class="fig warn">' + T.discarded + '</span> answers were paid for ',
+  'and thrown away.</p>',
+  '<p class="lede-note">There is no money on this page. The ledger records tokens, no unit price is stored ',
+  'anywhere in the system, and a pound figure would be a number this dashboard invented. Discards are the ',
+  'number worth watching instead: a batch can report success and still lose most of its work.</p>',
+
+  '<div class="band">',
+  figure('Calls today', fmt(T.calls), T.succeeded + ' clean, ' + T.partial + ' partial, ' + T.failed + ' failed'),
+  figure('Answers discarded', String(T.discarded), 'requested, returned, and dropped on the floor'),
+  figure('Tokens', '1.24M', fmt(T.reasoning / 1000) + 'k of them reasoning'),
+  figure('Median latency', '5.1s', 'extraction batches, ten postings to a call'),
+  '</div>',
+
+  '<div class="grid"><section class="card s12"><span class="kicker">Ledger</span><h2>Model calls</h2>',
+  '<p class="sub">Last seven days. A partially discarded call succeeded and still lost work, which is exactly the ' +
+  'state that used to be invisible &mdash; the affected postings are named so the work can be re-run.</p>',
+  '<div class="scroll-x"><table><thead><tr><th scope="col" class="num">Time</th><th scope="col">Purpose</th>',
+  '<th scope="col">Model</th><th scope="col" class="num">Items</th><th scope="col" class="num">Tokens</th>',
+  '<th scope="col" class="num">Discarded</th><th scope="col" class="num">Latency</th>',
+  '<th scope="col">Outcome</th></tr></thead><tbody>' +
+  DATA.calls.map((c) =>
+    '<tr><td class="num">' + c.t + '</td><td>' + c.purpose + '</td>' +
+    '<td><code>' + c.model + '</code></td><td class="num">' + c.items + '</td>' +
+    '<td class="num">' + fmt(c.tok) + '</td>' +
+    '<td class="num">' + (c.discarded || '—') + '</td>' +
+    '<td class="num">' + (c.ms / 1000).toFixed(2) + 's</td>' +
+    '<td>' + (c.out === 'Succeeded' ? '<span class="stamp good">Succeeded</span>'
+      : c.out === 'Failed' ? '<span class="stamp warn">Failed</span>'
+      : '<span class="stamp warn">Partially discarded</span>') +
+    (c.reason ? '<div class="sub" style="margin:4px 0 0;font-size:12px">' + c.reason + '</div>' : '') +
+    '</td></tr>').join('') +
+  '</tbody></table></div></section>',
+
+  card('s6', 'Two models', 'What each one is for',
+    'Extraction and match assessment run on the cheaper model, ten postings packed into a call. Application ' +
+    'drafting runs on the stronger one, one document at a time, because that output is read by a person.',
+    '<div class="chips"><span class="chip"><b>gpt-5.6-luna</b> extraction, matching</span>' +
+    '<span class="chip"><b>gpt-5.6-sol</b> CVs and cover letters</span></div>'),
+  card('s6', 'Optional', 'What happens with no provider',
+    'Enrichment falls back to the deterministic passes, every match stays unjudged, and the ordering falls back ' +
+    'to the raw score. Nothing breaks; the shortlist just gets quieter and this page stays empty.',
+    '<div class="chips"><span class="chip">Board tagging <b>still runs</b></span>' +
+    '<span class="chip">Taxonomy <b>still runs</b></span><span class="chip">Model <b>skipped</b></span></div>'),
+  '</div>'
+].join('');
+
+/* =========================================================================
+   Motion. Budgeted: the nav marker, the drawer, an expanding entry, and chart
+   marks on first mount. Figures never count up.
+   ========================================================================= */
+const mounted = new Set();
+
+function growMarks(scope, key) {
+  if (REDUCED || mounted.has(key)) return;
+  mounted.add(key);
+  gsap.from(scope.querySelectorAll('.measure i, .split i'), { scaleX: 0, duration: .5, stagger: .03, ease: 'power2.out' });
+  gsap.from(scope.querySelectorAll('.col'), { scaleY: 0, duration: .5, stagger: .025, ease: 'power2.out' });
+}
+
+/* =========================================================================
+   Navigation
+   ========================================================================= */
+const PAGE_LABEL = {};
+SECTIONS.forEach((s) => s.pages.forEach(([id, label]) => { PAGE_LABEL[id] = label; }));
+
+let currentSection = 'you';
+let currentPage = 'shortlist';
+/* Each section remembers the page you left it on. Sending you back to the
+   first page of a section throws away where you were. */
+const lastPageIn = { you: 'shortlist', market: 'briefing', system: 'searches' };
+
+function renderTabs() {
+  const section = SECTIONS.find((s) => s.id === currentSection);
+  $('#pages').innerHTML = '<span class="marker" id="marker"></span>' +
+    section.pages.map(([id, label]) =>
+      '<button data-page="' + id + '" aria-current="' + (id === currentPage ? 'page' : 'false') + '">' + label + '</button>').join('');
+}
+
+/* Both indicators are scaled, not width-animated, and are placed instantly on
+   first paint: an animated width left the selected label white-on-white for
+   the length of the tween. */
+function place(el, btn, container, offset, animate) {
+  if (!el || !btn) return;
+  const r = btn.getBoundingClientRect();
+  const base = container.getBoundingClientRect();
+  const props = { x: r.left - base.left - (offset || 0), scaleX: r.width };
+  if (animate && !REDUCED) gsap.to(el, Object.assign({ duration: .32, ease: 'power3.out' }, props));
+  else gsap.set(el, props);
+}
+
+const placeMarker = (animate) => place($('#marker'), $('#pages button[aria-current="page"]'), $('#pages'), 0, animate);
+const placeThumb = (animate) => place($('#thumb'), $('#sections button[aria-current="true"]'), $('#sections'), 3, animate);
+
+function showPage(page, animate) {
+  const section = SECTIONS.find((s) => s.pages.some(([id]) => id === page));
+  currentSection = section.id;
+  currentPage = page;
+  lastPageIn[section.id] = page;
+
+  $$('#sections button').forEach((b) => b.setAttribute('aria-current', b.dataset.section === currentSection ? 'true' : 'false'));
+  renderTabs();
+  placeThumb(animate);
+  placeMarker(animate);
+  $('#nowLabel').textContent = PAGE_LABEL[page];
+  renderSheet();
+
+  const next = $('#view-' + page);
+  const current = $$('.view').find((v) => !v.hidden);
+  if (current === next) return false;
+
+  if (current) current.hidden = true;
+  next.hidden = false;
+  growMarks(next, page);
+  return true;
+}
+
+/* =========================================================================
+   Routing.
+
+   Every navigation goes through the URL rather than around it, so the address
+   bar and the view cannot disagree. Hash routing here because the mock is
+   opened from a file and from inside an artifact host; the deployed app can
+   use real paths unchanged - staticwebapp.config.json already rewrites
+   navigation and 404s to /index.html, which is exactly what that needs.
+
+   Page changes and opening a posting PUSH. Filter changes and walking the
+   concept graph REPLACE: otherwise Back walks you through every keystroke you
+   typed into a search box.
+   ========================================================================= */
+function parseHash() {
+  const raw = location.hash.replace(/^#\/?/, '');
+  const [path, qs] = raw.split('?');
+  const parts = path.split('/').filter(Boolean);
+  return {
+    page: parts[0] || 'shortlist',
+    id: parts[1] ? decodeURIComponent(parts[1]) : null,
+    params: new URLSearchParams(qs || '')
+  };
+}
+
+function buildHash(page, id, params) {
+  let h = '#/' + page;
+  if (id) h += '/' + encodeURIComponent(id);
+  const q = params ? params.toString() : '';
+  return q ? h + '?' + q : h;
+}
+
+/** Push: a new history entry. Used for anything a Back press should undo. */
+function go(page, id) {
+  const h = buildHash(page, id);
+  if (location.hash === h) applyRoute();
+  else location.hash = h;
+}
+
+/** Replace: same entry, new state. Used for filters and graph walking. */
+function replaceRoute(page, id, params) {
+  history.replaceState(null, '', buildHash(page, id, params));
+}
+
+function postingParams() {
+  const q = new URLSearchParams();
+  Object.entries(filters).forEach(([k, v]) => { if (v) q.set(k, v); });
+  return q;
+}
+
+function readPostingParams(params) {
+  Object.keys(filters).forEach((k) => {
+    filters[k] = params.get(k) || (k === 'sort' ? 'firstSeen' : '');
+  });
+  const set = (id, val) => { const el = $(id); if (el) el.value = val; };
+  set('#f-q', filters.q); set('#f-board', filters.board); set('#f-concept', filters.concept);
+  set('#f-level', filters.level); set('#f-work', filters.work); set('#f-interval', filters.interval);
+  set('#f-salary', filters.minSalary); set('#f-sort', filters.sort);
+}
+
+function shortlistParams() {
+  const q = new URLSearchParams();
+  if (minScore !== 40) q.set('min', String(minScore));
+  if (assessedOnly) q.set('assessed', '1');
+  if (showDismissed) q.set('dismissed', '1');
+  return q;
+}
+
+function readShortlistParams(params) {
+  minScore = params.has('min') ? Number(params.get('min')) : 40;
+  assessedOnly = params.get('assessed') === '1';
+  showDismissed = params.get('dismissed') === '1';
+  const slider = $('#minScore'), out = $('#minOut'), sel = $('#assessed');
+  if (slider) slider.value = String(minScore);
+  if (out) out.textContent = minScore;
+  if (sel) sel.selectedIndex = assessedOnly ? 1 : 0;
+}
+
+function applyRoute() {
+  if (!location.hash) history.replaceState(null, '', '#/shortlist');
+  const r = parseHash();
+  const page = PAGE_LABEL[r.page] ? r.page : 'shortlist';
+  const changed = showPage(page, true);
+
+  if (page === 'postings') { readPostingParams(r.params); renderPostingsTable(); }
+  if (page === 'shortlist') { readShortlistParams(r.params); renderShortlist(); }
+
+  if (page === 'postings' && r.id && DATA.postings.some((x) => String(x.id) === r.id)) openPosting(Number(r.id));
+  else hideDrawer();
+
+  if (page === 'vocabulary' && r.id && conceptOf(r.id)) selectConcept(r.id);
+
+  applyStoreState();
+  if (changed) window.scrollTo({ top: 0 });
+}
+
+window.addEventListener('hashchange', applyRoute);
+
+/* =========================================================================
+   The waking database.
+
+   sqlSku defaults to free-serverless, which auto-pauses when idle and takes up
+   to a minute to come back. The client raises a distinct ApiTimeoutError for
+   exactly this, and a promise that never settles is a spinner with nothing to
+   click - the worst failure this architecture can produce, because pausing is
+   normal here rather than exceptional.
+
+   Metrics and the model-call ledger are Cosmos and stay warm; postings,
+   matches, the profile, searches and submissions are SQL. Degrading per region
+   rather than per page is the whole point of that split: the reason the
+   Briefing reads from Cosmos is so that it still answers when SQL does not.
+   ========================================================================= */
+let sqlAwake = true;
+let sqlWaking = false;
+
+function wakingHtml(label) {
+  if (sqlWaking) {
+    return '<div class="waking" data-busy="1"><h2><span class="spin"></span>Waking the database</h2>' +
+      '<p>' + label + ' will appear as soon as it answers. This usually takes under a minute.</p></div>';
+  }
+  const cosmos = '<div class="cosmos"><p>Metrics are unaffected: they are served from Cosmos, which does not ' +
+    'pause. The corpus was scraped ' + S.scrapedHoursAgo + ' hours ago and ' + fmt(S.newInLastRun) +
+    ' postings arrived in that run. The <a href="#/briefing">Briefing</a> and ' +
+    '<a href="#/calls">Model calls</a> read from Cosmos and still work.</p></div>';
+  return '<div class="waking"><h2>The database did not respond in time</h2>' +
+    '<p>' + label + ' is served from SQL, which pauses when idle and can take up to a minute to wake. If this ' +
+    'was the first request in a while, retrying usually succeeds.</p>' +
+    '<button class="action" data-retry="1">Retry</button>' + cosmos + '</div>';
+}
+
+function applyStoreState() {
+  $$('[data-sql]').forEach((el) => {
+    const prev = el.previousElementSibling;
+    const hasNotice = prev && prev.classList.contains('waking');
+    if (sqlAwake && !sqlWaking) {
+      if (hasNotice) prev.remove();
+      el.hidden = false;
+    } else {
+      if (hasNotice) prev.outerHTML = wakingHtml(el.dataset.sql);
+      else el.insertAdjacentHTML('beforebegin', wakingHtml(el.dataset.sql));
+      el.hidden = true;
+    }
+  });
+  const t = $('#sleepToggle');
+  if (t) t.textContent = sqlAwake ? 'Demo: pause the database' : 'Demo: database paused';
+}
+
+function retrySql() {
+  sqlWaking = true;
+  applyStoreState();
+  setTimeout(() => {
+    sqlWaking = false;
+    sqlAwake = true;
+    applyStoreState();
+    renderPostingsTable();
+    renderShortlist();
+  }, 1800);
+}
+
+$('#sections').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-section]');
+  if (b) go(lastPageIn[b.dataset.section]);
+});
+$('#pages').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-page]');
+  if (b) go(b.dataset.page);
+});
+
+function renderSheet() {
+  $('#sheetBody').innerHTML = SECTIONS.map((s) =>
+    '<section><h3>' + s.label + '</h3>' + s.pages.map(([id, label]) =>
+      '<button class="page" data-page="' + id + '" aria-current="' + (id === currentPage ? 'page' : 'false') + '">' +
+      label + (id === currentPage ? '<span>you are here</span>' : '') + '</button>').join('') + '</section>').join('');
+}
+
+function openSheet() {
+  renderSheet();
+  lastFocus = document.activeElement;
+  $('#sheet').hidden = false;
+  $('#burger').setAttribute('aria-expanded', 'true');
+  $('#sheetClose').focus();
+  if (!REDUCED) gsap.fromTo('#sheet', { opacity: 0, y: -10 }, { opacity: 1, y: 0, duration: .22, ease: 'power3.out' });
+}
+
+function closeSheet() {
+  if ($('#sheet').hidden) return;
+  $('#sheet').hidden = true;
+  $('#burger').setAttribute('aria-expanded', 'false');
+  $('#burger').focus();
+}
+
+$('#burger').onclick = openSheet;
+$('#sheetClose').onclick = closeSheet;
+$('#sheetBody').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-page]');
+  if (!b) return;
+  closeSheet();
+  go(b.dataset.page);
+});
+
+/* =========================================================================
+   Interaction
+   ========================================================================= */
+document.addEventListener('click', (e) => {
+  const row = e.target.closest('tr[data-posting]');
+  if (row) { drawerFromPush = true; go('postings', row.dataset.posting); return; }
+
+  if (e.target.id === 'sleepToggle') {
+    sqlAwake = !sqlAwake;
+    sqlWaking = false;
+    applyStoreState();
+    return;
+  }
+  if (e.target.closest('[data-retry]')) { retrySql(); return; }
+
+  const concept = e.target.closest('[data-concept], [data-goto]');
+  if (concept) { selectConcept(concept.dataset.concept || concept.dataset.goto); return; }
+
+  const sw = e.target.closest('[data-switch]');
+  if (sw) {
+    const on = sw.getAttribute('aria-checked') === 'true';
+    sw.setAttribute('aria-checked', String(!on));
+    gsap.to(sw.querySelector('i'), { x: on ? 0 : 18, duration: REDUCED ? 0 : .2, ease: 'power2.out' });
+    return;
+  }
+
+  const drop = e.target.closest('[data-dismiss]');
+  if (drop) { dismiss(Number(drop.dataset.dismiss)); return; }
+
+  if (e.target.id === 'undoBtn') { undoDismiss(); return; }
+
+  if (e.target.id === 'dismissToggle') {
+    showDismissed = !showDismissed;
+    renderShortlist();
+    replaceRoute('shortlist', null, shortlistParams());
+    return;
+  }
+
+  const jump = e.target.closest('[data-go]');
+  if (jump) { go(jump.dataset.go); return; }
+
+  const title = e.target.closest('.entry .title');
+  if (title) toggleEntry(title.closest('.entry'), title);
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { closeDrawer(); closeSheet(); }
+  const row = e.target.closest && e.target.closest('tr[data-posting]');
+  if (row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); drawerFromPush = true; go('postings', row.dataset.posting); }
+});
+
+function toggleEntry(art, btn) {
+  const box = art.querySelector('.expand');
+  const open = btn.getAttribute('aria-expanded') === 'true';
+  btn.setAttribute('aria-expanded', open ? 'false' : 'true');
+  const target = open ? 0 : box.firstElementChild.offsetHeight;
+  if (REDUCED) { box.style.height = target + 'px'; return; }
+  gsap.to(box, { height: target, duration: .34, ease: 'power2.inOut' });
+}
+
+document.addEventListener('input', (e) => {
+  const id = e.target.id;
+  if (id === 'f-q') { filters.q = e.target.value; renderPostingsTable(); replaceRoute('postings', null, postingParams()); }
+  if (id === 'f-salary') { filters.minSalary = e.target.value; renderPostingsTable(); replaceRoute('postings', null, postingParams()); }
+  if (id === 'conceptFilter') $('#conceptList').innerHTML = conceptList(e.target.value);
+  if (id === 'minScore') {
+    minScore = Number(e.target.value);
+    $('#minOut').textContent = minScore;
+    renderShortlist();
+    replaceRoute('shortlist', null, shortlistParams());
+  }
+});
+
+document.addEventListener('change', (e) => {
+  const map = { 'f-board': 'board', 'f-concept': 'concept', 'f-level': 'level', 'f-work': 'work',
+    'f-interval': 'interval', 'f-sort': 'sort' };
+  if (map[e.target.id]) {
+    filters[map[e.target.id]] = e.target.value;
+    renderPostingsTable();
+    replaceRoute('postings', null, postingParams());
+  }
+  if (e.target.id === 'assessed') {
+    assessedOnly = e.target.selectedIndex === 1;
+    renderShortlist();
+    replaceRoute('shortlist', null, shortlistParams());
+  }
+  if (e.target.id === 'theme' || e.target.id === 'theme2') {
+    const v = e.target.value;
+    if (v === 'system') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', v);
+    const other = $(e.target.id === 'theme' ? '#theme2' : '#theme');
+    if (other) other.value = v;
+  }
+});
+
+$('#scrim').onclick = closeDrawer;
+
+/* =========================================================================
+   Load
+   ========================================================================= */
+renderPostingsTable();
+renderShortlist();
+$$('[data-switch]').forEach((sw) => {
+  gsap.set(sw.querySelector('i'), { x: sw.getAttribute('aria-checked') === 'true' ? 18 : 0 });
+});
+
+applyRoute();
+placeThumb(false);
+placeMarker(false);
+growMarks($('#view-' + currentPage), currentPage);
+
+if (document.fonts && document.fonts.ready) {
+  document.fonts.ready.then(() => { placeThumb(false); placeMarker(false); });
+}
+window.addEventListener('resize', () => { placeThumb(false); placeMarker(false); });
+</script>

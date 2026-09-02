@@ -13,26 +13,6 @@ body {
 
 .app { min-height: 100vh; display: flex; flex-direction: column; }
 
-.topbar {
-  display: flex; align-items: center; gap: 16px;
-  padding: 12px 20px;
-  background: var(--surface-1);
-  border-bottom: 1px solid var(--border);
-  position: sticky; top: 0; z-index: 10;
-  flex-wrap: wrap;
-}
-.topbar h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
-.topbar .spacer { flex: 1; }
-
-.nav { display: flex; gap: 4px; }
-.nav button {
-  border: 0; background: transparent; color: var(--text-secondary);
-  padding: 6px 12px; border-radius: var(--radius); cursor: pointer;
-  font: inherit; font-size: 13px;
-}
-.nav button:hover { background: var(--gridline); color: var(--text-primary); }
-.nav button[aria-current="page"] { background: var(--gridline); color: var(--text-primary); font-weight: 600; }
-
 .btn {
   border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
   padding: 6px 12px; border-radius: var(--radius); cursor: pointer; font: inherit; font-size: 13px;
@@ -386,3 +366,773 @@ button.pill:hover { background: var(--gridline); }
   border-radius: 999px;
   background: var(--series-1);
 }
+
+/* ===========================================================================
+   The redesigned shell.
+
+   Added alongside the existing component styles rather than replacing them:
+   the pages are being rewritten a section at a time, and swapping the whole
+   stylesheet under nine live pages would break eight of them to fix one. The
+   old blocks above come out as their pages go.
+   =========================================================================== */
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--t-body);
+  line-height: 1.6;
+}
+
+/* One micro-label, used everywhere. There were twelve near-identical
+   definitions in the mock across four sizes and four trackings; below 11px an
+   uppercase mono cap-height drops under 8px, which is where the contrast
+   failures were. */
+.kicker,
+.sectionbar .now,
+.dateline,
+.result-count {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.kicker,
+.sectionbar .now {
+  text-transform: uppercase;
+}
+
+/* Chrome ------------------------------------------------------------------ */
+.chrome {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--page);
+  border-bottom: 1px solid var(--border);
+}
+
+.chrome .wrap {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 var(--s5);
+}
+
+.sectionbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s5);
+  padding: var(--s4) 0 0;
+}
+
+h1.mark {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 22px;
+  margin: 0;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+h1.mark span {
+  color: var(--text-muted);
+}
+
+/* The section pill. Three words, so it survives a narrow viewport intact. */
+.sections {
+  position: relative;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.sections button {
+  position: relative;
+  z-index: 1;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--t-small);
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 7px 16px;
+  border-radius: 999px;
+  min-height: 32px;
+}
+
+.sections button:hover { color: var(--text-primary); }
+.sections button[aria-current="true"] { color: var(--on-ink); }
+
+.sections .thumb {
+  position: absolute;
+  z-index: 0;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: 1px;
+  background: var(--text-primary);
+  border-radius: 999px;
+  transform-origin: left center;
+}
+
+.sectionbar .right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+}
+
+.dateline { text-align: right; line-height: 1.35; }
+.dateline b { color: var(--text-secondary); font-weight: 400; }
+/* An age past a day is the whole point of showing an age. */
+.dateline b.stale { color: var(--oxide); }
+
+/* Page tabs, under the section. Three at a time, so the row never overflows. */
+nav.pages {
+  display: flex;
+  gap: var(--s5);
+  position: relative;
+  margin-top: var(--s1);
+}
+
+nav.pages button {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--t-body-2);
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 10px 0 12px;
+  white-space: nowrap;
+}
+
+nav.pages button:hover { color: var(--text-primary); }
+nav.pages button[aria-current="page"] { color: var(--text-primary); }
+
+nav.pages .marker {
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 1px;
+  height: 2px;
+  background: var(--seq-450);
+  transform-origin: left center;
+}
+
+.burger {
+  display: none;
+  margin-left: auto;
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  border-radius: 999px;
+  width: 44px;
+  height: 44px;
+  cursor: pointer;
+  position: relative;
+}
+
+.burger i {
+  position: absolute;
+  left: 13px;
+  width: 18px;
+  height: 1.5px;
+  background: var(--text-primary);
+  border-radius: 2px;
+  display: block;
+}
+
+.burger i:nth-child(1) { top: 16px; }
+.burger i:nth-child(2) { top: 21px; }
+.burger i:nth-child(3) { top: 26px; }
+
+.sectionbar .now { display: none; margin-left: var(--s3); }
+
+@media (max-width: 860px) {
+  .sections,
+  nav.pages,
+  .sectionbar .right { display: none; }
+
+  .burger { display: block; }
+  .sectionbar { padding: var(--s3) 0; }
+  h1.mark { font-size: var(--t-lede); }
+  .sectionbar .now { display: block; }
+}
+
+@media (max-width: 460px) {
+  .sectionbar .now { display: none; }
+}
+
+@media (max-width: 620px) {
+  .chrome .wrap { padding: 0 var(--s4); }
+}
+
+/* The mobile sheet: the whole navigation, as three headed groups rather than
+   eight tabs squeezed into a row that scrolls sideways. */
+.sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--page);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--s5) var(--s4) var(--s7);
+}
+
+.sheet .head {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  margin-bottom: var(--s5);
+}
+
+.sheet .close {
+  margin-left: auto;
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--text-primary);
+  border-radius: 999px;
+  width: 44px;
+  height: 44px;
+  font-size: 20px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.sheet section { margin-bottom: var(--s5); }
+
+.sheet h2 {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 400;
+  margin: 0 0 var(--s1);
+  padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--border);
+}
+
+.sheet button.page {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-display);
+  font-size: var(--t-display);
+  font-weight: 400;
+  color: var(--text-primary);
+  padding: 10px 0;
+  cursor: pointer;
+  letter-spacing: -0.01em;
+  min-height: 44px;
+}
+
+.sheet button.page[aria-current="page"] { color: var(--seq-450); }
+
+.sheet button.page span {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  color: var(--text-muted);
+  margin-left: var(--s2);
+}
+
+.sheet .controls {
+  display: flex;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  padding-top: var(--s2);
+}
+
+/* Waking, and the buttons the shell needs ---------------------------------- */
+.waking {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--oxide);
+  border-radius: 2px;
+  background: var(--surface-1);
+  padding: var(--s5);
+  margin-bottom: var(--s4);
+}
+
+.waking h2 {
+  font-size: var(--t-title);
+  font-weight: 600;
+  margin: 0 0 var(--s2);
+}
+
+.waking p {
+  font-size: var(--t-small);
+  color: var(--text-secondary);
+  margin: 0 0 var(--s3);
+  max-width: 62ch;
+}
+
+.waking .waking-aside {
+  border-top: 1px solid var(--gridline);
+  padding-top: var(--s3);
+  margin: var(--s3) 0 0;
+  color: var(--text-muted);
+}
+
+.btn.primary {
+  background: var(--seq-450);
+  border-color: var(--seq-450);
+  color: var(--on-ink);
+}
+
+.btn.primary:hover { filter: brightness(1.1); }
+
+/* A button that reads as a link, for prose. Not an anchor: it navigates within
+   the app, and an href the router would have to intercept is a link that opens
+   a new tab on middle-click into a page with no state. */
+.linkish {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--seq-450);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.linkish:hover { text-decoration-thickness: 2px; }
+
+/* ===========================================================================
+   Redesigned pages. The lede, the entry, and the marks that are CSS rather
+   than a chart - a rank bar and a split bar were never Recharts and drawing
+   them with it would be a library call to lay out three divs.
+   =========================================================================== */
+
+.stack { display: flex; flex-direction: column; }
+
+/* The lede: what needs deciding, as a sentence. Newsreader earns its place at
+   this size and at the two hero numerals, and nowhere below 20px - smaller than
+   that it is just a serif with less stem weight. */
+.lede {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: var(--t-lede);
+  line-height: 1.5;
+  letter-spacing: -0.005em;
+  max-width: 46ch;
+  margin: var(--s6) 0 var(--s2);
+  text-wrap: pretty;
+}
+
+@media (min-width: 700px) { .lede { font-size: 23px; } }
+
+/* A figure inside the sentence. A tint rather than an underline: the underline
+   the mock used measured 1.38:1 against the page, so the device marking a
+   number as live was invisible. */
+.lede b {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 0.78em;
+  font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--seq-450) 12%, transparent);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.lede-note {
+  font-size: var(--t-small);
+  color: var(--text-muted);
+  max-width: 64ch;
+  margin: 0 0 var(--s6);
+  border-left: 2px solid var(--border);
+  padding-left: var(--s3);
+}
+
+.note {
+  font-size: var(--t-small);
+  color: var(--text-muted);
+  max-width: 62ch;
+  margin: var(--s2) 0;
+}
+
+h4.mini {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 400;
+  margin: var(--s4) 0 var(--s2);
+}
+
+h4.mini:first-child { margin-top: 0; }
+
+/* Stamps. A word with a border, never a hue on its own: two of the four status
+   steps sit under 3:1 on light, and the provenance vocabulary is three named
+   things rather than a scale. */
+.stamp {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  display: inline-block;
+}
+
+.stamp.good { color: var(--success-text); border-color: color-mix(in srgb, var(--success-text) 55%, var(--border)); }
+.stamp.warn { color: var(--oxide); border-color: color-mix(in srgb, var(--oxide) 55%, var(--border)); }
+.stamp.on { color: var(--seq-450); border-color: color-mix(in srgb, var(--seq-450) 45%, var(--border)); }
+
+/* Shortlist entries ------------------------------------------------------- */
+.entry {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: var(--s5);
+  padding: var(--s5) 0;
+  border-bottom: 1px solid var(--gridline);
+}
+
+.entry .score {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 40px;
+  line-height: 0.95;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.entry .of {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  color: var(--text-muted);
+}
+
+.entry .of b { color: var(--text-secondary); font-weight: 400; }
+
+.entry-title {
+  font-family: var(--font-sans);
+  font-size: var(--t-title);
+  font-weight: 600;
+  margin: 0;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.entry-title:hover { color: var(--seq-450); }
+
+.entry-meta {
+  font-size: var(--t-small);
+  color: var(--text-secondary);
+  margin-top: var(--s1);
+  display: flex;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.entry-meta .sep { color: var(--border); }
+
+.entry .dismiss {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 2px;
+  min-height: 28px;
+}
+
+.entry .dismiss:hover {
+  color: var(--oxide);
+  background: color-mix(in srgb, var(--oxide) 10%, transparent);
+}
+
+@media (max-width: 620px) {
+  .entry { grid-template-columns: 1fr; gap: var(--s3); }
+  .entry .figcol { display: flex; align-items: baseline; gap: var(--s2); }
+}
+
+.expand { padding-top: var(--s4); }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--s5); }
+
+.quote {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 400;
+  line-height: 1.5;
+  max-width: 52ch;
+  margin: 0 0 var(--s3);
+}
+
+/* One scoring axis. Bar length is the axis WEIGHT and the fill is the score:
+   two axes drawn the same length said an axis carrying a third of the number
+   and one carrying a tenth were equally important. */
+.axes { display: flex; flex-direction: column; gap: var(--s2); max-width: 440px; }
+
+.ax {
+  display: grid;
+  grid-template-columns: minmax(90px, 130px) 1fr auto;
+  gap: var(--s3);
+  align-items: center;
+  font-size: var(--t-small);
+}
+
+.ax .nm { color: var(--text-secondary); }
+.ax .tr { height: 8px; background: var(--track); border-radius: 2px; overflow: hidden; }
+.ax .fl { display: block; height: 100%; background: var(--seq-450); }
+
+.ax .vl {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: right;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.undobar {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--oxide);
+  border-radius: 2px;
+  padding: var(--s3) var(--s4);
+  margin-bottom: var(--s4);
+  font-size: var(--t-small);
+}
+
+.undobar button { margin-left: auto; }
+
+.row-actions {
+  display: flex;
+  gap: var(--s3);
+  margin-top: var(--s4);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.pager { display: flex; gap: var(--s2); margin-top: var(--s4); }
+
+/* Applications -------------------------------------------------------------
+   A list rather than a table: the rows are prose of varying length, and the
+   question is "what happened, in order" rather than a comparison of columns. */
+.appgroup { margin-bottom: var(--s6); }
+
+.appgroup > h2 {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 400;
+  margin: 0 0 var(--s1);
+  padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--border);
+}
+
+.app { padding: var(--s4) 0; border-bottom: 1px solid var(--gridline); }
+
+.app-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+
+.app-head h3 { font-size: var(--t-title); font-weight: 600; margin: 0; }
+.app-head .co { color: var(--text-secondary); font-size: var(--t-body-2); }
+
+.app-head .right {
+  margin-left: auto;
+  display: flex;
+  gap: var(--s2);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.log-wrap { margin-top: var(--s3); }
+
+/* The marker sits on the rule, so the newest entry is findable without a scan. */
+.timeline {
+  list-style: none;
+  margin: 0 0 var(--s3);
+  padding: 0 0 0 var(--s4);
+  border-left: 1px solid var(--border);
+  font-size: var(--t-small);
+}
+
+.timeline li {
+  position: relative;
+  padding: var(--s1) 0;
+  color: var(--text-secondary);
+  display: flex;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+
+.timeline li::before {
+  content: "";
+  position: absolute;
+  left: -21px;
+  top: 11px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.timeline li:first-child::before { background: var(--seq-450); }
+
+.timeline .when {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  flex: none;
+  width: 76px;
+}
+
+.timeline .who {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* An inference with the phrase it came from. Used by the posting drawer and by
+   the profile's extracted skills, because they are the same claim shape read
+   from opposite sides of the join. */
+.assertion-top {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.src {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.04em;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 1px 6px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: help;
+}
+
+/* Recessive, because it is the justification rather than the claim - but
+   present, because it is the only thing that makes the claim checkable. */
+.assertion-evidence.none {
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-size: 12px;
+  white-space: normal;
+}
+
+/* Ranked list. A name, a number, and a rule whose length is the ratio - the
+   mark this dashboard uses most, and the one that was a 2px line at 1.57:1
+   against the card until it was measured. */
+.rank { display: flex; flex-direction: column; gap: var(--s3); }
+
+.rank-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: var(--s3);
+}
+
+.rank .nm { font-size: var(--t-body-2); }
+
+.rank .vl {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.rank .measure {
+  height: 6px;
+  background: var(--track);
+  margin-top: var(--s1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.rank .measure i { display: block; height: 100%; background: var(--seq-450); }
+
+/* Part-to-whole. Taller than a hairline and separated by 1px, so adjacent
+   fills read as separate marks rather than one band that changes colour. */
+.split {
+  display: flex;
+  height: 14px;
+  gap: 1px;
+  margin: var(--s1) 0 var(--s3);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.split i { display: block; }
+
+.keys {
+  display: grid;
+  grid-template-columns: 10px 1fr max-content;
+  gap: var(--s2);
+  align-items: center;
+  max-width: 380px;
+}
+
+.keys i { width: 10px; height: 10px; border-radius: 2px; }
+.keys span { font-size: var(--t-small); }
+
+.keys b {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The skills gap. Two numbers with different denominators, so both are labelled
+   rather than sitting in adjacent columns as if they were the same measure. */
+.gap {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) auto;
+  gap: var(--s2) var(--s4);
+  padding: var(--s3) 0;
+  border-bottom: 1px solid var(--gridline);
+}
+
+.gap:last-of-type { border-bottom: 0; }
+.gap-name { font-size: var(--t-body-2); font-weight: 600; }
+
+.gap-counts {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.gap-counts b { color: var(--text-primary); font-weight: 500; }
+
+.gap-why {
+  grid-column: 1 / -1;
+  font-size: var(--t-small);
+  color: var(--text-secondary);
+  margin: 0;
+  max-width: 68ch;
+}
+
+.gap-why em { font-style: normal; color: var(--text-primary); font-weight: 600; }

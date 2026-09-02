@@ -17,6 +17,7 @@ export default defineConfig({
         manualChunks(id: string) {
           if (id.includes('node_modules/@azure/msal')) return 'msal';
           if (id.includes('node_modules/recharts') || id.includes('node_modules/d3-')) return 'charts';
+          if (id.includes('node_modules/gsap')) return 'motion';
           return undefined;
         },
       },

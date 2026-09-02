@@ -28,10 +28,23 @@ import { useAiFailures } from '../feed/useAiFailures';
  */
 export function AiCalls({ api }: { api: JobPlatformApi }) {
   return (
-    <div className="grid">
-      <LiveTail api={api} />
-      <Totals api={api} />
-      <Failures api={api} />
+    <div className="stack">
+      <p className="lede">What the model was asked, and what came back.</p>
+
+      <p className="lede-note">
+        There is no money on this page. The ledger records tokens, no unit price is stored
+        anywhere in the system, and a pound figure would be a number this dashboard invented.
+        Discards are the number to watch instead: a batch can report success and still lose most
+        of its work, and that was invisible until it was counted. The live tail is a fact about
+        the system rather than about you — it reaches every signed-in client, and after a cold
+        start the first message has been measured at three minutes, so it is not instantaneous.
+      </p>
+
+      <div className="grid">
+        <LiveTail api={api} />
+        <Totals api={api} />
+        <Failures api={api} />
+      </div>
     </div>
   );
 }

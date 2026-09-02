@@ -271,6 +271,50 @@ public static class MatchScorer
     }
 
     /// <summary>
+    /// The best claim a set of held concepts can make against one required concept, or null
+    /// where it can make none.
+    /// </summary>
+    /// <remarks>
+    /// Public for the same reason <see cref="ConceptGraph.NormalizeLabel"/> is: the skills-gap
+    /// view has to say "you hold Bicep, which the graph records as Related" about the same
+    /// concept pair the match breakdown says it about, and two implementations of that would
+    /// be two definitions of what relates to what. The difference would surface as a page
+    /// claiming transferable ground the scorer does not credit.
+    ///
+    /// <para>
+    /// Exact is tested first, before <see cref="Relate"/>, because a concept is its own
+    /// ancestor at depth 0 - so asking Relate about a key against itself answers
+    /// Specialisation, which is true of the closure and false of the claim.
+    /// </para>
+    /// </remarks>
+    public static (string HeldKey, MatchRelation Relation, double Credit)? BestRelation(
+        IReadOnlyCollection<string> heldKeys, string requiredKey, ConceptGraph graph)
+    {
+        ArgumentNullException.ThrowIfNull(heldKeys);
+
+        if (heldKeys.Contains(requiredKey, StringComparer.Ordinal))
+        {
+            return (requiredKey, MatchRelation.Exact, 1.0);
+        }
+
+        (string HeldKey, MatchRelation Relation, double Credit)? best = null;
+
+        foreach (var heldKey in heldKeys)
+        {
+            var (relation, credit) = Relate(heldKey, requiredKey, graph);
+
+            // Relate answers (Exact, 0) for "nothing relates these", which the scorer reads as
+            // a credit test rather than as a relation. Read it the same way here.
+            if (credit > 0 && (best is null || credit > best.Value.Credit))
+            {
+                best = (heldKey, relation, credit);
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>
     /// How a held key relates to a required one, and what that relation is worth before the
     /// candidate's own strength is applied.
     /// </summary>
