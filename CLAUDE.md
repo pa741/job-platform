@@ -520,6 +520,17 @@ mechanism, and it is derived from the corpus rather than guessed at.
 
 Each of these cost a red CI run; none of them fail locally.
 
+- **Event Grid can refuse a dead-letter container ARM has just finished creating.** The
+  subscription validates `deadLetterDestination` by reading the blob container, and that read
+  goes through a different plane from the one that created it. The template is not the
+  problem: `deadLetterContainer.name` *does* emit a `dependsOn` in the compiled ARM, which is
+  worth knowing because the failure reads exactly like a missing dependency and the obvious
+  "fix" of adding one changes nothing. Measured on 2026-09-02: run 33652768241 failed with
+  `Deadletter destination not found`, and the identical deployment succeeded on re-run with
+  nothing changed. `Deploy infrastructure` now retries once for this; an ARM deployment is
+  idempotent, so the retry costs time and nothing else. If the retry also fails, the error is
+  real - read it rather than running it again.
+
 - **`readEnvironmentVariable`'s default does not fire in GitHub Actions.** An undefined
   `vars.X` becomes an environment variable that is *set and empty*, not absent, so the
   fallback argument is skipped and `''` reaches the template. `infra/main.bicepparam`

@@ -157,7 +157,7 @@ export function Searches({ api }: { api: JobPlatformApi }) {
   const enabled = drafts.filter((d) => d.form.enabled).length;
 
   return (
-    <div className="stack">
+    <div className="flow">
       <p className="lede">
         <b>{drafts.length}</b> search{drafts.length === 1 ? '' : 'es'}
         {enabled !== drafts.length && <>, <b>{enabled}</b> enabled</>}. The scraper rebuilds its

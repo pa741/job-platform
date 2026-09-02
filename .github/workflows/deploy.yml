@@ -140,17 +140,41 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      # Retried once, and only once, because one failure mode here is a race the template
+      # cannot express.
+      #
+      # The Event Grid subscription validates its dead-letter destination by reading the blob
+      # container, and that read goes through a different plane from the one that just created
+      # it. ARM's ordering is correct - the compiled template does carry a dependsOn from the
+      # eventGrid deployment to that container, so this is not the missing-dependency bug it
+      # looks like - but ARM considers the container written the moment storage returns, and
+      # Event Grid can still answer "Deadletter destination not found" seconds afterwards.
+      # Measured on 2026-09-02: run 33652768241 failed on exactly this, and the identical
+      # deployment succeeded on re-run minutes later with nothing changed.
+      #
+      # An ARM deployment is idempotent, so a second attempt costs time and nothing else. One
+      # attempt and not a loop: a step that keeps retrying turns a real outage into a slow one.
+      # The warning below is deliberately loud, so a retry never passes unnoticed.
       - name: Deploy infrastructure
         id: infra
         run: |
           set -euo pipefail
-          az deployment group create \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --name "jobplatform-ingest-${GITHUB_RUN_NUMBER}" \
-            --template-file infra/main.bicep \
-            --parameters infra/main.bicepparam \
-            --no-prompt \
-            --query properties.outputs -o json > outputs.json
+
+          deploy() {
+            az deployment group create \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --name "jobplatform-ingest-${GITHUB_RUN_NUMBER}" \
+              --template-file infra/main.bicep \
+              --parameters infra/main.bicepparam \
+              --no-prompt \
+              --query properties.outputs -o json > outputs.json
+          }
+
+          if ! deploy; then
+            echo "::warning::Infrastructure deployment failed on the first attempt and is being retried once. If the retry succeeds this was a propagation race; if it fails, the error is real."
+            sleep 30
+            deploy
+          fi
           echo "functionAppName=$(jq -r .functionAppName.value outputs.json)" >> "$GITHUB_OUTPUT"
           echo "apiUrl=$(jq -r .apiUrl.value outputs.json)" >> "$GITHUB_OUTPUT"
           echo "webName=$(jq -r .webName.value outputs.json)" >> "$GITHUB_OUTPUT"

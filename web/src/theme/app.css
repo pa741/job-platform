@@ -336,37 +336,6 @@ button.pill {
 
 button.pill:hover { background: var(--gridline); }
 
-/* An application's event log. A list rather than a table: the rows are prose of varying
-   length, and the question it answers is "what happened, in order" rather than a comparison
-   between columns. Every colour is a token, so it follows the theme in both modes. */
-.timeline {
-  list-style: none;
-  margin: 4px 0 12px;
-  padding: 0 0 0 14px;
-  border-left: 2px solid var(--gridline);
-  font-size: 13px;
-}
-
-.timeline li {
-  position: relative;
-  padding: 5px 0;
-  border-bottom: 1px solid var(--gridline);
-}
-
-.timeline li:last-child { border-bottom: 0; }
-
-/* The marker sits on the rule, so the newest entry is findable without a scan. */
-.timeline li::before {
-  content: '';
-  position: absolute;
-  left: -19px;
-  top: 11px;
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--series-1);
-}
-
 /* ===========================================================================
    The redesigned shell.
 
@@ -707,7 +676,10 @@ nav.pages .marker {
    them with it would be a library call to lay out three divs.
    =========================================================================== */
 
-.stack { display: flex; flex-direction: column; }
+/* The vertical flow of a page's blocks. NOT .stack - that name belongs to Vocabulary's
+   segment bar, which is 14px tall with overflow hidden, and reusing it clipped every page
+   that took it to fourteen pixels. */
+.flow { display: flex; flex-direction: column; }
 
 /* The lede: what needs deciding, as a sentence. Newsreader earns its place at
    this size and at the two hero numerals, and nowhere below 20px - smaller than
@@ -941,19 +913,21 @@ h4.mini:first-child { margin-top: 0; }
   border-bottom: 1px solid var(--border);
 }
 
-.app { padding: var(--s4) 0; border-bottom: 1px solid var(--gridline); }
+/* One sent application or draft. NOT .app - that is the root shell and carries
+   min-height: 100vh, which every row here would have inherited. */
+.record { padding: var(--s4) 0; border-bottom: 1px solid var(--gridline); }
 
-.app-head {
+.record-head {
   display: flex;
   align-items: baseline;
   gap: var(--s3);
   flex-wrap: wrap;
 }
 
-.app-head h3 { font-size: var(--t-title); font-weight: 600; margin: 0; }
-.app-head .co { color: var(--text-secondary); font-size: var(--t-body-2); }
+.record-head h3 { font-size: var(--t-title); font-weight: 600; margin: 0; }
+.record-head .co { color: var(--text-secondary); font-size: var(--t-body-2); }
 
-.app-head .right {
+.record-head .right {
   margin-left: auto;
   display: flex;
   gap: var(--s2);

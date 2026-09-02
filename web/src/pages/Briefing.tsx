@@ -39,7 +39,7 @@ export function Briefing({ api, searchTerm, go }: {
   );
 
   return (
-    <div className="stack">
+    <div className="flow">
       <p className="lede">
         <b>{summary.newInLastRun.toLocaleString()}</b> new postings in the last run
         {summary.newPostingsDelta != null && (
