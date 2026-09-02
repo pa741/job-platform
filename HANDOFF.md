@@ -13,6 +13,17 @@ and has been swept: 4,078 pairs scored, 2,495 over the assessment threshold, 50 
 Nothing about that profile belongs in this repository. It is somebody's employment history, and
 the rule in `CLAUDE.md` covers fixtures, examples and screenshots alike.
 
+**The stratified label set has reached the size 1.6 said to wait for.** As of 2026-09-02 there
+are **357 assessed pairs**, of which **151 sit below score 80** - 44 in 70-79, 56 in 60-69, 51 in
+45-59. Section 1.6 closed with "cohort D holds only 22 rows below score 80... at ten stratified
+labels a night it will hold roughly 150 in a fortnight, which is when re-running `balanced.py`
+becomes worth doing." That threshold is crossed, so **the corpus-wide claim is testable for the
+first time** - the one thing 1.6 could not settle. Nothing else on that topic needs code.
+
+The 30/10 split is doing what it was built for: over the two nights of 2026-09-01 and 09-02, 80
+assessments came back 6 / 6 / 4 across 45-59, 60-69 and 70-79 with the rest at 80+, and **nothing
+was discarded** - 80 requested, 80 returned, continuing the run since the 1.2 fix.
+
 **In flight.** 1.1 has all four call sites, a dashboard page and a replay route; 1.2 has a
 candidate fix. Both are marked *Progress* below, with what remains.
 

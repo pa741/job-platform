@@ -363,6 +363,13 @@ internal static class Program
                 // its missing apply link mean "the board hosts it" rather than "nobody looked".
                 WithDescription = g.Sum(p => p.DescriptionLength > 0 ? 1 : 0),
 
+                // The three-way split that replaced "has a URL or not". A direct link and an
+                // offsite flag are both "the employer takes it"; the flag survives where the
+                // URL does not, which is the whole of LinkedIn now.
+                Offsite = g.Sum(p => p.OffsiteApply == true ? 1 : 0),
+                EasyApply = g.Sum(p => p.OffsiteApply == false ? 1 : 0),
+                RouteUnknown = g.Sum(p => p.JobUrlDirect == null && p.OffsiteApply == null ? 1 : 0),
+
                 // A "direct" link pointing back at the board it came from is not an external
                 // apply link at all. Counting them is what stops a column that is 100% populated
                 // being mistaken for a column that is 100% useful.
@@ -379,51 +386,52 @@ internal static class Program
 
         Console.WriteLine($"Apply links, postings last seen within {days} days");
         Console.WriteLine(
-            $"  {"site",-16} {"postings",8} {"board-hosted",12} {"share",8} {"detail read",12} "
-            + $"{"link is board",13}");
+            $"  {"site",-16} {"postings",8} {"direct url",11} {"offsite",8} {"easy apply",11} "
+            + $"{"route unknown",14} {"detail read",12}");
 
         foreach (var row in rows)
         {
             var signal = string.Equals(row.Site, ScraperSites.Freehire, StringComparison.OrdinalIgnoreCase);
 
             Console.WriteLine(
-                $"  {Truncate(row.Site, 16),-16} {row.Postings,8} {row.BoardHosted,12} "
-                + $"{Share(row.BoardHosted, row.Postings),8} {Share(row.WithDescription, row.Postings),12} "
-                + $"{Share(row.SelfHosted, row.Postings - row.BoardHosted),13}"
-                + (signal ? "   (no signal - always direct, excluded below)" : string.Empty));
+                $"  {Truncate(row.Site, 16),-16} {row.Postings,8} "
+                + $"{row.Postings - row.BoardHosted,11} {row.Offsite,8} {row.EasyApply,11} "
+                + $"{row.RouteUnknown,7} {Share(row.RouteUnknown, row.Postings),6} "
+                + $"{Share(row.WithDescription, row.Postings),12}"
+                + (signal ? "   (always direct)" : string.Empty));
         }
 
-        // The check that says whether the ratio above means anything. A site reading as
-        // entirely board-hosted is either a broken scraper or a market nobody has seen, and the
-        // description column tells you which without opening the scraper repository.
+        // The check that says whether the split above means anything.
+        //
+        // Re-keyed to match JobDigestFunction: a missing apply URL is permanent on LinkedIn and
+        // alarming on it would fire forever. What never has a legitimate steady state is a site
+        // saying nothing either way - no link and no offsite flag - because every board answers
+        // that question one way or the other when it is working.
         foreach (var row in rows.Where(r =>
             !string.Equals(r.Site, ScraperSites.Freehire, StringComparison.OrdinalIgnoreCase)
             && r.Postings >= 20
-            && r.BoardHosted == r.Postings))
+            && r.RouteUnknown == r.Postings))
         {
             Console.WriteLine();
-            Console.WriteLine($"  !! {row.Site}: every one of {row.Postings} postings reads as board-hosted.");
+            Console.WriteLine($"  !! {row.Site}: none of {row.Postings} postings say how to apply.");
 
             if (row.WithDescription >= row.Postings * 0.9)
             {
                 Console.WriteLine(
                     $"     The detail page WAS read on {Share(row.WithDescription, row.Postings)} "
-                    + "of them, so the apply link was looked");
+                    + "of them, so the markers were looked for");
                 Console.WriteLine(
-                    "     for and not found. That is a scraper selector that stopped matching,");
-                Console.WriteLine("     not a hiring market.");
+                    "     and not found. Either the scraper emitting offsite_apply has not");
+                Console.WriteLine("     reached the NAS yet, or its selectors have moved again.");
             }
             else
             {
                 Console.WriteLine(
                     $"     The detail page was read on only {Share(row.WithDescription, row.Postings)} "
-                    + "of them, so nobody looked for an");
+                    + "of them, so nothing looked.");
                 Console.WriteLine(
-                    "     apply link. Check linkedin_fetch_description in the scraper's config");
-                Console.WriteLine("     before blaming the selector.");
+                    "     Check linkedin_fetch_description in the scraper's config first.");
             }
-
-            Console.WriteLine("     Until it is fixed, treat this site's Channel as unknown rather than Board.");
         }
 
         // How many of the missing links another board already knows.

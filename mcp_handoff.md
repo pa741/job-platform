@@ -33,57 +33,46 @@ migration dispatched by hand, and a token. **Do this before writing any more too
 
 The measurement below is done, and it moved the design rather than confirming it.
 
-### 1.2 The apply link: LinkedIn stopped publishing it, and what replaced it
+### 1.2 The apply link: answered, 2026-09-02
 
-**Measured 2026-09-01 with `dbadmin apply-links`**, over postings last seen in seven days:
+**The scraper fix landed and the number section 0.3 asked for exists.** On the first run with
+`v1.1.82-fh6` - 2026-09-01, 525 LinkedIn postings, **100% of them classified**:
 
-| site | postings | no direct link | share | detail page read | link is a board's own |
+| site | postings | direct url | offsite | easy apply | route unknown |
 | --- | --- | --- | --- | --- | --- |
-| linkedin | 4,470 | **4,470** | **100.0%** | 98.4% | - |
-| freehire | 964 | 0 | 0.0% | 100% | 0.0% |
-| indeed | 798 | 0 | 0.0% | 100% | 7.4% |
+| linkedin | 525 | 0 | **317 (60%)** | **208 (40%)** | **0** |
+| freehire | 136 | 136 | - | - | 0 |
+| indeed | 32 | 32 | - | - | 0 |
 
-**100.0% of 4,470 is not a hiring market**, and the detail-page column says which of the two
-causes it is. Section 0.2 named them - a broken selector, and `linkedin_fetch_description` off so
-nobody looked - and called them indistinguishable. They are not: the page was **read** on 98.4%
-of those postings, so the scraper looked and the URL was not there.
+**So the board hosts about 40% of LinkedIn applications** - material, not negligible, and nothing
+like the 100% the broken selector reported. That reading is now settled: with working detection
+the split is 60/40, which is why the earlier figure could never have been a market.
 
-Confirmed directly against the live guest pages: `<code id="applyUrl">` is gone, every apply
-redirect endpoint answers 404, there is no JSON-LD, and **a LinkedIn guest job page now contains
-no non-LinkedIn URL anywhere on it**. The apply URL is not recoverable without authenticating.
+**What this decides.** The board path is not a rounding error, so the answer to "does it matter"
+is yes - but it stays a link the candidate clicks. An agent cannot drive Easy Apply from here
+either way, and `list_applyable` now says which is which, which is the part that was missing.
 
-**Indeed and freehire are fine** and always were: 92.6% of Indeed's stored links point at a real
-external ATS rather than back at a board. Only LinkedIn broke.
+#### What the earlier 100% was
 
-#### What was built instead
+Kept because the diagnosis is the reusable part. All 4,470 LinkedIn postings read as board-hosted
+while the job detail page had been fetched for 98.4% of them - so the scraper looked and the URL
+was not there. Confirmed against the live pages: `<code id="applyUrl">` gone, every apply-redirect
+endpoint 404, no JSON-LD, and **no non-LinkedIn URL anywhere on a guest job page**. LinkedIn had
+stopped publishing apply URLs to signed-out clients; `offsite_apply` reads its offsite markers
+instead, so the route survives where the destination does not.
 
-LinkedIn still says *whether* a job is offsite, in two independent places - the apply button's
-`offsite-apply` icon and the sign-in modal's `apply-link-offsite` impression id. So the fork now
-emits **`offsite_apply`**, a three-state column, and the platform stores and uses it:
+Indeed and freehire were never affected: both still publish `job_url_direct`, and 92.6% of
+Indeed's point at a genuine external ATS.
 
-| layer | change |
-| --- | --- |
-| `JobSpy` fork | `JobPost.offsite_apply`, `LinkedIn._parse_offsite_apply`, added to `desired_order`, 8 tests on synthetic markup |
-| `JobCsvParser` | reads `offsite_apply`; absent stays null |
-| `JobPostings` | `OffsiteApply bit NULL`, migration `AddOffsiteApply`, part of `HasMaterialChange` |
-| `SubmissionChannel` | flag first, URL as fallback: `true`/URL -> `Ats`, `false` -> `Board`, neither -> `Unknown` |
+#### The backlog, and why it is not a defect
 
-Verified end to end against live LinkedIn: 6/6 unfiltered postings came back `offsite_apply=True`
-and 6/6 under LinkedIn's own `f_AL=true` Easy Apply filter came back `False`.
+4,437 postings still read `route unknown`. They were last seen by the **2026-08-31** run, on the
+old image. Any posting a later search turns up again is reclassified - `OffsiteApply` is part of
+`HasMaterialChange`, so a null-to-true transition counts as a change - and postings that never
+reappear keep a null forever. That is correct: nothing ever established their route.
 
-**Null is a third state and must stay one.** It means nothing was established - the detail page
-was not fetched, the board does not say, or the posting predates the column. Reading it as "the
-board hosts it" is the exact fault this replaced.
-
-#### Still to do, and it is not in this repository
-
-1. Tag the fork and ship it - see section 4.3. **Until that lands, `offsite_apply` is null for
-   every posting** and `list_applyable` reports `Unknown` where it will later report `Ats`.
-2. **Do not add `offsite_apply` to `JobCsvParser.TrackedColumns` until the deployed scraper emits
-   it.** `JobDigestFunction` warns on any tracked column at 0% fill, and "not shipped yet" is not
-   the regression that warning exists to catch.
-3. Re-run `dbadmin apply-links` after the first scrape on the new image. The board-hosted share
-   becomes measurable for the first time, and only then is "does the board path matter" answerable.
+**Read `apply-links` over one day, not seven.** A multi-day window mixes runs from both images
+and the route-unknown share looks alarming when it is only history.
 
 ### 1.2b Authenticated LinkedIn: researched, and decided against
 
