@@ -144,7 +144,7 @@ export function Shortlist({ api, go }: { api: JobPlatformApi; go: (page: PageId)
   };
 
   return (
-    <div className="stack">
+    <div className="flow">
       <p className="lede">
         {items.length === 0 && !showDismissed
           ? <>Nothing clears {minScore} today.</>

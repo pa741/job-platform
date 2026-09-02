@@ -87,7 +87,7 @@ export function Applications({ api, go }: { api: JobPlatformApi; go: (page: Page
   const quiet = submissions.filter((s) => s.isStale);
 
   return (
-    <div className="stack">
+    <div className="flow">
       <p className="lede">
         <b>{submissions.filter((s) => s.phase !== null).length}</b> applications sent
         {quiet.length > 0 && <>, <b>{quiet.length}</b> gone quiet</>}
@@ -185,8 +185,8 @@ function Draft({ api, draft, onSent }: {
   };
 
   return (
-    <div className="app">
-      <div className="app-head">
+    <div className="record">
+      <div className="record-head">
         <h3>{draft.postingTitle}</h3>
         <span className="co">{draft.company}</span>
         <span className="right">
@@ -243,8 +243,8 @@ function Row({ api, submission, expanded, onToggle, onChanged }: {
   const channel = CHANNEL[submission.channel] ?? CHANNEL['Unknown']!;
 
   return (
-    <div className="app">
-      <div className="app-head">
+    <div className="record">
+      <div className="record-head">
         <h3>{submission.postingTitle}</h3>
         <span className="co">{submission.company}</span>
 

@@ -28,7 +28,7 @@ import { useAiFailures } from '../feed/useAiFailures';
  */
 export function AiCalls({ api }: { api: JobPlatformApi }) {
   return (
-    <div className="stack">
+    <div className="flow">
       <p className="lede">What the model was asked, and what came back.</p>
 
       <p className="lede-note">
