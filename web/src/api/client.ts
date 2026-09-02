@@ -5,7 +5,7 @@ import type {
   ProfileResponse, RunResponse, ScraperHealth, SearchTermResponse, SourceComposition,
   AiCallResponse, AiCallTotalsResponse,
   ScraperSearchRequest, ScraperSearchListResponse, ScraperSearchOptionsResponse,
-  Submission, SubmissionEvent,
+  SkillGapResponse, Submission, SubmissionEvent,
 } from './types';
 
 /** Thrown for any non-2xx response, carrying the RFC 9457 detail the API returns. */
@@ -302,6 +302,16 @@ export class JobPlatformApi {
    * is unsure landed gets the same answer the second time. The undo is the same call with
    * `false` - a dismissal that cannot be taken back is one nobody will risk using.
    */
+  /**
+   * What the candidate's own matched band asks for that their profile does not hold.
+   *
+   * Per-principal and SQL-backed, so it carries no output cache and must never sit on a
+   * bootstrap or polling path - load it when the market page renders, not before.
+   */
+  skillGap = (searchTerm?: string, minScore?: number) =>
+    this.request<SkillGapResponse>(
+      `/api/v1/matches/skill-gap${JobPlatformApi.query({ searchTerm, minScore })}`);
+
   setMatchDismissed = (postingId: number, dismissed: boolean) =>
     this.request<{ postingId: number; dismissedAtUtc: string | null }>(
       `/api/v1/matches/${postingId}/dismissed`,

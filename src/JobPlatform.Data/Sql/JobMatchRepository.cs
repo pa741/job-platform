@@ -809,6 +809,47 @@ public sealed class JobMatchRepository(JobsDbContext db)
             .ToListAsync(ct);
 
     /// <summary>
+    /// What this candidate's own matched band asks for, by concept.
+    /// </summary>
+    /// <remarks>
+    /// The supply half of the skills gap. Scoped to one profile and one score floor, so it
+    /// lands on the <c>(ProfileId, Score)</c> index rather than reading the assertion table
+    /// whole - which is what <see cref="JobPostingQueryRepository.GetConceptDemandAsync"/>
+    /// exists to avoid and why that one takes a bounded key list. The keys this returns are
+    /// that list: the corpus figure is context for concepts the candidate's band already
+    /// names, never an aggregate over all 222.
+    ///
+    /// <para>
+    /// Counts distinct postings rather than assertion rows, for the same reason the corpus
+    /// query does: a concept the board tagged and the description also mentioned is two rows
+    /// for one posting, and counting both would make thoroughly-recorded concepts look more
+    /// in demand than they are.
+    /// </para>
+    ///
+    /// <para>
+    /// Dismissed pairs are excluded. A concept only asked for by postings the candidate has
+    /// already said no to is not a gap in their profile; it is a gap in a job they do not
+    /// want, and putting it at the top of the list would be advice to chase work they have
+    /// just rejected.
+    /// </para>
+    /// </remarks>
+    public async Task<IReadOnlyDictionary<string, int>> GetInBandConceptDemandAsync(
+        long profileId, int minimumScore, CancellationToken ct = default)
+    {
+        var rows = await db.JobMatches
+            .AsNoTracking()
+            .Where(m => m.ProfileId == profileId
+                && m.Score >= minimumScore
+                && m.DismissedAtUtc == null)
+            .SelectMany(m => m.Posting!.Concepts)
+            .GroupBy(c => c.Concept!.ConceptKey)
+            .Select(g => new { g.Key, Count = g.Select(c => c.PostingId).Distinct().Count() })
+            .ToListAsync(ct);
+
+        return rows.ToDictionary(r => r.Key, r => r.Count, StringComparer.Ordinal);
+    }
+
+    /// <summary>
     /// Records that the candidate is not interested in a posting, or takes it back.
     /// </summary>
     /// <remarks>

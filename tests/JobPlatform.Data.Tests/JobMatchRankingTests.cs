@@ -344,4 +344,58 @@ public sealed class JobMatchRankingTests : IDisposable
 
         Assert.False(await new JobMatchRepository(db).SetDismissedAsync(ProfileId, 99, Now));
     }
+
+    [Fact]
+    public async Task The_in_band_demand_counts_postings_and_ignores_what_was_dismissed()
+    {
+        // The supply half of the skills gap. Two things it has to get right: a concept asserted
+        // twice about one posting is one posting, not two - or a thoroughly-recorded concept
+        // looks more in demand than it is. And a concept only asked for by postings the
+        // candidate has rejected is not a gap in their profile; it is a gap in a job they do
+        // not want, and putting it top of the list would be advice to chase work they just
+        // turned down.
+        await using (var db = CreateContext())
+        {
+            db.Concepts.Add(new ConceptEntity { Id = 1, ConceptKey = "skill.kubernetes", PrefLabel = "Kubernetes" });
+            db.Concepts.Add(new ConceptEntity { Id = 2, ConceptKey = "skill.terraform", PrefLabel = "Terraform" });
+
+            // Posting 4 asserts Kubernetes twice - once tagged by the board, once matched in
+            // the text - which is exactly the double-count the distinct is there to stop.
+            db.PostingConcepts.Add(new PostingConceptEntity { PostingId = 4, ConceptId = 1, Source = AssertionSource.Board });
+            db.PostingConcepts.Add(new PostingConceptEntity { PostingId = 4, ConceptId = 1, Source = AssertionSource.Taxonomy });
+            db.PostingConcepts.Add(new PostingConceptEntity { PostingId = 5, ConceptId = 1, Source = AssertionSource.Taxonomy });
+            db.PostingConcepts.Add(new PostingConceptEntity { PostingId = 6, ConceptId = 2, Source = AssertionSource.Taxonomy });
+
+            await db.SaveChangesAsync();
+
+            await WriteAsync(db, Scores((4, 80), (5, 70), (6, 75)), MatchRanker.Rank([]));
+            await new JobMatchRepository(db).SetDismissedAsync(ProfileId, 6, Now);
+        }
+
+        await using (var db = CreateContext())
+        {
+            var demand = await new JobMatchRepository(db).GetInBandConceptDemandAsync(ProfileId, 60);
+
+            Assert.Equal(2, demand["skill.kubernetes"]);
+            Assert.DoesNotContain("skill.terraform", demand.Keys);
+        }
+    }
+
+    [Fact]
+    public async Task The_in_band_demand_respects_the_score_floor()
+    {
+        await using (var db = CreateContext())
+        {
+            db.Concepts.Add(new ConceptEntity { Id = 1, ConceptKey = "skill.kubernetes", PrefLabel = "Kubernetes" });
+            db.PostingConcepts.Add(new PostingConceptEntity { PostingId = 4, ConceptId = 1, Source = AssertionSource.Taxonomy });
+            await db.SaveChangesAsync();
+
+            await WriteAsync(db, Scores((4, 30)), MatchRanker.Rank([]));
+        }
+
+        await using (var db = CreateContext())
+        {
+            Assert.Empty(await new JobMatchRepository(db).GetInBandConceptDemandAsync(ProfileId, 60));
+        }
+    }
 }

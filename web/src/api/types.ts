@@ -827,3 +827,51 @@ export interface ScraperSearchOptionsResponse {
   maxHoursOld: number;
   maxResultsWanted: number;
 }
+
+/**
+ * The join, run backwards: what the candidate's matched band asks for that they do not hold.
+ *
+ * The only figure on the market view that is about the reader rather than about the corpus,
+ * and the only one that changes what they would do next. It exists because postings and
+ * profiles are extracted into the same vocabulary, which makes this a set difference.
+ */
+export interface SkillGapResponse {
+  /** The score floor the band was taken at, so the numbers are readable. */
+  minScore: number;
+  searchTerm: string | null;
+  items: SkillGapItem[];
+}
+
+export interface SkillGapItem {
+  concept: string;
+  label: string;
+  /** `Skill` or `Qualification`. Never `Domain` - nothing is tagged with one directly. */
+  kind: string;
+
+  /**
+   * Postings among this candidate's matches that name it. The number to rank by.
+   *
+   * Read instead of `corpusPostings`, not beside it: the corpus figure says what the market
+   * wants, this says what the market wants of them, and the concept at the top of the corpus
+   * list is invariably one they already hold.
+   */
+  matchPostings: number;
+
+  /** Postings across the corpus that name it. Context, and always the larger. */
+  corpusPostings: number;
+
+  /** The nearest concept the profile does hold, or null where there is none. */
+  held: string | null;
+  heldLabel: string | null;
+
+  /**
+   * How `held` relates to `concept`: `Specialisation`, `Generalisation`, `Implied`, `Related`
+   * or `Superseded` - the same decision the match breakdown reports, so the two pages cannot
+   * disagree about the same pair. Null means nothing in the profile touches it at all, which
+   * is the gap with no partial credit behind it.
+   */
+  relation: string | null;
+
+  /** What that relation is worth before the candidate's own strength, 0-1. */
+  credit: number;
+}

@@ -184,3 +184,62 @@ public sealed record SetDismissedResponse
     public required long PostingId { get; init; }
     public DateTimeOffset? DismissedAtUtc { get; init; }
 }
+
+/// <summary>
+/// What the candidate's own matched band asks for that their profile does not hold.
+/// </summary>
+/// <remarks>
+/// The only figure the market view carries that is about the reader rather than about the
+/// corpus. It exists because postings and profiles are extracted into one vocabulary, which
+/// makes this a set difference rather than a similarity score.
+/// </remarks>
+public sealed record SkillGapResponse
+{
+    /// <summary>The score floor the band was taken at, echoed so the number is readable.</summary>
+    public required int MinScore { get; init; }
+
+    public string? SearchTerm { get; init; }
+
+    public IReadOnlyList<SkillGapItem> Items { get; init; } = [];
+}
+
+/// <summary>One concept the band asks for and the profile does not answer.</summary>
+public sealed record SkillGapItem
+{
+    public required string Concept { get; init; }
+    public required string Label { get; init; }
+
+    /// <summary><c>Skill</c> or <c>Qualification</c>. Never <c>Domain</c> - see the analysis.</summary>
+    public required string Kind { get; init; }
+
+    /// <summary>
+    /// Postings among this candidate's matches that name it. What to rank by.
+    /// </summary>
+    /// <remarks>
+    /// Read instead of <see cref="CorpusPostings"/>, not beside it. The corpus figure says what
+    /// the market wants; this says what the market wants of them, and the concept at the top of
+    /// the corpus list is invariably one they already hold.
+    /// </remarks>
+    public required int MatchPostings { get; init; }
+
+    /// <summary>Postings across the corpus that name it. Context, and always the larger.</summary>
+    public required int CorpusPostings { get; init; }
+
+    /// <summary>The nearest concept the profile does hold, or null where there is none.</summary>
+    public string? Held { get; init; }
+    public string? HeldLabel { get; init; }
+
+    /// <summary>
+    /// How <see cref="Held"/> relates to <see cref="Concept"/>: <c>Specialisation</c>,
+    /// <c>Generalisation</c>, <c>Implied</c>, <c>Related</c> or <c>Superseded</c>.
+    /// </summary>
+    /// <remarks>
+    /// From the same decision the match breakdown reports, so the two pages cannot disagree
+    /// about the same pair. Null where nothing in the profile touches this concept at all,
+    /// which is the gap with no partial credit behind it.
+    /// </remarks>
+    public string? Relation { get; init; }
+
+    /// <summary>What that relation is worth before the candidate's own strength, 0-1.</summary>
+    public double Credit { get; init; }
+}

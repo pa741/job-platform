@@ -47,6 +47,112 @@ public sealed class MatchEndpoints : IEndpointGroup
         group.MapPut("/{postingId:long}/dismissed", SetDismissedAsync)
             .WithName("SetMatchDismissed")
             .WithSummary("Marks a match as not interesting, or takes that back.");
+
+        group.MapGet("/skill-gap", SkillGapAsync)
+            .WithName("GetSkillGap")
+            .WithSummary("What the candidate's matched band asks for that their profile lacks.");
+    }
+
+    /// <summary>Default score floor for the gap. The band worth taking advice from.</summary>
+    private const int GapMinimumScore = 40;
+
+    /// <summary>How many gaps to return. A list nobody scrolls is a list nobody acts on.</summary>
+    private const int GapLimit = 12;
+
+    /// <summary>
+    /// The join, run backwards: what this candidate's matched band asks for and their profile
+    /// does not hold.
+    /// </summary>
+    /// <remarks>
+    /// <b>Reads Azure SQL to answer an aggregate question</b>, which the architecture otherwise
+    /// reserves for Cosmos. Allowed on the terms <c>GetSourceCompositionAsync</c> set, with one
+    /// difference that matters: this is per-principal, so it carries no output cache and the
+    /// usual mitigation is unavailable. It is bounded instead - the expensive half is scoped to
+    /// one profile and one score floor so it lands on the <c>(ProfileId, Score)</c> index, and
+    /// the corpus figures are looked up only for the concepts that band already names rather
+    /// than aggregated over the whole vocabulary.
+    ///
+    /// <para>
+    /// It must therefore never be on a bootstrap or polling path. It is loaded when the market
+    /// page renders and not before.
+    /// </para>
+    /// </remarks>
+    private static async Task<IResult> SkillGapAsync(
+        ClaimsPrincipal user,
+        [FromServices] CandidateProfileRepository profiles,
+        [FromServices] JobMatchRepository matches,
+        [FromServices] JobPostingQueryRepository postings,
+        CancellationToken ct,
+        string? searchTerm = null,
+        int minScore = GapMinimumScore)
+    {
+        if (!user.TryGetSubjectId(out var subjectId, out var error))
+        {
+            return error;
+        }
+
+        var profileId = await profiles.GetIdAsync(subjectId, ct);
+
+        if (profileId is null)
+        {
+            return TypedResults.Problem(
+                detail: "No profile exists for this principal, so nothing has been matched yet.",
+                statusCode: StatusCodes.Status404NotFound);
+        }
+
+        var inBand = await matches.GetInBandConceptDemandAsync(
+            profileId.Value, Math.Clamp(minScore, 0, 100), ct);
+
+        // The keys the band names bound the corpus query. Without that this is the 222-row
+        // aggregate over the whole assertion table that GetConceptDemandAsync exists to refuse.
+        var corpus = inBand.Count == 0
+            ? new Dictionary<string, int>(StringComparer.Ordinal)
+            : await postings.GetConceptDemandAsync([.. inBand.Keys], searchTerm, ct);
+
+        var held = await profiles.GetAssertionsAsync(profileId.Value, ct);
+
+        var gaps = SkillGapAnalysis.Compute(
+            inBand,
+            corpus,
+            [.. held.Select(a => a.ConceptKey).Distinct(StringComparer.Ordinal)],
+            ConceptGraph.Default,
+            GapLimit);
+
+        return TypedResults.Ok(new SkillGapResponse
+        {
+            MinScore = Math.Clamp(minScore, 0, 100),
+            SearchTerm = searchTerm,
+            Items = [.. gaps.Select(ToGapResponse)],
+        });
+    }
+
+    private static SkillGapItem ToGapResponse(SkillGap gap)
+    {
+        var label = ConceptGraph.Default.TryGet(gap.ConceptKey, out var concept)
+            ? concept.Label
+            : gap.ConceptKey;
+
+        string? heldLabel = null;
+
+        if (gap.HeldKey is { } heldKey)
+        {
+            heldLabel = ConceptGraph.Default.TryGet(heldKey, out var heldConcept)
+                ? heldConcept.Label
+                : heldKey;
+        }
+
+        return new SkillGapItem
+        {
+            Concept = gap.ConceptKey,
+            Label = label,
+            Kind = concept.Kind.ToString(),
+            MatchPostings = gap.MatchPostings,
+            CorpusPostings = gap.CorpusPostings,
+            Held = gap.HeldKey,
+            HeldLabel = heldLabel,
+            Relation = gap.Relation?.ToString(),
+            Credit = gap.Credit,
+        };
     }
 
     private static async Task<IResult> ListAsync(

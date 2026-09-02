@@ -156,8 +156,9 @@ public sealed class AuthorizationTests
             .Where(e => e.RoutePattern.RawText?.StartsWith("/api/v1/matches", StringComparison.Ordinal) == true)
             .ToList();
 
-        // List, detail, and the dismissal. Counted so this cannot pass vacuously.
-        Assert.Equal(3, routes.Count);
+        // List, detail, the dismissal, and the skills gap. Counted so this cannot pass
+        // vacuously - and so a new route on this group is a decision rather than a default.
+        Assert.Equal(4, routes.Count);
 
         Assert.All(routes, route =>
         {
