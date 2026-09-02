@@ -1,4 +1,4 @@
-targetScope = 'resourceGroup'
+﻿targetScope = 'resourceGroup'
 
 // ---------------------------------------------------------------------------
 // job-platform ingestion infrastructure.
@@ -31,6 +31,9 @@ param curatedContainerName string = 'jobs-curated'
 
 @description('Container holding the scraper configuration the API publishes and the NAS reads.')
 param scraperConfigContainerName string = 'scraper-config'
+
+@description('Container holding rendered CVs and cover letters, handed out as short-lived signed URLs.')
+param applicationPacksContainerName string = 'application-packs'
 
 @description('Object id of the Microsoft Entra principal to make SQL admin and Cosmos data reader (i.e. you).')
 param administratorObjectId string
@@ -171,6 +174,27 @@ resource curatedBlobContainer 'Microsoft.Storage/storageAccounts/blobServices/co
 resource scraperConfigContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
   parent: landingBlobService
   name: scraperConfigContainerName
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+// Rendered application documents: the PDF and DOCX a browser uploads to an employer's form.
+//
+// A fourth container, for a reason the other three share and one they do not. Shared: Event Grid
+// watches jobs-landing alone, so writing a rendered CV can never be mistaken for an upload to
+// ingest, and the identity's account-wide grant stays Blob Data *Reader* while this gets its own
+// scoped Contributor. Its own: this is the only container whose contents leave the tenant, as
+// short-lived user-delegation SAS URLs handed to a browser. Nothing else may be reachable through
+// a link, and a prefix under an existing container would have made the blast radius of a
+// mis-scoped signature the whole of the scraped corpus.
+//
+// The signature needs no stored key. Storage Blob Data Reader at account scope already carries
+// generateUserDelegationKey, so the identity signs with Entra credentials and the repository keeps
+// its property that a fresh clone deploys with nothing to leak.
+resource applicationPacksContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: landingBlobService
+  name: applicationPacksContainerName
   properties: {
     publicAccess: 'None'
   }
@@ -355,6 +379,7 @@ module containerApp 'modules/containerapp.bicep' = {
     signalRServiceUri: signalR.outputs.serviceUri
     landingStorageAccountName: landingStorageAccountName
     scraperConfigContainerName: scraperConfigContainer.name
+    applicationPacksContainerName: applicationPacksContainer.name
   }
 }
 
@@ -367,6 +392,7 @@ module rbac 'modules/rbac.bicep' = {
     ingestPrincipalId: identity.outputs.principalId
     curatedContainerName: curatedBlobContainer.name
     scraperConfigContainerName: scraperConfigContainer.name
+    applicationPacksContainerName: applicationPacksContainer.name
   }
 }
 

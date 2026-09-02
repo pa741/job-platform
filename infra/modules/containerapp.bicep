@@ -1,4 +1,4 @@
-@description('Azure region.')
+﻿@description('Azure region.')
 param location string
 
 @description('Resource name prefix.')
@@ -68,6 +68,9 @@ param landingStorageAccountName string = ''
 
 @description('Container the API publishes the scraper configuration into.')
 param scraperConfigContainerName string = 'scraper-config'
+
+@description('Container the rendered CVs and cover letters are written to and signed out of.')
+param applicationPacksContainerName string = 'application-packs'
 
 var useAzureOpenAi = aiProvider == 'azureopenai' && !empty(openAiEndpoint)
 
@@ -263,6 +266,19 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'ScraperConfigContainerName'
               value: scraperConfigContainerName
+            }
+            {
+              // The same account and the same identity, a different container. Empty leaves the
+              // pack unable to offer a file and saying so in its note, which is the established
+              // behaviour for a document that has not been rendered - degraded, never broken.
+              name: 'ApplicationPacks__serviceUri'
+              value: empty(landingStorageAccountName)
+                ? ''
+                : 'https://${landingStorageAccountName}.blob.core.windows.net'
+            }
+            {
+              name: 'ApplicationPacks__ContainerName'
+              value: applicationPacksContainerName
             }
           ])
           probes: [

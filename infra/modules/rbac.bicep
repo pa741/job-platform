@@ -1,4 +1,4 @@
-@description('Storage account the scraper uploads into.')
+﻿@description('Storage account the scraper uploads into.')
 param landingStorageAccountName string
 
 @description('Storage account backing the Functions host.')
@@ -14,6 +14,9 @@ param curatedContainerName string
 
 @description('Container the API publishes the scraper configuration into. Scoped write access.')
 param scraperConfigContainerName string
+
+@description('Container the rendered application documents are written to. Scoped write access.')
+param applicationPacksContainerName string
 
 // Built-in role ids, hard-coded because they are stable platform GUIDs.
 var storageBlobDataReader = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
@@ -112,6 +115,31 @@ resource scraperConfigContainer 'Microsoft.Storage/storageAccounts/blobServices/
 resource scraperConfigBlobWrite 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: scraperConfigContainer
   name: guid(scraperConfigContainer.id, ingestPrincipalId, storageBlobDataContributor)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributor)
+    principalId: ingestPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// And once more, for the container whose contents leave the tenant.
+//
+// The API renders a CV and a cover letter here and signs a short-lived user-delegation SAS over
+// each, so a browser can upload the file to an employer's form without the bytes ever passing
+// through an agent's context. The write grant is scoped to this container alone; the ability to
+// *sign* comes from the account-wide Blob Data Reader above, which already carries
+// generateUserDelegationKey - so there is still no account key anywhere, and no second role to
+// assign.
+//
+// The SAS a client receives is the intersection of this principal's permissions and the token's
+// own, which is why a read-only signature over one blob cannot be widened by whoever holds it.
+resource applicationPacksContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' existing = {
+  name: '${landingStorageAccountName}/default/${applicationPacksContainerName}'
+}
+
+resource applicationPacksBlobWrite 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: applicationPacksContainer
+  name: guid(applicationPacksContainer.id, ingestPrincipalId, storageBlobDataContributor)
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributor)
     principalId: ingestPrincipalId
