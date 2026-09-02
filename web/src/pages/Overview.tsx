@@ -198,6 +198,8 @@ export function Overview({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
  */
 function ScraperHealthCard({ health }: { health: import('../api/types').ScraperHealth }) {
   const degraded = health.status === 'degraded';
+  const regressed = health.emptyColumns.filter((c) => c.lastFilledUtc !== null);
+  const neverShipped = health.emptyColumns.filter((c) => c.lastFilledUtc === null);
 
   return (
     <Card
@@ -211,21 +213,47 @@ function ScraperHealthCard({ health }: { health: import('../api/types').ScraperH
         </span>
       }
     >
-      {health.emptyColumns.length === 0 ? (
+      {health.emptyColumns.length === 0 && (
         <div className="empty">Every column the parser tracks was populated in at least one row.</div>
-      ) : (
+      )}
+
+      {/* Two faults, one symptom. A column that was arriving and stopped is a board changing
+          its markup - the thing this card exists to catch. A column that has never arrived is
+          one the scraper does not emit yet, and alerting on it is how the whole card becomes
+          something you scroll past. They are separated here rather than counted together. */}
+      {regressed.length > 0 && (
         <>
           <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
-            {health.emptyColumns.length} column{health.emptyColumns.length === 1 ? '' : 's'} were empty
-            in <strong>every</strong> row of the last run. A column that drops to zero usually means a
-            board changed its markup and the scraper degraded quietly.
+            {regressed.length} column{regressed.length === 1 ? '' : 's'} that {regressed.length === 1 ? 'was' : 'were'}{' '}
+            arriving stopped. That usually means a board changed its markup and the scraper
+            degraded quietly.
           </p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {health.emptyColumns.map((column) => (
-              <span key={column} className="pill critical">▲ {column}</span>
+            {regressed.map((column) => (
+              <span
+                key={column.field}
+                className="pill critical"
+                title={`Last filled ${new Date(column.lastFilledUtc!).toLocaleDateString()}, at ${Math.round((column.lastFillRate ?? 0) * 100)}%`}
+              >
+                ▲ {column.field}
+              </span>
             ))}
           </div>
         </>
+      )}
+
+      {neverShipped.length > 0 && (
+        <div style={{ marginTop: regressed.length > 0 ? 14 : 0 }}>
+          <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+            {neverShipped.length} tracked column{neverShipped.length === 1 ? ' has' : 's have'} never
+            been populated. Nothing broke: the scraper does not emit {neverShipped.length === 1 ? 'it' : 'them'} yet.
+          </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {neverShipped.map((column) => (
+              <span key={column.field} className="pill">{column.field}</span>
+            ))}
+          </div>
+        </div>
       )}
 
       {health.sparseColumns.length > 0 && (

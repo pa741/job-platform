@@ -72,8 +72,8 @@ public sealed record ScraperHealth
     /// <summary><c>healthy</c>, <c>degraded</c>, or <c>unknown</c> when there is no data.</summary>
     public required string Status { get; init; }
 
-    /// <summary>Columns populated in no row at all. The strongest signal available.</summary>
-    public IReadOnlyList<string> EmptyColumns { get; init; } = [];
+    /// <summary>Columns populated in no row of the last run, each with when it last was.</summary>
+    public IReadOnlyList<EmptyColumn> EmptyColumns { get; init; } = [];
 
     /// <summary>Columns populated in fewer than a quarter of rows.</summary>
     public IReadOnlyList<FieldFill> SparseColumns { get; init; } = [];
@@ -87,3 +87,22 @@ public sealed record ScraperHealth
 }
 
 public sealed record FieldFill(string Field, double FillRate);
+
+/// <summary>
+/// A column empty in every row of the last run, and when it was last populated.
+/// </summary>
+/// <remarks>
+/// Two faults present the same symptom and need opposite responses, which is why this is a
+/// record rather than a bare column name. A column that was filled and is now empty is a
+/// board changing its markup - the regression this endpoint exists to catch. A column that
+/// has never been filled is one the scraper does not emit yet, and alerting on it is how a
+/// warning becomes something people learn to scroll past.
+///
+/// <para>
+/// <see cref="LastFilledUtc"/> is null when no run <em>within the history window</em> had it
+/// populated - not "never", which the digests cannot prove. A column that regressed further
+/// back than the window therefore reads as never-shipped; at ninety runs that is a column
+/// which has been empty for a quarter of a year, and no longer the early warning this is for.
+/// </para>
+/// </remarks>
+public sealed record EmptyColumn(string Field, DateTimeOffset? LastFilledUtc, double? LastFillRate);

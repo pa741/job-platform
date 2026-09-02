@@ -48,7 +48,7 @@ export function PostingInsightPanel({ api, postingId, onClose }: {
           {/* A single number is a stat tile, never a one-bar chart. */}
           <StatTile
             label="Applicants"
-            value={detail.applicantCount ?? '—'}
+            value={summary.applicantCount ?? '—'}
             hint={detail.applicants ?? 'LinkedIn only; most boards never say'}
           />
           <StatTile

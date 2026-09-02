@@ -21,9 +21,11 @@ public sealed class MetricEndpointTests : IDisposable
         _client = _factory.CreateClient();
 
         _factory.Metrics.Digests.Add(Digest(
-            new DateTimeOffset(2026, 8, 18, 9, 0, 0, TimeSpan.Zero), parsed: 120, isNew: 30));
+            new DateTimeOffset(2026, 8, 18, 9, 0, 0, TimeSpan.Zero), parsed: 120, isNew: 30,
+            currencyFill: 0.82));
         _factory.Metrics.Digests.Add(Digest(
-            new DateTimeOffset(2026, 8, 19, 9, 0, 0, TimeSpan.Zero), parsed: 140, isNew: 45));
+            new DateTimeOffset(2026, 8, 19, 9, 0, 0, TimeSpan.Zero), parsed: 140, isNew: 45,
+            currencyFill: 0.0));
 
         _factory.Metrics.Rollups.Add(Rollup("2026-08-18", newPostings: 30, cumulative: 30));
         _factory.Metrics.Rollups.Add(Rollup("2026-08-19", newPostings: 45, cumulative: 75));
@@ -35,7 +37,8 @@ public sealed class MetricEndpointTests : IDisposable
         _factory.Dispose();
     }
 
-    private static RunDigest Digest(DateTimeOffset scrapedAt, int parsed, int isNew) => new()
+    private static RunDigest Digest(
+        DateTimeOffset scrapedAt, int parsed, int isNew, double currencyFill = 0.0) => new()
     {
         Id = $"run|{scrapedAt:yyyyMMdd}",
         SearchTerm = Term,
@@ -53,7 +56,10 @@ public sealed class MetricEndpointTests : IDisposable
         TopLocations = [new NamedCount("London", 90)],
         TitleKeywords = [new NamedCount("engineer", 60)],
         DescriptionLength = new LengthStats(1200, 4000, 9000),
-        // A real London run had min_amount and currency populated in 0% of rows.
+        // A real London run had min_amount and currency populated in 0% of rows. They are
+        // seeded differently here because they are two different faults: currency arrives
+        // filled and then stops, which is a board changing its markup; min_amount has never
+        // been filled at all, which is a column the scraper does not emit yet.
         FieldFillRates = new Dictionary<string, double>
         {
             ["title"] = 1.0,
@@ -61,7 +67,7 @@ public sealed class MetricEndpointTests : IDisposable
             ["date_posted"] = 0.40,
             ["job_level"] = 0.03,
             ["min_amount"] = 0.0,
-            ["currency"] = 0.0,
+            ["currency"] = currencyFill,
         },
     };
 
@@ -145,15 +151,60 @@ public sealed class MetricEndpointTests : IDisposable
             $"/api/v1/metrics/scraper-health?searchTerm={Term}", Json);
 
         Assert.Equal("degraded", health!.Status);
-        Assert.Equal(["currency", "min_amount"], health.EmptyColumns);
+        Assert.Equal(["currency", "min_amount"], health.EmptyColumns.Select(c => c.Field));
 
         // A barely-populated column is flagged as sparse.
         Assert.Contains(health.SparseColumns, f => f.Field == "job_level");
 
         // 40% date_posted coverage is normal for this data - a real London run measured
         // exactly that - so it must be neither empty nor sparse, or the signal is noise.
-        Assert.DoesNotContain("date_posted", health.EmptyColumns);
+        Assert.DoesNotContain(health.EmptyColumns, c => c.Field == "date_posted");
         Assert.DoesNotContain(health.SparseColumns, f => f.Field == "date_posted");
+    }
+
+    /// <summary>
+    /// The two faults behind an empty column, told apart.
+    /// </summary>
+    /// <remarks>
+    /// Both present identically in the latest run and need opposite responses: one is a board
+    /// changing its markup, the other is a column the scraper does not emit yet. Reporting
+    /// them the same way is how this alarm becomes something people learn to scroll past.
+    /// </remarks>
+    [Fact]
+    public async Task An_empty_column_says_when_it_was_last_filled()
+    {
+        var health = await _client.GetFromJsonAsync<ScraperHealth>(
+            $"/api/v1/metrics/scraper-health?searchTerm={Term}", Json);
+
+        var regressed = health!.EmptyColumns.Single(c => c.Field == "currency");
+        Assert.Equal(new DateTimeOffset(2026, 8, 18, 9, 0, 0, TimeSpan.Zero), regressed.LastFilledUtc);
+        Assert.Equal(0.82, regressed.LastFillRate);
+
+        var neverShipped = health.EmptyColumns.Single(c => c.Field == "min_amount");
+        Assert.Null(neverShipped.LastFilledUtc);
+        Assert.Null(neverShipped.LastFillRate);
+    }
+
+    /// <summary>
+    /// A column that has never been filled must not degrade the status on its own.
+    /// </summary>
+    [Fact]
+    public async Task A_column_that_never_shipped_is_reported_without_degrading_the_status()
+    {
+        const string term = "quiet";
+        var scraped = new DateTimeOffset(2026, 8, 19, 9, 0, 0, TimeSpan.Zero);
+
+        var digest = Digest(scraped, parsed: 10, isNew: 2) with { SearchTerm = term, Id = "run|quiet" };
+        _factory.Metrics.Digests.Add(digest);
+
+        var health = await _client.GetFromJsonAsync<ScraperHealth>(
+            $"/api/v1/metrics/scraper-health?searchTerm={term}", Json);
+
+        // Both columns are empty and neither has ever been filled, so there is nothing here
+        // that broke - and the endpoint says so while still naming them.
+        Assert.Equal("healthy", health!.Status);
+        Assert.All(health.EmptyColumns, c => Assert.Null(c.LastFilledUtc));
+        Assert.Equal(["currency", "min_amount"], health.EmptyColumns.Select(c => c.Field));
     }
 
     [Fact]

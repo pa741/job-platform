@@ -72,6 +72,16 @@ export interface PostingSummary {
   postingAgeDays: number | null;
   repostCount: number | null;
   fakeFreshness: boolean | null;
+
+  /**
+   * How many people the board says have applied. The competition signal.
+   *
+   * On the list rather than only on the detail: it is a number you sort a shortlist by, and
+   * a field only the detail endpoint carries can never be one. Sparse — LinkedIn is the only
+   * board that publishes it — so null means "not stated", never zero.
+   */
+  applicantCount: number | null;
+
   firstSeenUtc: string;
   lastSeenUtc: string;
   seenCount: number;
@@ -80,16 +90,13 @@ export interface PostingSummary {
 }
 
 export interface PostingDetail {
-  /** Verbatim applicant caption, e.g. "Over 200 applicants". LinkedIn only. */
-  applicants: string | null;
-
   /**
-   * The figure parsed out of `applicants`. The competition signal.
+   * Verbatim applicant caption, e.g. "Over 200 applicants". LinkedIn only.
    *
-   * Sparse — LinkedIn is the only board that publishes it — so null means "not stated",
-   * never zero.
+   * The parsed figure is `summary.applicantCount`. "Over 200" and "200" are not the same
+   * statement, and only the caption says which one the board actually made.
    */
-  applicantCount: number | null;
+  applicants: string | null;
 
   /** Openings this listing covers, where the board says. Naukri and freehire. */
   vacancyCount: number | null;
@@ -231,11 +238,25 @@ export interface FieldFill {
   fillRate: number;
 }
 
+/**
+ * A column empty in every row of the last run, and when it was last populated.
+ *
+ * Two faults present the same symptom and need opposite responses. `lastFilledUtc` set means
+ * the column was arriving and stopped — a board changed its markup. Null means no run within
+ * the history window had it populated, which is a column the scraper does not emit yet, and
+ * is not something that broke.
+ */
+export interface EmptyColumn {
+  field: string;
+  lastFilledUtc: string | null;
+  lastFillRate: number | null;
+}
+
 export interface ScraperHealth {
   searchTerm: string;
   lastScrapedAtUtc: string | null;
   status: 'healthy' | 'degraded' | 'unknown';
-  emptyColumns: string[];
+  emptyColumns: EmptyColumn[];
   sparseColumns: FieldFill[];
   fieldFillRates: Record<string, number>;
   rowsInLastRun: number;
