@@ -259,4 +259,89 @@ public sealed class JobMatchRankingTests : IDisposable
             Assert.Null(row.Similarity);
         }
     }
+
+    [Fact]
+    public async Task A_re_scored_pair_stays_dismissed()
+    {
+        // The trap. A re-score that moves the number clears everything the model concluded
+        // from the old arithmetic - but the candidate's "no" was not concluded from a number,
+        // and sweeping it up in that reset would put every dismissed posting back at the top
+        // of the shortlist on the first night its score shifted by a point.
+        await using (var db = CreateContext())
+        {
+            await WriteAsync(db, Scores((1, 90)), MatchRanker.Rank([new(1, 90, 0.8)]));
+            await new JobMatchRepository(db).SetDismissedAsync(ProfileId, 1, Now);
+        }
+
+        await using (var db = CreateContext())
+        {
+            await WriteAsync(db, Scores((1, 74)), MatchRanker.Rank([new(1, 74, 0.8)]));
+        }
+
+        await using (var db = CreateContext())
+        {
+            var row = await new JobMatchRepository(db).GetDetailAsync(ProfileId, 1);
+
+            Assert.Equal(74, row!.Score);
+            Assert.Equal(Now, row.DismissedAtUtc);
+        }
+    }
+
+    [Fact]
+    public async Task A_dismissed_pair_leaves_the_shortlist_and_can_come_back()
+    {
+        await using (var db = CreateContext())
+        {
+            await WriteAsync(db, Scores((1, 90), (2, 80)), MatchRanker.Rank([]));
+            await new JobMatchRepository(db).SetDismissedAsync(ProfileId, 1, Now);
+        }
+
+        await using (var db = CreateContext())
+        {
+            var repo = new JobMatchRepository(db);
+
+            var shortlist = await repo.ListAsync(ProfileId, 0, false, 25, 0);
+            Assert.Equal([2L], shortlist.Select(r => r.PostingId));
+
+            // The same shape read the other way round, so a client can show what it set aside
+            // without a second contract.
+            var dismissed = await repo.ListAsync(ProfileId, 0, false, 25, 0, dismissed: true);
+            Assert.Equal([1L], dismissed.Select(r => r.PostingId));
+
+            // An undo is the half that makes the feature safe to use at all.
+            await repo.SetDismissedAsync(ProfileId, 1, null);
+            var restored = await repo.ListAsync(ProfileId, 0, false, 25, 0);
+            Assert.Equal([1L, 2L], restored.Select(r => r.PostingId).Order());
+        }
+    }
+
+    [Fact]
+    public async Task A_dismissed_pair_does_not_spend_the_assessment_budget()
+    {
+        // The point of the column. Forty judgements a night, and one spent on a posting the
+        // candidate has already said no to is a judgement not spent on one they have not seen.
+        // Filtered inside the query for the same reason the empty descriptions are: a band
+        // ordered by posting id would draw the same dismissed rows into every sample forever.
+        await using (var db = CreateContext())
+        {
+            await WriteAsync(db, Scores((4, 65), (5, 64)), MatchRanker.Rank([]));
+            await new JobMatchRepository(db).SetDismissedAsync(ProfileId, 4, Now);
+        }
+
+        await using (var db = CreateContext())
+        {
+            var shortlist = await new JobMatchRepository(db)
+                .GetUnassessedAsync(ProfileId, minimumScore: 60, limit: 10);
+
+            Assert.Equal([5L], shortlist.Select(r => r.PostingId));
+        }
+    }
+
+    [Fact]
+    public async Task Dismissing_a_pair_that_was_never_scored_is_a_miss_not_a_silent_success()
+    {
+        await using var db = CreateContext();
+
+        Assert.False(await new JobMatchRepository(db).SetDismissedAsync(ProfileId, 99, Now));
+    }
 }

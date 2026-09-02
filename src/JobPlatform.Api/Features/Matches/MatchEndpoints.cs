@@ -43,6 +43,10 @@ public sealed class MatchEndpoints : IEndpointGroup
         group.MapGet("/{postingId:long}", GetAsync)
             .WithName("GetMatch")
             .WithSummary("One match in full, including the breakdown behind the score.");
+
+        group.MapPut("/{postingId:long}/dismissed", SetDismissedAsync)
+            .WithName("SetMatchDismissed")
+            .WithSummary("Marks a match as not interesting, or takes that back.");
     }
 
     private static async Task<IResult> ListAsync(
@@ -53,7 +57,8 @@ public sealed class MatchEndpoints : IEndpointGroup
         int minScore = 0,
         bool assessedOnly = false,
         int limit = 25,
-        int offset = 0)
+        int offset = 0,
+        bool dismissed = false)
     {
         if (!user.TryGetSubjectId(out var subjectId, out var error))
         {
@@ -84,9 +89,55 @@ public sealed class MatchEndpoints : IEndpointGroup
             assessedOnly,
             Math.Clamp(limit, 1, MaxLimit),
             offset,
+            dismissed,
             ct);
 
         return TypedResults.Ok(new { items = rows.Select(ToSummary).ToList(), offset });
+    }
+
+    /// <summary>
+    /// Records that this candidate is not interested in a posting, or takes it back.
+    /// </summary>
+    /// <remarks>
+    /// The only write on this group, and the one that keeps the shortlist a worklist. Without
+    /// it every role the candidate has already rejected is back at the top tomorrow, and the
+    /// nightly budget keeps spending judgements on postings they have said no to.
+    ///
+    /// <para>
+    /// A PUT rather than a POST because it sets a state rather than appending to a log, and
+    /// because it has to be safe to repeat: a client retrying a dismissal it is unsure landed
+    /// must not get a different answer the second time.
+    /// </para>
+    /// </remarks>
+    private static async Task<IResult> SetDismissedAsync(
+        ClaimsPrincipal user,
+        long postingId,
+        [FromBody] SetDismissedRequest request,
+        [FromServices] CandidateProfileRepository profiles,
+        [FromServices] JobMatchRepository matches,
+        TimeProvider clock,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (!user.TryGetSubjectId(out var subjectId, out var error))
+        {
+            return error;
+        }
+
+        var profileId = await profiles.GetIdAsync(subjectId, ct);
+
+        if (profileId is null)
+        {
+            return TypedResults.NotFound();
+        }
+
+        var when = request.Dismissed ? clock.GetUtcNow() : (DateTimeOffset?)null;
+        var found = await matches.SetDismissedAsync(profileId.Value, postingId, when, ct);
+
+        return found
+            ? TypedResults.Ok(new SetDismissedResponse { PostingId = postingId, DismissedAtUtc = when })
+            : TypedResults.NotFound();
     }
 
     private static async Task<IResult> GetAsync(
@@ -193,6 +244,7 @@ public sealed class MatchEndpoints : IEndpointGroup
             RankScore = row.RankScore,
             ScoredAtUtc = row.ScoredAtUtc,
             AssessedAtUtc = row.AssessedAtUtc,
+            DismissedAtUtc = row.DismissedAtUtc,
         };
 
     private static string Label(ConceptGraph graph, string key)

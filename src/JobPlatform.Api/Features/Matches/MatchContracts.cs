@@ -88,6 +88,16 @@ public record MatchSummary
 
     public DateTimeOffset ScoredAtUtc { get; init; }
     public DateTimeOffset? AssessedAtUtc { get; init; }
+
+    /// <summary>
+    /// When the candidate said they were not interested. Null means they have not.
+    /// </summary>
+    /// <remarks>
+    /// Present on every row although the default list returns only undismissed ones, because
+    /// the dismissed pile is the same shape read with <c>dismissed=true</c> and a client
+    /// showing it needs to say when each was set aside.
+    /// </remarks>
+    public DateTimeOffset? DismissedAtUtc { get; init; }
 }
 
 /// <summary>One match in full, including the breakdown behind the number.</summary>
@@ -156,3 +166,21 @@ public readonly record struct ConceptGapResponse(
     string Label,
     string Demand,
     int? YearsMin);
+
+/// <summary>Sets, or clears, a candidate's "not interested" on one posting.</summary>
+/// <remarks>
+/// A body with one field rather than two routes, so that dismissing and undoing are the same
+/// operation with a different value. An undo is the more important half: a dismissal a client
+/// cannot take back is one nobody will risk using.
+/// </remarks>
+public sealed record SetDismissedRequest
+{
+    public bool Dismissed { get; init; }
+}
+
+/// <summary>What the dismissal now is, echoed so a client need not re-read to find out.</summary>
+public sealed record SetDismissedResponse
+{
+    public required long PostingId { get; init; }
+    public DateTimeOffset? DismissedAtUtc { get; init; }
+}

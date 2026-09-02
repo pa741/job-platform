@@ -295,6 +295,18 @@ export class JobPlatformApi {
 
   match = (postingId: number) => this.request<MatchDetail>(`/api/v1/matches/${postingId}`);
 
+  /**
+   * Sets, or clears, "not interested" on one match.
+   *
+   * A PUT because it sets a state rather than appending to a log, so a client retrying one it
+   * is unsure landed gets the same answer the second time. The undo is the same call with
+   * `false` - a dismissal that cannot be taken back is one nobody will risk using.
+   */
+  setMatchDismissed = (postingId: number, dismissed: boolean) =>
+    this.request<{ postingId: number; dismissedAtUtc: string | null }>(
+      `/api/v1/matches/${postingId}/dismissed`,
+      { method: 'PUT', body: JSON.stringify({ dismissed }) });
+
   applications = (limit = 25) =>
     this.request<{ items: ApplicationSummary[] }>(
       `/api/v1/applications${JobPlatformApi.query({ limit })}`);
@@ -352,6 +364,8 @@ export interface MatchQuery {
   assessedOnly?: boolean;
   limit?: number;
   offset?: number;
+  /** The dismissed pile instead of the shortlist. Never both - see the repository. */
+  dismissed?: boolean;
 }
 
 export interface PostingQuery {

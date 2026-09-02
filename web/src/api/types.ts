@@ -458,6 +458,15 @@ export interface MatchSummary {
 
   scoredAtUtc: string;
   assessedAtUtc: string | null;
+
+  /**
+   * When the candidate said they were not interested. Null means they have not.
+   *
+   * Present on every row although the default list returns only undismissed ones: the
+   * dismissed pile is the same shape read with `dismissed=true`, and a client showing it
+   * needs to say when each was set aside.
+   */
+  dismissedAtUtc: string | null;
 }
 
 export interface MatchComponent {

@@ -140,6 +140,30 @@ public sealed class JobMatchEntity
 
     /// <summary>The model's response for this pair, kept verbatim.</summary>
     public string? AssessmentPayloadJson { get; set; }
+
+    /// <summary>
+    /// When the candidate said they were not interested. Null means they have not.
+    /// </summary>
+    /// <remarks>
+    /// Nullable and dated rather than a boolean, for the same reason
+    /// <see cref="AssessedAtUtc"/> is: the null is the flag, and the date is worth having
+    /// when a pair is dismissed and later re-scored into a very different shape.
+    ///
+    /// <para>
+    /// Not a submission. That table records that something was <em>sent</em>, and its
+    /// <c>Withdrawn</c> event closes an application which existed - a posting the candidate
+    /// was never interested in is neither. It belongs here because it is a fact about this
+    /// pair, and because the two reads that need it are already on this table.
+    /// </para>
+    ///
+    /// <para>
+    /// It has to survive a re-score. <c>UpsertScoresAsync</c> clears the assessment columns
+    /// when the arithmetic moves, and a dismissal swept up in that reset would put the
+    /// posting back at the top of the shortlist the next morning - which is the exact
+    /// failure this column exists to prevent.
+    /// </para>
+    /// </remarks>
+    public DateTimeOffset? DismissedAtUtc { get; set; }
 }
 
 /// <summary>

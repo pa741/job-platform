@@ -133,6 +133,45 @@ public sealed class AuthorizationTests
     }
 
     /// <summary>
+    /// The same, for matches - which now carry a write.
+    /// </summary>
+    /// <remarks>
+    /// The posting data behind a match is public. Which postings a particular person matches,
+    /// by how much, and which ones they have set aside is not, and the dismissal route makes
+    /// that group a write surface rather than a read one. Asserted as metadata for the reason
+    /// the submissions case documents: an anonymous request answers 401 either way, because
+    /// every handler here also resolves a subject id, so a 401 test would stay green through a
+    /// swap to PublicReadPolicy.
+    /// </remarks>
+    [Fact]
+    public void Every_match_route_requires_the_authenticated_policy()
+    {
+        using var factory = new ApiFactory { AllowAnonymousReads = true };
+        using var client = factory.CreateClient();
+
+        var routes = factory.Services
+            .GetRequiredService<EndpointDataSource>()
+            .Endpoints
+            .OfType<RouteEndpoint>()
+            .Where(e => e.RoutePattern.RawText?.StartsWith("/api/v1/matches", StringComparison.Ordinal) == true)
+            .ToList();
+
+        // List, detail, and the dismissal. Counted so this cannot pass vacuously.
+        Assert.Equal(3, routes.Count);
+
+        Assert.All(routes, route =>
+        {
+            var policies = route.Metadata
+                .OfType<IAuthorizeData>()
+                .Select(data => data.Policy)
+                .ToList();
+
+            Assert.Contains(AuthSetup.AuthenticatedPolicy, policies);
+            Assert.DoesNotContain(AuthSetup.PublicReadPolicy, policies);
+        });
+    }
+
+    /// <summary>
     /// And the same routes answer 401 anonymously, whatever the reason.
     /// </summary>
     /// <remarks>
