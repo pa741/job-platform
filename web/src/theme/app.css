@@ -386,3 +386,337 @@ button.pill:hover { background: var(--gridline); }
   border-radius: 999px;
   background: var(--series-1);
 }
+
+/* ===========================================================================
+   The redesigned shell.
+
+   Added alongside the existing component styles rather than replacing them:
+   the pages are being rewritten a section at a time, and swapping the whole
+   stylesheet under nine live pages would break eight of them to fix one. The
+   old blocks above come out as their pages go.
+   =========================================================================== */
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--t-body);
+  line-height: 1.6;
+}
+
+/* One micro-label, used everywhere. There were twelve near-identical
+   definitions in the mock across four sizes and four trackings; below 11px an
+   uppercase mono cap-height drops under 8px, which is where the contrast
+   failures were. */
+.kicker,
+.sectionbar .now,
+.dateline,
+.result-count {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.kicker,
+.sectionbar .now {
+  text-transform: uppercase;
+}
+
+/* Chrome ------------------------------------------------------------------ */
+.chrome {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--page);
+  border-bottom: 1px solid var(--border);
+}
+
+.chrome .wrap {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 var(--s5);
+}
+
+.sectionbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s5);
+  padding: var(--s4) 0 0;
+}
+
+h1.mark {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 22px;
+  margin: 0;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+h1.mark span {
+  color: var(--text-muted);
+}
+
+/* The section pill. Three words, so it survives a narrow viewport intact. */
+.sections {
+  position: relative;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.sections button {
+  position: relative;
+  z-index: 1;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--t-small);
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 7px 16px;
+  border-radius: 999px;
+  min-height: 32px;
+}
+
+.sections button:hover { color: var(--text-primary); }
+.sections button[aria-current="true"] { color: var(--on-ink); }
+
+.sections .thumb {
+  position: absolute;
+  z-index: 0;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: 1px;
+  background: var(--text-primary);
+  border-radius: 999px;
+  transform-origin: left center;
+}
+
+.sectionbar .right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+}
+
+.dateline { text-align: right; line-height: 1.35; }
+.dateline b { color: var(--text-secondary); font-weight: 400; }
+/* An age past a day is the whole point of showing an age. */
+.dateline b.stale { color: var(--oxide); }
+
+/* Page tabs, under the section. Three at a time, so the row never overflows. */
+nav.pages {
+  display: flex;
+  gap: var(--s5);
+  position: relative;
+  margin-top: var(--s1);
+}
+
+nav.pages button {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--t-body-2);
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 10px 0 12px;
+  white-space: nowrap;
+}
+
+nav.pages button:hover { color: var(--text-primary); }
+nav.pages button[aria-current="page"] { color: var(--text-primary); }
+
+nav.pages .marker {
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 1px;
+  height: 2px;
+  background: var(--seq-450);
+  transform-origin: left center;
+}
+
+.burger {
+  display: none;
+  margin-left: auto;
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  border-radius: 999px;
+  width: 44px;
+  height: 44px;
+  cursor: pointer;
+  position: relative;
+}
+
+.burger i {
+  position: absolute;
+  left: 13px;
+  width: 18px;
+  height: 1.5px;
+  background: var(--text-primary);
+  border-radius: 2px;
+  display: block;
+}
+
+.burger i:nth-child(1) { top: 16px; }
+.burger i:nth-child(2) { top: 21px; }
+.burger i:nth-child(3) { top: 26px; }
+
+.sectionbar .now { display: none; margin-left: var(--s3); }
+
+@media (max-width: 860px) {
+  .sections,
+  nav.pages,
+  .sectionbar .right { display: none; }
+
+  .burger { display: block; }
+  .sectionbar { padding: var(--s3) 0; }
+  h1.mark { font-size: var(--t-lede); }
+  .sectionbar .now { display: block; }
+}
+
+@media (max-width: 460px) {
+  .sectionbar .now { display: none; }
+}
+
+@media (max-width: 620px) {
+  .chrome .wrap { padding: 0 var(--s4); }
+}
+
+/* The mobile sheet: the whole navigation, as three headed groups rather than
+   eight tabs squeezed into a row that scrolls sideways. */
+.sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--page);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--s5) var(--s4) var(--s7);
+}
+
+.sheet .head {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  margin-bottom: var(--s5);
+}
+
+.sheet .close {
+  margin-left: auto;
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--text-primary);
+  border-radius: 999px;
+  width: 44px;
+  height: 44px;
+  font-size: 20px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.sheet section { margin-bottom: var(--s5); }
+
+.sheet h2 {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 400;
+  margin: 0 0 var(--s1);
+  padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--border);
+}
+
+.sheet button.page {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-display);
+  font-size: var(--t-display);
+  font-weight: 400;
+  color: var(--text-primary);
+  padding: 10px 0;
+  cursor: pointer;
+  letter-spacing: -0.01em;
+  min-height: 44px;
+}
+
+.sheet button.page[aria-current="page"] { color: var(--seq-450); }
+
+.sheet button.page span {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  color: var(--text-muted);
+  margin-left: var(--s2);
+}
+
+.sheet .controls {
+  display: flex;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  padding-top: var(--s2);
+}
+
+/* Waking, and the buttons the shell needs ---------------------------------- */
+.waking {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--oxide);
+  border-radius: 2px;
+  background: var(--surface-1);
+  padding: var(--s5);
+  margin-bottom: var(--s4);
+}
+
+.waking h2 {
+  font-size: var(--t-title);
+  font-weight: 600;
+  margin: 0 0 var(--s2);
+}
+
+.waking p {
+  font-size: var(--t-small);
+  color: var(--text-secondary);
+  margin: 0 0 var(--s3);
+  max-width: 62ch;
+}
+
+.waking .waking-aside {
+  border-top: 1px solid var(--gridline);
+  padding-top: var(--s3);
+  margin: var(--s3) 0 0;
+  color: var(--text-muted);
+}
+
+.btn.primary {
+  background: var(--seq-450);
+  border-color: var(--seq-450);
+  color: var(--on-ink);
+}
+
+.btn.primary:hover { filter: brightness(1.1); }
+
+/* A button that reads as a link, for prose. Not an anchor: it navigates within
+   the app, and an href the router would have to intercept is a link that opens
+   a new tab on middle-click into a page with no state. */
+.linkish {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--seq-450);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.linkish:hover { text-decoration-thickness: 2px; }

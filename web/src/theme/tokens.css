@@ -18,7 +18,7 @@
   --page: #f9f9f7;
   --text-primary: #0b0b0b;
   --text-secondary: #52514e;
-  --text-muted: #898781;
+  --text-muted: #686e6c;   /* 5.20:1 on --surface-1, 4.58:1 on --page. The old #898781 measured 3.42 and carried every hint and caption in the app. */
   --gridline: #e1e0d9;
   --axis: #c3c2b7;
   --border: rgba(11, 11, 11, 0.1);
@@ -43,8 +43,62 @@
   --status-serious: #ec835a;
   --status-critical: #d03b3b;
 
+
+  /* ---------------------------------------------------------------------
+     Added for the redesign. Every name above keeps its spelling on purpose:
+     chartTheme.ts resolves --series-*, --seq-*, --gridline, --axis,
+     --text-muted, --surface-1 and --text-primary by name, and shadowing them
+     with a parallel vocabulary is how charts silently keep one theme's palette
+     across a toggle - the exact failure that hook exists to prevent.
+     --------------------------------------------------------------------- */
+
+  /* The ground a datum sits in, distinct from --border. A 1px rule and the
+     6px track behind a bar want different values, and --seq-450 clears 3:1
+     against this one - which is what a graphical mark needs to be seen. */
+  --track: #e2e5e1;
+
+  /* Attention, and only attention. Never a series slot, never an accent. */
+  --oxide: #a8542b;
+  --oxide-soft: #e8d3c6;
+
+  /* Text on an ink-filled surface: the selected segment of the section pill. */
+  --on-ink: #f3f5f2;
+
+  /* A mark that is context rather than data - a weekend column, a dropped axis. */
+  --mark-quiet: #8c938b;
+
+  --scrim: rgba(11, 11, 11, 0.34);
+  --lift: 0 20px 50px rgba(11, 11, 11, 0.13), 0 2px 6px rgba(11, 11, 11, 0.05);
+
+  /* Type. Seven steps, and nothing between them - the mock reached 23 sizes
+     before anyone counted, and half of them were half-pixel drift. */
+  --t-micro: 11px;
+  --t-small: 13px;
+  --t-body-2: 14px;
+  --t-body: 15px;
+  --t-title: 16px;
+  --t-lede: 20px;
+  --t-display: 24px;
+  --t-figure: 34px;
+
+  /* Space. Eight steps. A negative margin clawing one back is the tell that a
+     scale is missing, not that a gap needs adjusting. */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --s7: 48px;
+  --s8: 64px;
+
   --radius: 10px;
-  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Every face carries a real fallback: a webfont that fails to load must degrade
+     rather than disappear. Newsreader is restricted to the lede, the figures band and
+     the match score - below 20px it is just a smaller serif. */
+  --font-sans: "Karla", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Newsreader", Georgia, "Times New Roman", serif;
+  --font-mono: "DM Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -70,6 +124,14 @@
     --seq-450: #2a78d6;
     --seq-550: #3987e5;
     --seq-650: #5598e7;
+
+    --track: #2b2f32;
+    --oxide: #d99163;
+    --oxide-soft: #6b4531;
+    --on-ink: #15171a;
+    --mark-quiet: #5e6366;
+    --scrim: rgba(0, 0, 0, 0.58);
+    --lift: 0 20px 50px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
   }
 }
 
@@ -95,4 +157,12 @@
   --seq-450: #2a78d6;
   --seq-550: #3987e5;
   --seq-650: #5598e7;
+
+  --track: #2b2f32;
+  --oxide: #d99163;
+  --oxide-soft: #6b4531;
+  --on-ink: #15171a;
+  --mark-quiet: #5e6366;
+  --scrim: rgba(0, 0, 0, 0.58);
+  --lift: 0 20px 50px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
 }
