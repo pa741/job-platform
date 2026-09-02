@@ -856,13 +856,22 @@ Each of these cost a red CI run; none of them fail locally.
   between the profile document and the advert is **+0.520** in exactly that band, interval
   excluding zero. That is the finding, it replicated out of sample, and it is what the ranking is
   for.
-- **What did *not* replicate is the corpus-wide claim, and the numbers here are the corrected
-  ones.** In-sample on the 194 labels α was fitted to, the ranking beat the score by +0.123
-  (significant). On 154 labels assessed afterwards it beat it by **+0.045, CI [-0.015, +0.101] -
-  not significant**, and the embedding *alone* went from indistinguishable from the score to
-  **significantly worse** than it (-0.337). Treat the ranking as "better at the top of the list",
-  which is measured and holds, and not as "better overall", which is not established. Any figure
-  quoting +0.521 or 68.5% is the in-sample one and is superseded.
+- **The corpus-wide claim took three cohorts to settle, and it now holds.** In-sample on the 194
+  labels α was fitted to, the ranking beat the score by +0.123. On the 154 labelled afterwards it
+  managed only **+0.045, CI [-0.015, +0.101] - not significant**, which is why this rule used to
+  read "better at the top, not established as better overall". On 2026-09-02, with 151 labels
+  clean for both α and the floor, it beats the score by **+0.129, CI [+0.012, +0.248] -
+  significant**, jackknife-stable, and the floor is vindicated at 75/80/85 on data it was not
+  fitted on. **The ranking is better overall.** Any figure quoting +0.521 or 68.5% is the
+  in-sample one and is superseded.
+- **What has *not* held still is which band the embedding earns its weight in, and the design's
+  explanation depends on it.** Two cohorts put it in 90-100, where the score is flat. The
+  2026-09-02 cohort puts it in **80-89** (+0.456, excluding zero) and has it slightly *negative*
+  in 90-100 (-0.109, containing zero, n=31). That is weak evidence rather than a refutation, but
+  it means **the mechanism must not be described as "the embedding rescues the top band" without
+  saying the latest cohort disagrees about which band that is.** What is stable across all of them
+  is that the two signals are complements. Re-measure the bands before re-tuning α; do not assume
+  90-100.
 - **The score is untouched, deliberately, and this is the part not to "simplify".** Folding the
   embedding into `MatchResult.Score` would clear every stored assessment - a moved score is the
   signal that a judgement was made against different arithmetic - and would therefore destroy the

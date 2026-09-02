@@ -13,7 +13,7 @@ and has been swept: 4,078 pairs scored, 2,495 over the assessment threshold, 50 
 Nothing about that profile belongs in this repository. It is somebody's employment history, and
 the rule in `CLAUDE.md` covers fixtures, examples and screenshots alike.
 
-**The stratified label set has reached the size 1.6 said to wait for.** As of 2026-09-02 there
+**The corpus-wide ranking claim is settled - see 1.6.** The stratified label set reached the size 1.6 said to wait for, the analysis was run on 2026-09-02, and the ranking beats the score by +0.129, CI [+0.012, +0.248], on 151 labels clean for both alpha and the floor. The floor is vindicated on data it was not fitted on. What did *not* reproduce is which band the embedding earns its weight in. As of 2026-09-02 there
 are **357 assessed pairs**, of which **151 sit below score 80** - 44 in 70-79, 56 in 60-69, 51 in
 45-59. Section 1.6 closed with "cohort D holds only 22 rows below score 80... at ten stratified
 labels a night it will hold roughly 150 in a fortnight, which is when re-running `balanced.py`
@@ -48,8 +48,10 @@ labels drawn *after* the ranking shipped, the ranking beats the score by **+0.04
 [-0.015, +0.101] - not significant**, where in-sample it had been a significant +0.123. What did
 replicate, cleanly, is the reason the thing exists: inside the top band the score is flat
 (-0.051, interval containing zero) and the embedding is not (+0.520, interval excluding it).
-**Quote the ranking as better at the top of the list, not as better overall.** Read 1.6 before
-using any earlier number from this file - +0.521 and 68.5% are in-sample and superseded.
+**That is superseded: the corpus-wide claim was settled on 2026-09-02** and the ranking is better
+overall - +0.129, CI [+0.012, +0.248], on 151 labels clean for both α and the floor. What moved
+instead is *which band* the embedding earns its weight in. Read 1.6 before using any earlier
+number from this file; +0.521 and 68.5% are in-sample and superseded.
 
 **The next sweep at 03:30 UTC is the test for 1.2.** If the "unusable role index" warnings stop,
 the cause was the quoted index; if they continue, the warning now names which fault it is. Either
@@ -851,19 +853,77 @@ D (score >= 80, n=88) the score is flat at **-0.016**, CI [-0.249, +0.223], and 
 **+0.244**, CI [+0.027, +0.434]. With B's top band (+0.520) and C's (+0.162, wide), every cohort
 points the same way and the two that are large enough exclude zero.
 
-#### What is left on this topic, honestly
+#### The corpus-wide claim, settled 2026-09-02
 
-**The engineering is done. What remains is accumulation, and it now happens by itself.**
+**It replicates.** This was the one thing 1.6 could not close: the ranking was "better at the top
+of the list, not established as better overall", because cohort D held only 22 labels below score
+80. It now holds 151 assessed pairs, 40 of them below 80, all labelled from 2026-08-30 - after
+both alpha and the floor were fixed, so clean for each.
 
-- **The corpus-wide claim is still open**, and cannot be closed yet: cohort D holds only 22 rows
-  below score 80. At ten stratified labels a night it will hold roughly 150 in a fortnight, which
-  is when re-running `balanced.py` becomes worth doing. Until then the honest line is unchanged -
-  **better at the top of the list, not established as better overall.**
-- **α has still never been tested and probably cannot be, at this floor.** Above 80 the score
-  barely varies, so the weight is close to inert - which is itself the answer: it is not worth
-  re-sweeping until something moves the floor back down.
-- **Nothing else here needs code.** Re-running the analysis on more of the same data is not a next
-  step, it is the same step with a larger n.
+| signal | Spearman vs the model | 95% CI |
+| --- | --- | --- |
+| deterministic score | +0.345 | [+0.178, +0.497] |
+| embedding similarity | +0.071 | [-0.103, +0.241] |
+| **shipped rank** | **+0.474** | [+0.340, +0.592] |
+| **rank - score** | **+0.129** | **[+0.012, +0.248] - significant** |
+
+Paired bootstrap, 10,000 resamples. Against cohort B's +0.045, CI [-0.015, +0.101], which did not
+exclude zero, this is the first out-of-sample cohort on which the corpus-wide gain does.
+
+**The floor is vindicated on data it was not fitted on**, which cohort B could not do because the
+floor was chosen from it:
+
+| floor | rank - score | 95% CI | in band |
+| --- | --- | --- | --- |
+| 45 | +0.066 | [-0.138, +0.262] | 151 |
+| 70 | +0.144 | [-0.008, +0.293] | 118 |
+| 75 | +0.146 | [+0.013, +0.279] | 117 |
+| **80 (shipped)** | **+0.129** | **[+0.012, +0.248]** | 111 |
+| 85 | +0.107 | [+0.016, +0.201] | 105 |
+| 90 | +0.000 | [-0.019, +0.020] | 31 |
+
+75, 80 and 85 are significant and 45 is not - the same shape as the original finding, and the
+same conclusion: **"restrict the fusion", not "restrict it to exactly here"**. 80 sits inside the
+significant range rather than at its argmax, which is still the right way to hold it.
+
+**It is not carried by a handful of pairs.** Jackknifed at the shipped floor, the difference stays
+in [+0.113, +0.148] across all 151 leave-one-out samples; no single pair moves it by more than
+0.019, and it is positive without any of them.
+
+**Three things this does not say, and the third is the interesting one.**
+
+1. **The interval starts at +0.012.** This is one cohort clearing the bar, not a settled constant.
+2. **Inside the fused region alone - score >= 80, n=111 - the gain is +0.175, CI [-0.044, +0.384],
+   not significant.** That is power rather than contradiction: the effect size is *larger* there
+   than corpus-wide, and the interval is twice as wide on two thirds of the labels. Below the
+   floor `MatchRanker` returns the score untouched, so those 40 pairs are ordered identically by
+   both signals - including them stabilises the paired difference without inventing it.
+3. **The per-band mechanism did not reproduce as stated.** The design rests on the embedding
+   working where the score gives up, measured twice in the top band. In cohort D it is the other
+   way round:
+
+| band | n | score vs model | embedding vs model |
+| --- | --- | --- | --- |
+| 90-100 | 31 | +0.417, contains zero | **-0.109**, contains zero |
+| 80-89 | 80 | -0.063, contains zero | **+0.456, excludes zero** |
+
+The embedding's edge has moved down a band. At n=31 the 90-100 row is weak evidence and both its
+intervals contain zero, so this is not a refutation - but it is not the confirmation the earlier
+cohorts gave either, and **the mechanism should no longer be described as "the embedding rescues
+the top band" without saying that the latest cohort puts it in 80-89.** What is unchanged is that
+the two signals are complements: whichever band one works in, the other does not.
+
+**What that leaves.** The ranking is better overall, on clean labels, robustly. *Why* it is better
+is less settled than it was: the band the embedding earns its weight in has moved once and may
+move again as the pool changes. Anyone re-tuning alpha should re-measure the bands first rather
+than assuming 90-100.
+
+Method, for repeating it: page `GET /api/v1/matches?assessedOnly=true` - no SQL and no firewall
+rule - and recompute the fusion once over the analysis set rather than reading `RankScore`.
+**Stored `RankScore` is min-maxed over each night's pool**, so values from different nights are
+the same quantity under different linear rescalings and pooling them mixes transforms. It happens
+to make no difference here (+0.473 stored against +0.474 recomputed), which is worth knowing but
+not worth relying on.
 
 #### Cost, measured rather than estimated
 
