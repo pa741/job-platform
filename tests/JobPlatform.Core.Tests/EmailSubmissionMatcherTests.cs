@@ -1,4 +1,5 @@
-using System.Reflection;
+﻿using System.Reflection;
+using JobPlatform.Core.Applications;
 using JobPlatform.Core.Submissions;
 using Xunit;
 
@@ -448,5 +449,48 @@ public sealed class EmailSubmissionMatcherTests
         Assert.Equal(EmailMatchOutcome.NoCandidates, result.Outcome);
         Assert.Null(result.Match);
         Assert.Empty(result.Ranked);
+    }
+
+    /// <summary>
+    /// Every name <see cref="AtsVendor"/> can produce is read the way this matcher intends.
+    /// </summary>
+    /// <remarks>
+    /// The vendor crosses a module boundary as a string, so that this file need not own the
+    /// catalogue of vendors - and the cost of that choice is a contract no compiler checks. This
+    /// is the check. It walks the real enum rather than a list written out here, so a vendor
+    /// added to <see cref="AtsVendorDetector"/> is either evidence or explicitly not, and cannot
+    /// arrive as a fourth thing that happens to agree with itself.
+    ///
+    /// The failure it exists for is silent and one-directional: were <c>Unknown</c> to count,
+    /// every pair of applications whose vendor nobody established would agree, making the least
+    /// informative fact in the system its most decisive one.
+    /// </remarks>
+    [Theory]
+    [MemberData(nameof(EveryAtsVendor))]
+    public void A_vendor_that_names_no_vendor_is_not_evidence_that_two_things_agree(AtsVendor vendor)
+    {
+        var names = vendor.ToString();
+
+        var result = EmailSubmissionMatcher.Match(
+            Message(subject: "Your application", senderVendor: names),
+            [Application(71, "Acme Robotics", vendor: names)]);
+
+        var agreed = result.Ranked.Any(row => row.Signals.Contains(EmailMatchSignal.SenderVendorMatchesApplyVendor));
+
+        var isRealVendor = vendor is not (AtsVendor.Unknown or AtsVendor.Other or AtsVendor.Aggregator);
+
+        Assert.Equal(isRealVendor, agreed);
+    }
+
+    public static TheoryData<AtsVendor> EveryAtsVendor()
+    {
+        var data = new TheoryData<AtsVendor>();
+
+        foreach (var vendor in Enum.GetValues<AtsVendor>())
+        {
+            data.Add(vendor);
+        }
+
+        return data;
     }
 }
