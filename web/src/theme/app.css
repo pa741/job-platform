@@ -1059,3 +1059,100 @@ h4.mini:first-child { margin-top: 0; }
   font-size: 12px;
   white-space: normal;
 }
+
+/* Ranked list. A name, a number, and a rule whose length is the ratio - the
+   mark this dashboard uses most, and the one that was a 2px line at 1.57:1
+   against the card until it was measured. */
+.rank { display: flex; flex-direction: column; gap: var(--s3); }
+
+.rank-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: var(--s3);
+}
+
+.rank .nm { font-size: var(--t-body-2); }
+
+.rank .vl {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.rank .measure {
+  height: 6px;
+  background: var(--track);
+  margin-top: var(--s1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.rank .measure i { display: block; height: 100%; background: var(--seq-450); }
+
+/* Part-to-whole. Taller than a hairline and separated by 1px, so adjacent
+   fills read as separate marks rather than one band that changes colour. */
+.split {
+  display: flex;
+  height: 14px;
+  gap: 1px;
+  margin: var(--s1) 0 var(--s3);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.split i { display: block; }
+
+.keys {
+  display: grid;
+  grid-template-columns: 10px 1fr max-content;
+  gap: var(--s2);
+  align-items: center;
+  max-width: 380px;
+}
+
+.keys i { width: 10px; height: 10px; border-radius: 2px; }
+.keys span { font-size: var(--t-small); }
+
+.keys b {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The skills gap. Two numbers with different denominators, so both are labelled
+   rather than sitting in adjacent columns as if they were the same measure. */
+.gap {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) auto;
+  gap: var(--s2) var(--s4);
+  padding: var(--s3) 0;
+  border-bottom: 1px solid var(--gridline);
+}
+
+.gap:last-of-type { border-bottom: 0; }
+.gap-name { font-size: var(--t-body-2); font-weight: 600; }
+
+.gap-counts {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.gap-counts b { color: var(--text-primary); font-weight: 500; }
+
+.gap-why {
+  grid-column: 1 / -1;
+  font-size: var(--t-small);
+  color: var(--text-secondary);
+  margin: 0;
+  max-width: 68ch;
+}
+
+.gap-why em { font-style: normal; color: var(--text-primary); font-weight: 600; }

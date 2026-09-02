@@ -126,7 +126,13 @@ function RequirementPills({ posting }: { posting: PostingSummary }) {
   );
 }
 
-export function Postings({ api, searchTerm }: { api: JobPlatformApi; searchTerm: string | undefined }) {
+export function Postings({ api, searchTerm, inspecting, onInspect }: {
+  api: JobPlatformApi;
+  searchTerm: string | undefined;
+  /** From the URL: `/market/postings/:id`. The panel is a route, not local state. */
+  inspecting: number | undefined;
+  onInspect: (postingId: number | undefined) => void;
+}) {
   const [facets, setFacets] = useState<FacetsResponse>();
   const [page, setPage] = useState<PageResponse<PostingSummary>>();
   const [error, setError] = useState<unknown>();
@@ -135,7 +141,6 @@ export function Postings({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
 
   // Which posting's insight panel is open. Held here rather than in the row so that opening a
   // second one closes the first: two expanded panels in a table is a scrolling puzzle.
-  const [inspecting, setInspecting] = useState<number>();
 
   const [q, setQ] = useState('');
   const [site, setSite] = useState('');
@@ -290,7 +295,11 @@ export function Postings({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
           <thead>
             <tr>
               <th>Title</th><th>Company</th><th>Level</th><th>Working</th>
-              <th>Location</th><th className="num">Salary</th><th className="num">Seen</th><th />
+              <th>Location</th><th className="num">Salary</th>
+              <th className="num" title="LinkedIn is the only board that publishes it, so most rows are blank">
+                Applicants
+              </th>
+              <th className="num">Seen</th><th />
             </tr>
           </thead>
           <tbody>
@@ -313,11 +322,15 @@ export function Postings({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
                 </td>
                 <td>{posting.city ?? posting.location ?? '—'}</td>
                 <td className="num"><Salary posting={posting} /></td>
+                {/* Sparse - LinkedIn alone publishes it - so a blank is "not stated" and never
+                    zero. It is the competition signal, and it sat on the detail endpoint where
+                    no list could show it or sort by it. */}
+                <td className="num">{posting.applicantCount ?? ''}</td>
                 <td className="num">{posting.seenCount}</td>
                 <td>
                   <button
                     className="btn"
-                    onClick={() => setInspecting((current) => (current === posting.id ? undefined : posting.id))}
+                    onClick={() => onInspect(inspecting === posting.id ? undefined : posting.id)}
                     aria-expanded={inspecting === posting.id}
                   >
                     {inspecting === posting.id ? 'Hide' : 'Inspect'}
@@ -340,7 +353,7 @@ export function Postings({ api, searchTerm }: { api: JobPlatformApi; searchTerm:
           <PostingInsightPanel
             api={api}
             postingId={inspecting}
-            onClose={() => setInspecting(undefined)}
+            onClose={() => onInspect(undefined)}
           />
         </div>
       )}

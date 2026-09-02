@@ -4,7 +4,7 @@ import { useApi } from './auth/useApi';
 import { apiRequest } from './auth/msalConfig';
 import type { JobPlatformApi } from './api/client';
 import type { SearchTermResponse } from './api/types';
-import { Overview } from './pages/Overview';
+import { Briefing } from './pages/Briefing';
 import { Postings } from './pages/Postings';
 import { Profile } from './pages/Profile';
 import { Searches } from './pages/Searches';
@@ -14,7 +14,7 @@ import { Vocabulary } from './pages/Vocabulary';
 import { AiCalls } from './pages/AiCalls';
 import { ErrorNote } from './components/Primitives';
 import { useTheme, type Theme } from './theme/useTheme';
-import { SECTIONS, labelOf, sectionOf, type PageId } from './routing/route';
+import { SECTIONS, labelOf, sectionOf, type PageId, type Route } from './routing/route';
 import { useRoute } from './routing/useRoute';
 import { placeIndicator } from './motion/useGsap';
 import './theme/app.css';
@@ -118,7 +118,7 @@ function freshness(updatedAtUtc: string | null | undefined): { text: string; sta
 function Dashboard({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void }) {
   const api = useApi();
   const { instance, accounts } = useMsal();
-  const { route, go } = useRoute();
+  const { route, go, replace, back } = useRoute();
 
   const [terms, setTerms] = useState<SearchTermResponse[]>();
   const [searchTerm, setSearchTerm] = useState<string>();
@@ -237,7 +237,15 @@ function Dashboard({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => 
           </div>
         )}
 
-        <Page page={page} api={api} searchTerm={searchTerm} go={go} />
+        <Page
+          page={page}
+          api={api}
+          searchTerm={searchTerm}
+          go={go}
+          route={route}
+          replace={replace}
+          back={back}
+        />
       </main>
     </>
   );
@@ -251,16 +259,40 @@ function Dashboard({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => 
  * the last one was finished, and every problem found on the way would be found in a dashboard
  * that could not be opened.
  */
-function Page({ page, api, searchTerm, go }: {
-  page: PageId; api: JobPlatformApi; searchTerm: string | undefined; go: (page: PageId) => void;
+function Page({ page, api, searchTerm, go, route, replace, back }: {
+  page: PageId;
+  api: JobPlatformApi;
+  searchTerm: string | undefined;
+  go: (page: PageId, id?: string | null) => void;
+  route: Route;
+  replace: (page: PageId, id?: string | null) => void;
+  back: (fallback: () => void) => void;
 }) {
   switch (page) {
     case 'shortlist': return <Shortlist api={api} go={go} />;
     case 'applications': return <Applications api={api} go={go} />;
     case 'profile': return <Profile api={api} />;
-    case 'briefing': return searchTerm ? <Overview api={api} searchTerm={searchTerm} /> : null;
-    case 'postings': return searchTerm ? <Postings api={api} searchTerm={searchTerm} /> : null;
-    case 'vocabulary': return <Vocabulary api={api} searchTerm={searchTerm} />;
+    case 'briefing': return <Briefing api={api} searchTerm={searchTerm} go={go} />;
+    case 'postings': return searchTerm ? (
+      <Postings
+        api={api}
+        searchTerm={searchTerm}
+        inspecting={route.id ? Number(route.id) : undefined}
+        // Opening a posting pushes, so Back closes the panel rather than leaving the app.
+        // Closing walks history back where we put an entry there, and falls through to a
+        // plain navigation where somebody arrived on the link directly.
+        onInspect={(id) => (id === undefined ? back(() => go('postings')) : go('postings', String(id)))}
+      />
+    ) : null;
+    case 'vocabulary': return (
+      <Vocabulary
+        api={api}
+        searchTerm={searchTerm}
+        concept={route.id ?? undefined}
+        // Replace, not push: following six edges must not cost six presses of Back to leave.
+        onOpenConcept={(key) => replace('vocabulary', key)}
+      />
+    );
     case 'searches': return <Searches api={api} />;
     case 'calls': return <AiCalls api={api} />;
   }
