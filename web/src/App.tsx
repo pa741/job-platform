@@ -8,8 +8,8 @@ import { Overview } from './pages/Overview';
 import { Postings } from './pages/Postings';
 import { Profile } from './pages/Profile';
 import { Searches } from './pages/Searches';
-import { Matches } from './pages/Matches';
-import { Submissions } from './pages/Submissions';
+import { Shortlist } from './pages/Shortlist';
+import { Applications } from './pages/Applications';
 import { Vocabulary } from './pages/Vocabulary';
 import { AiCalls } from './pages/AiCalls';
 import { ErrorNote } from './components/Primitives';
@@ -237,7 +237,7 @@ function Dashboard({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => 
           </div>
         )}
 
-        <Page page={page} api={api} searchTerm={searchTerm} />
+        <Page page={page} api={api} searchTerm={searchTerm} go={go} />
       </main>
     </>
   );
@@ -251,12 +251,12 @@ function Dashboard({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => 
  * the last one was finished, and every problem found on the way would be found in a dashboard
  * that could not be opened.
  */
-function Page({ page, api, searchTerm }: {
-  page: PageId; api: JobPlatformApi; searchTerm: string | undefined;
+function Page({ page, api, searchTerm, go }: {
+  page: PageId; api: JobPlatformApi; searchTerm: string | undefined; go: (page: PageId) => void;
 }) {
   switch (page) {
-    case 'shortlist': return <Matches api={api} />;
-    case 'applications': return <Submissions api={api} />;
+    case 'shortlist': return <Shortlist api={api} go={go} />;
+    case 'applications': return <Applications api={api} go={go} />;
     case 'profile': return <Profile api={api} />;
     case 'briefing': return searchTerm ? <Overview api={api} searchTerm={searchTerm} /> : null;
     case 'postings': return searchTerm ? <Postings api={api} searchTerm={searchTerm} /> : null;

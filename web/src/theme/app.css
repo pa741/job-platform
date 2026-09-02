@@ -720,3 +720,342 @@ nav.pages .marker {
 }
 
 .linkish:hover { text-decoration-thickness: 2px; }
+
+/* ===========================================================================
+   Redesigned pages. The lede, the entry, and the marks that are CSS rather
+   than a chart - a rank bar and a split bar were never Recharts and drawing
+   them with it would be a library call to lay out three divs.
+   =========================================================================== */
+
+.stack { display: flex; flex-direction: column; }
+
+/* The lede: what needs deciding, as a sentence. Newsreader earns its place at
+   this size and at the two hero numerals, and nowhere below 20px - smaller than
+   that it is just a serif with less stem weight. */
+.lede {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: var(--t-lede);
+  line-height: 1.5;
+  letter-spacing: -0.005em;
+  max-width: 46ch;
+  margin: var(--s6) 0 var(--s2);
+  text-wrap: pretty;
+}
+
+@media (min-width: 700px) { .lede { font-size: 23px; } }
+
+/* A figure inside the sentence. A tint rather than an underline: the underline
+   the mock used measured 1.38:1 against the page, so the device marking a
+   number as live was invisible. */
+.lede b {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 0.78em;
+  font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--seq-450) 12%, transparent);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.lede-note {
+  font-size: var(--t-small);
+  color: var(--text-muted);
+  max-width: 64ch;
+  margin: 0 0 var(--s6);
+  border-left: 2px solid var(--border);
+  padding-left: var(--s3);
+}
+
+.note {
+  font-size: var(--t-small);
+  color: var(--text-muted);
+  max-width: 62ch;
+  margin: var(--s2) 0;
+}
+
+h4.mini {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 400;
+  margin: var(--s4) 0 var(--s2);
+}
+
+h4.mini:first-child { margin-top: 0; }
+
+/* Stamps. A word with a border, never a hue on its own: two of the four status
+   steps sit under 3:1 on light, and the provenance vocabulary is three named
+   things rather than a scale. */
+.stamp {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  display: inline-block;
+}
+
+.stamp.good { color: var(--success-text); border-color: color-mix(in srgb, var(--success-text) 55%, var(--border)); }
+.stamp.warn { color: var(--oxide); border-color: color-mix(in srgb, var(--oxide) 55%, var(--border)); }
+.stamp.on { color: var(--seq-450); border-color: color-mix(in srgb, var(--seq-450) 45%, var(--border)); }
+
+/* Shortlist entries ------------------------------------------------------- */
+.entry {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: var(--s5);
+  padding: var(--s5) 0;
+  border-bottom: 1px solid var(--gridline);
+}
+
+.entry .score {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 40px;
+  line-height: 0.95;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.entry .of {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  color: var(--text-muted);
+}
+
+.entry .of b { color: var(--text-secondary); font-weight: 400; }
+
+.entry-title {
+  font-family: var(--font-sans);
+  font-size: var(--t-title);
+  font-weight: 600;
+  margin: 0;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.entry-title:hover { color: var(--seq-450); }
+
+.entry-meta {
+  font-size: var(--t-small);
+  color: var(--text-secondary);
+  margin-top: var(--s1);
+  display: flex;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.entry-meta .sep { color: var(--border); }
+
+.entry .dismiss {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 2px;
+  min-height: 28px;
+}
+
+.entry .dismiss:hover {
+  color: var(--oxide);
+  background: color-mix(in srgb, var(--oxide) 10%, transparent);
+}
+
+@media (max-width: 620px) {
+  .entry { grid-template-columns: 1fr; gap: var(--s3); }
+  .entry .figcol { display: flex; align-items: baseline; gap: var(--s2); }
+}
+
+.expand { padding-top: var(--s4); }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--s5); }
+
+.quote {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 400;
+  line-height: 1.5;
+  max-width: 52ch;
+  margin: 0 0 var(--s3);
+}
+
+/* One scoring axis. Bar length is the axis WEIGHT and the fill is the score:
+   two axes drawn the same length said an axis carrying a third of the number
+   and one carrying a tenth were equally important. */
+.axes { display: flex; flex-direction: column; gap: var(--s2); max-width: 440px; }
+
+.ax {
+  display: grid;
+  grid-template-columns: minmax(90px, 130px) 1fr auto;
+  gap: var(--s3);
+  align-items: center;
+  font-size: var(--t-small);
+}
+
+.ax .nm { color: var(--text-secondary); }
+.ax .tr { height: 8px; background: var(--track); border-radius: 2px; overflow: hidden; }
+.ax .fl { display: block; height: 100%; background: var(--seq-450); }
+
+.ax .vl {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: right;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.undobar {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--oxide);
+  border-radius: 2px;
+  padding: var(--s3) var(--s4);
+  margin-bottom: var(--s4);
+  font-size: var(--t-small);
+}
+
+.undobar button { margin-left: auto; }
+
+.row-actions {
+  display: flex;
+  gap: var(--s3);
+  margin-top: var(--s4);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.pager { display: flex; gap: var(--s2); margin-top: var(--s4); }
+
+/* Applications -------------------------------------------------------------
+   A list rather than a table: the rows are prose of varying length, and the
+   question is "what happened, in order" rather than a comparison of columns. */
+.appgroup { margin-bottom: var(--s6); }
+
+.appgroup > h2 {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 400;
+  margin: 0 0 var(--s1);
+  padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--border);
+}
+
+.app { padding: var(--s4) 0; border-bottom: 1px solid var(--gridline); }
+
+.app-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+
+.app-head h3 { font-size: var(--t-title); font-weight: 600; margin: 0; }
+.app-head .co { color: var(--text-secondary); font-size: var(--t-body-2); }
+
+.app-head .right {
+  margin-left: auto;
+  display: flex;
+  gap: var(--s2);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.log-wrap { margin-top: var(--s3); }
+
+/* The marker sits on the rule, so the newest entry is findable without a scan. */
+.timeline {
+  list-style: none;
+  margin: 0 0 var(--s3);
+  padding: 0 0 0 var(--s4);
+  border-left: 1px solid var(--border);
+  font-size: var(--t-small);
+}
+
+.timeline li {
+  position: relative;
+  padding: var(--s1) 0;
+  color: var(--text-secondary);
+  display: flex;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+
+.timeline li::before {
+  content: "";
+  position: absolute;
+  left: -21px;
+  top: 11px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.timeline li:first-child::before { background: var(--seq-450); }
+
+.timeline .when {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  flex: none;
+  width: 76px;
+}
+
+.timeline .who {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* An inference with the phrase it came from. Used by the posting drawer and by
+   the profile's extracted skills, because they are the same claim shape read
+   from opposite sides of the join. */
+.assertion-top {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.src {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.04em;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 1px 6px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: help;
+}
+
+/* Recessive, because it is the justification rather than the claim - but
+   present, because it is the only thing that makes the claim checkable. */
+.assertion-evidence.none {
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-size: 12px;
+  white-space: normal;
+}
