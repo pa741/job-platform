@@ -142,6 +142,56 @@ public static class SubmissionLimits
 
     /// <summary>The apply URL as it was at the time, so a later edit to the posting does not rewrite history.</summary>
     public const int MaxApplyUrlLength = 1000;
+
+    /// <summary>The reference an employer's system showed on its confirmation page.</summary>
+    /// <remarks>
+    /// Generous for what these actually are - "Application #4417290", a GUID, a hyphenated job
+    /// code - because they are free text from somebody else's system and every ATS invents its
+    /// own shape. What it excludes is a caller pasting the confirmation page in. Past this length
+    /// the value is not a reference, and <b>a truncated reference is worse than no reference at
+    /// all</b>: it still looks like one, so somebody quotes it at an employer who has never seen
+    /// it.
+    /// </remarks>
+    public const int MaxConfirmationRefLength = 200;
+
+    /// <summary>Where the browser ended up when the claim was made.</summary>
+    /// <remarks>
+    /// The same number as <see cref="MaxApplyUrlLength"/> and deliberately a separate constant.
+    /// They are separate columns measured against the same ATS URLs - a confirmation page
+    /// carrying the reference in its query string runs about as long as the apply URL that led to
+    /// it - so the numbers agreeing today is a coincidence worth keeping rather than a fact to
+    /// share. One constant behind both would mean widening either silently widens the other.
+    /// </remarks>
+    public const int MaxFinalUrlLength = 1000;
+
+    /// <summary>A pointer to a stored screenshot.</summary>
+    /// <remarks>
+    /// <b>Set at the storage platform's own ceiling rather than at what a path is expected to
+    /// be</b>, which inverts how every other bound here is chosen and is the point. The others
+    /// bound free text, where truncating costs readability and a reader can see the sentence stop
+    /// short. This bounds a pointer, where truncating costs the thing pointed at - a screenshot
+    /// that exists, was paid for, and can never be found again, with nothing in the row admitting
+    /// it. An Azure blob name is at most 1,024 characters, so a path too long for this column is
+    /// a path the store would have refused anyway, and the column can never be what breaks a
+    /// reference.
+    /// </remarks>
+    public const int MaxScreenshotRefLength = 1024;
+
+    /// <summary>One field name in the evidence list. A name, never the answer given to it.</summary>
+    public const int MaxSubmittedFieldNameLength = 100;
+
+    /// <summary>
+    /// How many field names one event's evidence may carry.
+    /// </summary>
+    /// <remarks>
+    /// The only bound here on a <i>count</i> rather than a length, because
+    /// <see cref="SubmissionEvidence.SubmittedFields"/> is the first thing on this table whose
+    /// size the caller chooses. Every other value is one column wide whatever a client does with
+    /// it; a list is as long as the loop that built it, which is the same argument that puts a
+    /// cap on <see cref="MaxSubmittedPerDay"/>. A hundred sits well above the longest real
+    /// application form and well below what a client enumerating every input on a page produces.
+    /// </remarks>
+    public const int MaxSubmittedFieldCount = 100;
 }
 
 /// <summary>What happened to an attempt to append an event.</summary>
@@ -169,6 +219,91 @@ public enum SubmissionEventResult
 }
 
 /// <summary>
+/// What a browser managed to capture while making one claim about an application.
+/// </summary>
+/// <remarks>
+/// <b>Every member is optional, and that is the design rather than laziness.</b> A page can
+/// submit and then redirect somewhere carrying no reference; a confirmation screen can render
+/// after the screenshot was taken; an ATS can show a reference and no distinct URL. Requiring any
+/// one of these would mean an event that cannot be recorded because its proof is missing, and
+/// <b>a submission with no evidence at all is still a submission</b> - which is why the whole
+/// record is optional on the event as well.
+///
+/// <b>Named rather than positional.</b> Three of the four members are nullable strings, so a
+/// positional record would take a transposed reference and URL without a word from the compiler,
+/// and the mistake would be invisible afterwards because both values are plausible-looking text
+/// nobody re-reads. Named members also keep the type projectable from EF: an object initialiser
+/// is a member-init node the provider translates, where an omitted optional constructor argument
+/// is CS0854 before it ever reaches a provider.
+///
+/// <b>References, never contents.</b> <see cref="ScreenshotRef"/> points at an image and is not
+/// one; <see cref="SubmittedFields"/> holds field <i>names</i> and never the answers given to
+/// them. That is the rule <c>DisclosureRecord</c> already runs under, restated on the write side:
+/// a record holding the data it is evidence for has moved the problem rather than solved it - and
+/// a screenshot of a completed application form is a picture of somebody's address, phone number
+/// and employment history, sitting in the SQL database the dashboard reads.
+/// </remarks>
+public sealed record SubmissionEvidence
+{
+    /// <summary>The reference the employer's system showed - "Application #4417290".</summary>
+    /// <remarks>
+    /// The one value here that means something outside this database: it is what the employer's
+    /// own record is keyed on, and what a person quotes when they chase. Free text because every
+    /// ATS invents its own shape, and worth keeping even when it is the only thing captured.
+    /// </remarks>
+    public string? ConfirmationRef { get; init; }
+
+    /// <summary>Where the browser ended up.</summary>
+    /// <remarks>
+    /// <b>Not <c>Submissions.ApplyUrl</c>.</b> That is where the attempt started, copied in at
+    /// creation so a later edit to the posting cannot rewrite history; this is where it finished.
+    /// The two differ on every ATS worth the name - a confirmation page, often with the reference
+    /// in its query string - and where a run went wrong this is the page it went wrong on, which
+    /// is the first thing anybody reading the log afterwards wants.
+    /// </remarks>
+    public string? FinalUrl { get; init; }
+
+    /// <summary>A pointer to a stored screenshot. Never the image, and never a signed URL.</summary>
+    /// <remarks>
+    /// <b>A stored path, not a link.</b> A user-delegation SAS expires, and an expired URL in an
+    /// append-only log is a dead pointer that still looks like evidence - a reader cannot tell
+    /// "the screenshot is gone" from "the link aged out". A path stays resolvable for as long as
+    /// the blob does, and whoever looks mints a fresh URL then.
+    /// </remarks>
+    public string? ScreenshotRef { get; init; }
+
+    /// <summary>
+    /// The names of the fields that were filled in. <b>Names, never values.</b>
+    /// </summary>
+    /// <remarks>
+    /// This answers "what did it put on the form" at the only resolution that is safe to keep:
+    /// enough to see that an agent answered a right-to-work question nobody authorised it to
+    /// answer, and not enough to be a second copy of the answer it gave. The same line
+    /// <c>DisclosureRecord.Detail</c> draws on the read side of the same exchange.
+    ///
+    /// Bounded by <see cref="SubmissionLimits.MaxSubmittedFieldCount"/> as well as by name
+    /// length, because it is the first thing on this table whose size a caller chooses rather
+    /// than the schema.
+    /// </remarks>
+    public IReadOnlyList<string>? SubmittedFields { get; init; }
+
+    /// <summary>Whether anything was actually captured.</summary>
+    /// <remarks>
+    /// <b>Blank counts as nothing.</b> A selector that matched an empty element yields <c>""</c>
+    /// rather than null, and a list of blanks is what enumerating a page that had not finished
+    /// rendering produces - so a plain null check would put an evidence block on the dashboard
+    /// with nothing in it, and a row on this table asserting proof that does not exist. Asked
+    /// rather than inferred, so the write path can store nothing instead of a row of nulls and a
+    /// reader can tell "captured nothing" from "captured this much".
+    /// </remarks>
+    public bool IsEmpty
+        => string.IsNullOrWhiteSpace(ConfirmationRef)
+            && string.IsNullOrWhiteSpace(FinalUrl)
+            && string.IsNullOrWhiteSpace(ScreenshotRef)
+            && SubmittedFields?.Any(name => !string.IsNullOrWhiteSpace(name)) != true;
+}
+
+/// <summary>
 /// One thing that happened to an application.
 /// </summary>
 /// <remarks>
@@ -190,7 +325,38 @@ public sealed record SubmissionEvent(
     SubmissionEventType Type,
     string? Stage,
     SubmissionEventSource Source,
-    string? Note);
+    string? Note)
+{
+    /// <summary>What was captured while this claim was made, where anything was.</summary>
+    /// <remarks>
+    /// <b>On the event rather than on the submission, because proof attaches to a claim.</b> A
+    /// submission is sent once and its row says so once; the log records several assertions about
+    /// it, made at different moments by different things, and each has its own evidence or none.
+    /// The confirmation reference belongs to the <see cref="SubmissionEventType.Submitted"/>
+    /// event; whatever produced an <see cref="SubmissionEventType.InterviewScheduled"/> a
+    /// fortnight later is different evidence for a different claim. Hung off <c>Submissions</c>
+    /// there would be one slot for all of them, so the second capture overwrites the first -
+    /// which is a mutable status column under another name, and the reason this shape has an
+    /// event log at all. It is also what keeps the table append-only in substance rather than
+    /// only in form: correcting a claim means appending an event carrying what was actually seen,
+    /// never editing the evidence on an old one.
+    ///
+    /// <b>Optional, and a missing capture never blocks the event.</b> This is gathered by
+    /// something driving a browser through somebody else's form, and the interesting runs are the
+    /// ones that go wrong. Refusing to record that an application was sent because the screenshot
+    /// failed would lose the fact in order to protect the proof of it.
+    ///
+    /// <b>An <c>init</c> property rather than a sixth positional parameter, and that is a
+    /// compile-time fact rather than a preference.</b> A trailing optional parameter leaves every
+    /// existing five-argument call compiling <i>except</i> the ones inside an expression tree,
+    /// and <c>SubmissionRepository.ListEventsAsync</c> projects this type straight out of an EF
+    /// query: an omitted optional argument there is CS0854, "an expression tree may not contain a
+    /// call or invocation that uses optional arguments". An object initialiser is a member-init
+    /// node, which the compiler and the query provider both translate. Equality and
+    /// <c>ToString</c> cover the property either way, so nothing is given up for it.
+    /// </remarks>
+    public SubmissionEvidence? Evidence { get; init; }
+}
 
 /// <summary>Which phases end an application.</summary>
 public static class SubmissionEventTypes

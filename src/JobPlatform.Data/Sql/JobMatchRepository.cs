@@ -1,5 +1,6 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using JobPlatform.Core.Applications;
+using JobPlatform.Core.Dedup;
 using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Matching;
 using JobPlatform.Core.Submissions;
@@ -50,31 +51,6 @@ public sealed record MatchRow(
 {
     /// <summary>Reads one of the JSON columns back. Never throws - see the repository.</summary>
     public IReadOnlyList<T> Read<T>(string? json) => JobMatchRepository.Read<T>(json);
-}
-
-/// <summary>Where an apply URL came from, and therefore how much to trust it.</summary>
-/// <remarks>
-/// <b>Two of these are facts and one is an inference.</b> Keeping them apart is what stops a
-/// matched link being presented as the employer's own, which matters because the match is on
-/// title, employer and city rather than on anything either board guarantees.
-/// </remarks>
-public enum ApplyUrlSource
-{
-    /// <summary>No direct link known. This is the board's own posting page.</summary>
-    BoardPosting = 0,
-
-    /// <summary>The posting itself published the employer's apply URL.</summary>
-    Posting = 1,
-
-    /// <summary>
-    /// Taken from the same job on another board, matched on title, employer and city.
-    /// </summary>
-    /// <remarks>
-    /// An inference. It recovers roughly 5% of the links LinkedIn stopped publishing, at no
-    /// request and no risk, and the city is part of the match because without it better than a
-    /// quarter of the candidates were one employer advertising one title in several cities.
-    /// </remarks>
-    MatchedOnAnotherBoard = 2,
 }
 
 /// <summary>

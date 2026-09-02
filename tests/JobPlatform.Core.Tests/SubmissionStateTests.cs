@@ -4,13 +4,18 @@ using Xunit;
 namespace JobPlatform.Core.Tests;
 
 /// <summary>
-/// The fold from an event log to a status.
+/// The fold from an event log to a status, and the shape of the events it folds.
 /// </summary>
 /// <remarks>
 /// Every test here is written against the version of the rule that is wrong: the most recent
 /// event winning, a terminal event being outranked, staleness read only from events, a closed
 /// application going quiet. Each of those is what the obvious implementation does, so each
 /// assertion is a check rather than a restatement.
+///
+/// The evidence tests at the end follow the same discipline. What is wrong there is the assumption
+/// that proof belongs to the application: a submission is sent once, its log carries several claims
+/// about it, and each claim's evidence has to survive the next one. The other wrong version is a
+/// null check, which reads an empty string scraped off an unrendered page as a capture.
 /// </remarks>
 public sealed class SubmissionStateTests
 {
@@ -22,8 +27,9 @@ public sealed class SubmissionStateTests
         int day,
         SubmissionEventType type,
         string? stage = null,
-        SubmissionEventSource source = SubmissionEventSource.Candidate)
-        => new(At(day), type, stage, source, Note: null);
+        SubmissionEventSource source = SubmissionEventSource.Candidate,
+        SubmissionEvidence? evidence = null)
+        => new(At(day), type, stage, source, Note: null) { Evidence = evidence };
 
     [Fact]
     public void A_submission_with_no_events_has_no_phase_rather_than_a_default_one()
@@ -196,5 +202,143 @@ public sealed class SubmissionStateTests
         // Two events of the same phase: "where is this now" means the later one. The round is
         // free text on the event and deliberately not a member of the enum.
         Assert.Equal("Tech round 2", SubmissionState.Fold(Created, events, At(10)).Stage);
+    }
+
+    [Fact]
+    public void An_event_built_the_way_every_existing_caller_builds_one_carries_no_evidence()
+    {
+        // The five positional arguments, untouched. Evidence went on as an init property rather
+        // than a sixth parameter exactly so this call keeps compiling - and so does the identical
+        // shape inside SubmissionRepository's EF projection, where an omitted optional argument is
+        // a compile error rather than a default. If this line ever needs a null on the end, that
+        // decision has been reversed and every expression-tree call site has gone red with it.
+        var plain = new SubmissionEvent(
+            At(2), SubmissionEventType.Submitted, "Applied", SubmissionEventSource.Client, "note");
+
+        Assert.Null(plain.Evidence);
+
+        var witnessed = plain with { Evidence = new SubmissionEvidence { ConfirmationRef = "A-1" } };
+
+        // Attaching proof does not restate the claim.
+        Assert.Equal(plain.AtUtc, witnessed.AtUtc);
+        Assert.Equal(plain.Note, witnessed.Note);
+        Assert.Equal("A-1", witnessed.Evidence?.ConfirmationRef);
+    }
+
+    [Fact]
+    public void Two_events_alike_but_for_their_evidence_are_not_equal()
+    {
+        var bare = Event(2, SubmissionEventType.Submitted);
+        var witnessed = Event(
+            2, SubmissionEventType.Submitted, evidence: new SubmissionEvidence { ConfirmationRef = "A-1" });
+
+        // Equality has to reach the evidence, or a read path that forgets to project the columns
+        // back produces a value equal to the one that carried them - a loss nothing else reports.
+        Assert.NotEqual(bare, witnessed);
+        Assert.Equal(
+            witnessed,
+            Event(2, SubmissionEventType.Submitted, evidence: new SubmissionEvidence { ConfirmationRef = "A-1" }));
+    }
+
+    /// <summary>
+    /// Evidence belongs to one claim, and the fold does not read it.
+    /// </summary>
+    /// <remarks>
+    /// Both halves of the design's argument, asserted together. A submission is sent once but its
+    /// log carries several assertions about it, so the reference captured when it was sent has to
+    /// still be there after an interview is recorded a week later - on <c>Submissions</c> there
+    /// would be one slot and the second capture would have overwritten the first. And evidence is
+    /// proof <i>of</i> a claim rather than part of one, so attaching it must not move the phase,
+    /// the stage or the staleness by a tick.
+    /// </remarks>
+    [Fact]
+    public void Each_event_keeps_its_own_evidence_and_none_of_it_reaches_the_fold()
+    {
+        string[] filled = ["full_name", "email"];
+
+        SubmissionEvent[] witnessed =
+        [
+            Event(2, SubmissionEventType.Submitted, evidence: new SubmissionEvidence
+            {
+                ConfirmationRef = "A-1",
+                FinalUrl = "https://ats.example/confirm?ref=A-1",
+                SubmittedFields = filled,
+            }),
+            Event(9, SubmissionEventType.InterviewScheduled, "Tech round 1",
+                evidence: new SubmissionEvidence { ConfirmationRef = "INT-77" }),
+        ];
+
+        SubmissionEvent[] bare =
+        [
+            Event(2, SubmissionEventType.Submitted),
+            Event(9, SubmissionEventType.InterviewScheduled, "Tech round 1"),
+        ];
+
+        Assert.Equal(
+            SubmissionState.Fold(Created, bare, At(10)),
+            SubmissionState.Fold(Created, witnessed, At(10)));
+
+        Assert.Equal("A-1", witnessed[0].Evidence?.ConfirmationRef);
+        Assert.Equal("INT-77", witnessed[1].Evidence?.ConfirmationRef);
+        Assert.Equal(filled, witnessed[0].Evidence?.SubmittedFields);
+    }
+
+    [Fact]
+    public void Evidence_that_captured_nothing_is_empty_even_when_the_strings_are_blank()
+    {
+        SubmissionEvidence[] captured =
+        [
+            new(),
+            new() { ConfirmationRef = "", FinalUrl = "   ", ScreenshotRef = "\t" },
+            new() { SubmittedFields = [] },
+            new() { SubmittedFields = ["", "  "] },
+        ];
+
+        // A selector that matched an empty element yields "" rather than null, and enumerating a
+        // page that had not finished rendering yields a list of blanks. Both pass a null check,
+        // and both would put an evidence block on the dashboard with nothing inside it.
+        Assert.All(captured, evidence => Assert.True(evidence.IsEmpty));
+    }
+
+    [Fact]
+    public void Any_one_capture_is_enough_for_the_evidence_to_count()
+    {
+        // Each alone, because the run that comes back with only a reference and the run that comes
+        // back with only a screenshot are both ordinary, and either is worth keeping. A rule that
+        // wanted two of them would discard the evidence from exactly the runs that went wrong.
+        Assert.False(new SubmissionEvidence { ConfirmationRef = "A-1" }.IsEmpty);
+        Assert.False(new SubmissionEvidence { FinalUrl = "https://ats.example/done" }.IsEmpty);
+        Assert.False(new SubmissionEvidence { ScreenshotRef = "evidence/2026/09/02/a.png" }.IsEmpty);
+        Assert.False(new SubmissionEvidence { SubmittedFields = ["full_name"] }.IsEmpty);
+    }
+
+    /// <summary>
+    /// The evidence bounds, and the one of them chosen against a different rule.
+    /// </summary>
+    /// <remarks>
+    /// The lengths are asserted as a set rather than one by one: pinning 200 here says nothing a
+    /// reader could not read off the constant, and would turn widening a column into a failing
+    /// test rather than a decision. What is worth pinning is the reasoning that the number does
+    /// not carry - that the screenshot pointer is bounded by the blob store's own maximum name
+    /// length rather than by what a path is expected to be, because truncating a pointer loses the
+    /// object it points at rather than the tail of a sentence. Set below the store's limit, this
+    /// column becomes the one thing that can break a reference the store itself would have taken.
+    /// </remarks>
+    [Fact]
+    public void The_evidence_bounds_are_set_and_the_screenshot_pointer_is_bounded_by_the_blob_stores_limit()
+    {
+        int[] bounds =
+        [
+            SubmissionLimits.MaxConfirmationRefLength,
+            SubmissionLimits.MaxFinalUrlLength,
+            SubmissionLimits.MaxScreenshotRefLength,
+            SubmissionLimits.MaxSubmittedFieldNameLength,
+            SubmissionLimits.MaxSubmittedFieldCount,
+        ];
+
+        Assert.All(bounds, bound => Assert.True(bound > 0));
+
+        // 1,024 characters is the longest name Azure Blob Storage accepts.
+        Assert.True(SubmissionLimits.MaxScreenshotRefLength >= 1024);
     }
 }
