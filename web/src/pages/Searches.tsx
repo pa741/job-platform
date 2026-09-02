@@ -154,8 +154,23 @@ export function Searches({ api }: { api: JobPlatformApi }) {
   if (error && !drafts) return <ErrorNote error={error} onRetry={load} />;
   if (!drafts || !options) return <div className="empty">Loading…</div>;
 
+  const enabled = drafts.filter((d) => d.form.enabled).length;
+
   return (
-    <div className="grid">
+    <div className="stack">
+      <p className="lede">
+        <b>{drafts.length}</b> search{drafts.length === 1 ? '' : 'es'}
+        {enabled !== drafts.length && <>, <b>{enabled}</b> enabled</>}. The scraper rebuilds its
+        configuration from these rather than the other way round.
+      </p>
+
+      <p className="lede-note">
+        This is the page to open when nothing has been scraped yet: it waits on nothing, because
+        it is about your configuration rather than about the corpus. A failed publish does not
+        fail the save — the configuration is stored and only the write to the scraper did not
+        happen, so the line below is the record and Republish is the retry.
+      </p>
+
       {error ? <ErrorNote error={error} /> : null}
 
       <Card
@@ -437,13 +452,21 @@ function FreehireFilters({ filters, keys, onChange }: {
 function publishSummary(meta?: { published: boolean; publishedUtc: string | null }): string {
   if (!meta) return '';
 
-  if (meta.publishedUtc) {
-    return `The scraper's configuration was last written ${new Date(meta.publishedUtc).toLocaleString()}.`;
+  // `published` is read before `publishedUtc`, and the order is the point. A failed publish
+  // does not fail the save - the configuration is stored and the write to blob storage is what
+  // did not happen - so a timestamp from the last write that DID succeed can sit beside a
+  // failure. Reporting that timestamp first would say "last written <date>" about a scraper
+  // still running the previous configuration, which is the one thing this line exists to
+  // prevent somebody believing.
+  if (!meta.published) {
+    return meta.publishedUtc
+      ? `The last write failed. The scraper is still running the configuration written ${new Date(meta.publishedUtc).toLocaleString()} — press Republish.`
+      : 'The scraper has not been told about these yet. Press Republish, or check that this deployment has scraper configuration storage.';
   }
 
-  return meta.published
-    ? 'The scraper has been told about these searches.'
-    : 'The scraper has not been told about these yet. Press Republish, or check that this deployment has scraper configuration storage.';
+  return meta.publishedUtc
+    ? `The scraper's configuration was last written ${new Date(meta.publishedUtc).toLocaleString()}.`
+    : 'The scraper has been told about these searches.';
 }
 
 function toDraft(search: ScraperSearchResponse): Draft {
