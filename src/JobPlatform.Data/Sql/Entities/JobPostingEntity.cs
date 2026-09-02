@@ -17,8 +17,44 @@ public sealed class JobPostingEntity
     public required string Site { get; set; }
     public required string ExternalId { get; set; }
 
-    /// <summary>SHA-256 of normalised title|company|location, for cross-board matching.</summary>
+    /// <summary>SHA-256 of normalised title|company|location, for deciding whether a posting changed.</summary>
+    /// <remarks>
+    /// <b>Do not widen this to cross boards</b> - <see cref="CrossBoardKey"/> is the one for
+    /// that. <c>EmbeddingRepository</c> compares this to decide whether a vector is stale, so
+    /// changing what it hashes marks the whole embedded corpus for re-embedding, or worse,
+    /// quietly stops marking things that did change.
+    /// </remarks>
     public required string ContentHash { get; set; }
+
+    /// <summary>
+    /// SHA-256 of <c>JobFingerprint.CrossBoardKey</c> - normalised title|company|<b>city</b> -
+    /// or null where the employer or the city is unknown.
+    /// </summary>
+    /// <remarks>
+    /// <b>Two fingerprints, and merging them is a regression.</b> <see cref="ContentHash"/>
+    /// answers "did this posting change" and folds in the <i>raw</i> location string, which
+    /// boards write differently - "London, England, United Kingdom" against "London, UK" - so it
+    /// matched across boards zero times in 5,268 live postings. This answers "is this the same
+    /// job as that one" and parses the city out first, which matched 285 times on the same
+    /// corpus.
+    ///
+    /// <b>Stored as the hash, not as the composite, and that is forced rather than chosen.</b>
+    /// <c>JobFingerprint.CrossBoardKey</c> returns the readable <c>title|company|city</c> string,
+    /// which against this schema's own column widths runs to 952 characters - 1,904 bytes, where
+    /// SQL Server caps a nonclustered index key at 1,700. The index below would fail the
+    /// migration outright, exactly as the comment on the <c>(Company, LocationCity)</c> index
+    /// records for the same arithmetic. Hashing makes it 64 characters, indexable, and the same
+    /// shape as every other fingerprint column here. <b>The writer must hash</b>: a raw composite
+    /// written into this column is a value SQL Server refuses and SQLite silently keeps.
+    ///
+    /// <b>Null where the city or the employer is unknown, and that nullability is measured.</b>
+    /// Title and employer alone matched 285 postings; adding the city left 211 - so 74 of them,
+    /// better than a quarter, were one employer advertising one title in several cities, and
+    /// merging those hands somebody the apply link for the wrong city's vacancy. An unlocated
+    /// posting is not the same job as another unlocated posting, so it gets no key rather than
+    /// the empty one.
+    /// </remarks>
+    public string? CrossBoardKey { get; set; }
 
     public required string Title { get; set; }
     public string? Company { get; set; }

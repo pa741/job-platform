@@ -1,3 +1,4 @@
+using System.Globalization;
 using JobPlatform.Core.Submissions;
 using JobPlatform.Data.Sql.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -45,6 +46,13 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
     public DbSet<SubmissionEntity> Submissions => Set<SubmissionEntity>();
     public DbSet<SubmissionEventEntity> SubmissionEvents => Set<SubmissionEventEntity>();
 
+    /// <summary>Apply passes. Not <see cref="ScrapeRuns"/>, which belongs to ingestion.</summary>
+    public DbSet<RunEntity> Runs => Set<RunEntity>();
+
+    public DbSet<FormAnswerEntity> FormAnswers => Set<FormAnswerEntity>();
+    public DbSet<FormAnswerResolutionEntity> FormAnswerResolutions => Set<FormAnswerResolutionEntity>();
+    public DbSet<OpenQuestionEntity> OpenQuestions => Set<OpenQuestionEntity>();
+
     public DbSet<ScraperSearchEntity> ScraperSearches => Set<ScraperSearchEntity>();
     public DbSet<ScraperSearchSiteEntity> ScraperSearchSites => Set<ScraperSearchSiteEntity>();
     public DbSet<ScraperSearchFilterEntity> ScraperSearchFilters => Set<ScraperSearchFilterEntity>();
@@ -87,6 +95,20 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
             value => value.UtcTicks,
             ticks => new DateTimeOffset(ticks, TimeSpan.Zero));
 
+    /// <summary>
+    /// How wide a column holding a caller's subject id has to be.
+    /// </summary>
+    /// <remarks>
+    /// Entra object ids are GUIDs, but the width is chosen for the general case rather than
+    /// assuming a format the token is not obliged to keep. It is a constant rather than two
+    /// literals because <c>Submissions.ApprovedBy</c> is a <i>copy</i> of
+    /// <c>CandidateProfiles.SubjectId</c>: a narrower column there would truncate the id it
+    /// records, and a truncated id in an authorisation record names somebody else. There is no
+    /// Core constant to reach for - this bounds no validated value, only two columns that must
+    /// agree with each other.
+    /// </remarks>
+    private const int SubjectIdLength = 100;
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<ScrapeRun>(entity =>
@@ -111,6 +133,13 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
 
             entity.HasIndex(e => e.SourceKey).IsUnique();
             entity.HasIndex(e => e.ContentHash);
+
+            // The dedupe axis: every row sharing this key is one job, listed more than once.
+            // Not unique, obviously - duplicates are the thing it finds - and not filtered
+            // either, because the column is already null for every posting with no cross-board
+            // identity, so the nulls are what a filter would have excluded anyway.
+            entity.HasIndex(e => e.CrossBoardKey);
+
             entity.HasIndex(e => e.LastSeenUtc);
             entity.HasIndex(e => e.Company);
 
@@ -143,6 +172,16 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
             entity.Property(e => e.Site).HasMaxLength(50).IsRequired();
             entity.Property(e => e.ExternalId).HasMaxLength(150).IsRequired();
             entity.Property(e => e.ContentHash).HasMaxLength(64).IsFixedLength().IsRequired();
+
+            // 64 is the width of a SHA-256 hex string, which is a fact about the algorithm rather
+            // than a bound anybody chose - so it is spelled the same way as ContentHash on the
+            // line above and the three other hash columns in this file, rather than promoted to a
+            // constant that would only ever say "SHA-256 is still SHA-256".
+            //
+            // Nullable, because JobFingerprint.CrossBoardKey answers null where the employer or
+            // the city is unknown, and fixed-length so a raw composite written here fails loudly
+            // on SQL Server instead of being silently truncated into a false merge.
+            entity.Property(e => e.CrossBoardKey).HasMaxLength(64).IsFixedLength();
 
             entity.Property(e => e.Title).HasMaxLength(500).IsRequired();
             entity.Property(e => e.Company).HasMaxLength(300);
@@ -222,6 +261,8 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
         ConfigureProfiles(modelBuilder);
         ConfigureMatches(modelBuilder);
         ConfigureSubmissions(modelBuilder);
+        ConfigureRuns(modelBuilder);
+        ConfigureFormAnswers(modelBuilder);
         ConfigureExtractionBatches(modelBuilder);
         ConfigureScraperSearches(modelBuilder);
 
@@ -284,9 +325,7 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
             // would make "the caller's profile" an ambiguous question.
             entity.HasIndex(e => e.SubjectId).IsUnique();
 
-            // Entra object ids are GUIDs, but the column is sized for the general case rather
-            // than assuming a format the token is not obliged to keep.
-            entity.Property(e => e.SubjectId).HasMaxLength(100).IsRequired();
+            entity.Property(e => e.SubjectId).HasMaxLength(SubjectIdLength).IsRequired();
 
             entity.Property(e => e.FullName).HasMaxLength(200);
             entity.Property(e => e.Headline).HasMaxLength(300);
@@ -569,8 +608,22 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
             // The list query: this candidate's submissions, newest first.
             entity.HasIndex(e => new { e.ProfileId, e.CreatedAtUtc });
 
+            // What a run's own account of itself is checked against. Submitted is countable
+            // against these rows and Considered is countable against nothing, which is the whole
+            // difference between the summary and the record.
+            entity.HasIndex(e => e.RunId);
+
             entity.Property(e => e.Channel).HasConversion<int>();
             entity.Property(e => e.ApplyUrl).HasMaxLength(SubmissionLimits.MaxApplyUrlLength);
+
+            // int? rather than int, so null keeps meaning "not parked" and no member of
+            // ParkReason is zero. Mapped as the enum rather than as a raw int so the queue
+            // predicate can ask ParkReasonPolicy.Permanent.Contains(row.ParkedReason) and have
+            // EF turn it into an IN clause - a static call over a column has no SQL, which is
+            // exactly why that list exists.
+            entity.Property(e => e.ParkedReason).HasConversion<int?>();
+
+            entity.Property(e => e.ApprovedBy).HasMaxLength(SubjectIdLength);
 
             entity.HasOne(e => e.Profile)
                 .WithMany()
@@ -580,6 +633,15 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
             entity.HasOne(e => e.Posting)
                 .WithMany()
                 .HasForeignKey(e => e.PostingId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // Restrict, for the reason JobPostingSearchTerms restricts to ScrapeRuns: a run is
+            // history and must not be deletable out from under the rows that name it. It also
+            // has to be Restrict rather than Cascade - a profile already cascades into both
+            // tables, and SQL Server refuses two cascade paths into one.
+            entity.HasOne(e => e.Run)
+                .WithMany()
+                .HasForeignKey(e => e.RunId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
@@ -602,12 +664,312 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
                 .HasMaxLength(SubmissionLimits.MaxIdempotencyKeyLength)
                 .IsRequired();
 
+            // The evidence block. Every one of these is optional and none of them may block an
+            // event: this is gathered by something driving a browser through somebody else's
+            // form, and the interesting runs are the ones that go wrong. Refusing to record that
+            // an application was sent because the screenshot failed loses the fact in order to
+            // protect the proof of it.
+            //
+            // Three separate constants for three separate columns, though two of them read 1000
+            // today. SubmissionLimits.MaxFinalUrlLength says why: they are measured against the
+            // same ATS URLs and agreeing is a coincidence worth keeping rather than a fact to
+            // share, because one constant behind both means widening either silently widens the
+            // other.
+            entity.Property(e => e.ConfirmationRef).HasMaxLength(SubmissionLimits.MaxConfirmationRefLength);
+            entity.Property(e => e.FinalUrl).HasMaxLength(SubmissionLimits.MaxFinalUrlLength);
+            entity.Property(e => e.ScreenshotRef).HasMaxLength(SubmissionLimits.MaxScreenshotRefLength);
+
+            // Unbounded, like EmphasisedJson: read back whole to be shown, never queried into.
+            // The list is bounded where it is built - MaxSubmittedFieldNameLength per name and
+            // MaxSubmittedFieldCount names - because a column width would have to guess at how
+            // far JSON escaping expands it, and that guess fails as an insert error on a name
+            // full of quotes rather than as anything a reader could have predicted.
+            entity.Property(e => e.SubmittedFieldsJson);
+
             entity.HasOne(e => e.Submission)
                 .WithMany(s => s.Events)
                 .HasForeignKey(e => e.SubmissionId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
     }
+
+    /// <summary>
+    /// One row per unattended pass, and nothing else.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately the smallest table here. It holds neither a quota - the daily cap is counted
+    /// over <c>SubmissionEvents.AtUtc</c> and would be weakened by a counter that resets when a
+    /// crashed client restarts - nor an idempotency guarantee, which
+    /// <c>(SubmissionId, IdempotencyKey)</c> already is. What it holds is
+    /// <c>RunSummary.Considered</c>, which exists nowhere else: submissions record what was
+    /// created and are silent about what was looked at and passed over.
+    ///
+    /// Cascading from the profile like every other child of it. The submissions that name a run
+    /// restrict rather than cascade in the other direction - see <see cref="ConfigureSubmissions"/>.
+    /// </remarks>
+    private static void ConfigureRuns(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<RunEntity>(entity =>
+        {
+            entity.ToTable("Runs");
+            entity.HasKey(e => e.Id);
+
+            // The list query, and the one that answers "is a run still going": this candidate's
+            // runs, newest first. Openness is read from FinishedAtUtc on the rows this returns
+            // rather than indexed separately - a candidate has a handful of runs a day, not a
+            // corpus of them.
+            entity.HasIndex(e => new { e.ProfileId, e.StartedAtUtc });
+
+            // The same constant SubmissionEvents.Note carries, reused deliberately rather than
+            // minting a second: it is the same kind of text under the same argument, and two
+            // bounds on one kind of thing is how a column and its validation drift apart.
+            entity.Property(e => e.Note).HasMaxLength(SubmissionLimits.MaxNoteLength);
+
+            // Unbounded, and bounded by construction instead: the park breakdown is keyed on
+            // ParkReason, so a client cannot invent keys and write an essay into it.
+            entity.Property(e => e.SummaryJson);
+
+            entity.HasOne(e => e.Profile)
+                .WithMany()
+                .HasForeignKey(e => e.ProfileId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+    }
+
+    /// <summary>
+    /// What the candidate has said, what a question resolved to last time, and what is still
+    /// waiting on a person.
+    /// </summary>
+    /// <remarks>
+    /// <b>Every uniqueness rule here is written so that SQL Server and SQLite agree, and that is
+    /// the decision worth reading twice.</b> SQL Server treats two NULLs as equal in a unique
+    /// index; SQLite, like the standard, treats them as distinct. So the obvious index - one
+    /// unique key over <c>(ProfileId, QuestionHash, Scope, CompanyId, PostingId)</c> - would
+    /// reject a second global answer in production and admit it in the test fixture, which is a
+    /// guarantee that cannot be tested by the tests that exist. Worse than untested: the
+    /// difference only shows up as a live constraint violation somebody meets for the first time
+    /// against the real database.
+    ///
+    /// <b>So no nullable column is ever a key column in a unique index here.</b> The scoped rules
+    /// are split one per scope, and the two narrow ones additionally require their id to be
+    /// present - so every row that reaches those indexes has non-null values in every key column,
+    /// and uniqueness over non-nulls is identical on both engines. The same technique splits the
+    /// resolution cache in two along <c>OptionsHash</c>, where null means "this field offered no
+    /// options" and is the common case rather than an edge one. Nothing here relies on either
+    /// engine's NULL semantics, which is what makes the tests that assert these indexes worth
+    /// having.
+    ///
+    /// <b>A row whose scope and id disagree - <c>Company</c> with no company - lands in no index
+    /// at all, and that is correct.</b> <c>FormAnswer.Create</c> refuses to build one and
+    /// <c>AnswerPrecedence.Applies</c> would never return one, so such a row is unreachable by
+    /// construction; an index pretending to police it would be enforcing a rule two layers above
+    /// already enforce, in the one place that cannot explain itself.
+    ///
+    /// <b>Superseding, not updating.</b> The uniqueness is over <i>live</i> answers only, which
+    /// is what lets the history stay: replacing an answer stamps <c>SupersededAtUtc</c> on the
+    /// old row and inserts a new one, and the old row leaves the index without leaving the table.
+    /// <c>OpenQuestions</c> works the same way on <c>AnsweredAtUtc</c> - answering a question
+    /// closes it rather than deleting it, so what was asked is still readable afterwards.
+    /// </remarks>
+    private static void ConfigureFormAnswers(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<FormAnswerEntity>(entity =>
+        {
+            entity.ToTable("FormAnswers");
+            entity.HasKey(e => e.Id);
+
+            // One live answer per question per scope. Three indexes rather than one over the
+            // nullable scope ids - see the remarks above for why that is not a tidying exercise.
+            entity.HasIndex(e => new { e.ProfileId, e.QuestionHash }, "IX_FormAnswers_LiveGlobal")
+                .IsUnique()
+                .HasFilter(LiveAnswersAt(AnswerScope.Global));
+
+            entity.HasIndex(e => new { e.ProfileId, e.QuestionHash, e.CompanyId }, "IX_FormAnswers_LiveCompany")
+                .IsUnique()
+                .HasFilter(LiveAnswersAt(AnswerScope.Company, " AND [CompanyId] IS NOT NULL"));
+
+            entity.HasIndex(e => new { e.ProfileId, e.QuestionHash, e.PostingId }, "IX_FormAnswers_LivePosting")
+                .IsUnique()
+                .HasFilter(LiveAnswersAt(AnswerScope.Posting, " AND [PostingId] IS NOT NULL"));
+
+            // The resolver's own lookup, and unfiltered on purpose: AnswerPrecedence.Best is
+            // handed superseded answers too, because the last thing somebody actually said beats
+            // a blank when it is all there is. A filtered index cannot serve that read.
+            entity.HasIndex(e => new { e.ProfileId, e.QuestionHash });
+
+            // The escape from phrasing: two employers wording one question differently produce
+            // two hashes, and a name written once lets both resolve.
+            entity.HasIndex(e => new { e.ProfileId, e.Name });
+
+            // The dashboard's list, newest first - the same shape as Submissions and
+            // ApplicationDocuments, and for the same reason.
+            entity.HasIndex(e => new { e.ProfileId, e.AnsweredAtUtc });
+
+            entity.Property(e => e.Name).HasMaxLength(FormAnswerLimits.MaxNameLength);
+            entity.Property(e => e.QuestionText)
+                .HasMaxLength(FormAnswerLimits.MaxQuestionTextLength)
+                .IsRequired();
+
+            entity.Property(e => e.QuestionHash)
+                .HasMaxLength(FormAnswerLimits.QuestionHashLength)
+                .IsFixedLength()
+                .IsRequired();
+
+            // Bounded by the question it is derived from: normalisation folds and never grows,
+            // so anything longer than the source text could only be a row written by something
+            // other than QuestionKey.Normalise.
+            entity.Property(e => e.NormalisedQuestion)
+                .HasMaxLength(FormAnswerLimits.MaxQuestionTextLength)
+                .IsRequired();
+
+            entity.Property(e => e.Value).HasMaxLength(FormAnswerLimits.MaxValueLength).IsRequired();
+
+            entity.Property(e => e.Scope).HasConversion<int>();
+            entity.Property(e => e.Source).HasConversion<int>();
+
+            entity.HasOne(e => e.Profile)
+                .WithMany()
+                .HasForeignKey(e => e.ProfileId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Restrict on both scope targets, the way everything else here restricts to a shared
+            // record: a company row is a lookup and a posting is the corpus, and neither should
+            // be able to take somebody's stored answer with it.
+            entity.HasOne(e => e.Company)
+                .WithMany()
+                .HasForeignKey(e => e.CompanyId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(e => e.Posting)
+                .WithMany()
+                .HasForeignKey(e => e.PostingId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<FormAnswerResolutionEntity>(entity =>
+        {
+            entity.ToTable("FormAnswerResolutions");
+            entity.HasKey(e => e.Id);
+
+            // One cached outcome per question, per option set. Split on whether there were
+            // options at all, so the nullable column is never a key column - the same rule the
+            // answer indexes follow, and here the null case is the common one: most fields are
+            // free text.
+            entity.HasIndex(e => new { e.ProfileId, e.QuestionHash }, "IX_FormAnswerResolutions_FreeText")
+                .IsUnique()
+                .HasFilter("[OptionsHash] IS NULL");
+
+            entity.HasIndex(
+                    e => new { e.ProfileId, e.QuestionHash, e.OptionsHash },
+                    "IX_FormAnswerResolutions_Options")
+                .IsUnique()
+                .HasFilter("[OptionsHash] IS NOT NULL");
+
+            entity.Property(e => e.QuestionHash)
+                .HasMaxLength(FormAnswerLimits.QuestionHashLength)
+                .IsFixedLength()
+                .IsRequired();
+
+            entity.Property(e => e.OptionsHash)
+                .HasMaxLength(FormAnswerLimits.QuestionHashLength)
+                .IsFixedLength();
+
+            entity.Property(e => e.ResolvedName).HasMaxLength(FormAnswerLimits.MaxNameLength);
+
+            // MaxNoteLength again, on the ApplyRun.Note precedent: a rationale is a sentence or
+            // two of context about one decision, which is what that constant already bounds.
+            entity.Property(e => e.Rationale).HasMaxLength(SubmissionLimits.MaxNoteLength).IsRequired();
+
+            // 100, like every other column here recording which deployment served a call.
+            entity.Property(e => e.Model).HasMaxLength(100);
+
+            entity.HasOne(e => e.Profile)
+                .WithMany()
+                .HasForeignKey(e => e.ProfileId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Restrict: an answer is never deleted, and a cache row pointing at one must not be
+            // what makes that untrue.
+            entity.HasOne(e => e.Answer)
+                .WithMany()
+                .HasForeignKey(e => e.AnswerId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<OpenQuestionEntity>(entity =>
+        {
+            entity.ToTable("OpenQuestions");
+            entity.HasKey(e => e.Id);
+
+            // One live question per wording. A run meeting the same question on four adverts
+            // must put it to a person once, and a person who has answered it must not be asked
+            // again next week. Both key columns are non-nullable, so this behaves the same on
+            // SQL Server and on the SQLite the tests run against.
+            entity.HasIndex(e => new { e.ProfileId, e.QuestionHash }, "IX_OpenQuestions_Unanswered")
+                .IsUnique()
+                .HasFilter("[AnsweredAtUtc] IS NULL");
+
+            // What list_open_questions reads: this candidate's queue, oldest first.
+            entity.HasIndex(e => new { e.ProfileId, e.AskedAtUtc });
+
+            // What the queue predicate reads. A posting parked for MissingAnswer comes back only
+            // once nothing unanswered is left against it, and that is asked once per shortlist
+            // row against a database billed by the second.
+            entity.HasIndex(e => new { e.ProfileId, e.PostingId });
+
+            entity.Property(e => e.QuestionText)
+                .HasMaxLength(FormAnswerLimits.MaxQuestionTextLength)
+                .IsRequired();
+
+            entity.Property(e => e.QuestionHash)
+                .HasMaxLength(FormAnswerLimits.QuestionHashLength)
+                .IsFixedLength()
+                .IsRequired();
+
+            // Unbounded, like every other JSON column here: read back whole, never queried into.
+            entity.Property(e => e.OptionsJson);
+
+            entity.HasOne(e => e.Profile)
+                .WithMany()
+                .HasForeignKey(e => e.ProfileId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Posting)
+                .WithMany()
+                .HasForeignKey(e => e.PostingId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // A run is history: an abandoned one still has to be able to say what it asked.
+            entity.HasOne(e => e.Run)
+                .WithMany()
+                .HasForeignKey(e => e.RunId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(e => e.Answer)
+                .WithMany()
+                .HasForeignKey(e => e.AnswerId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+    }
+
+    /// <summary>
+    /// The filter a live-answer index is built on, with the scope written as its stored number.
+    /// </summary>
+    /// <remarks>
+    /// Derived from <see cref="AnswerScope"/> rather than typed as a literal, so renumbering the
+    /// enum regenerates the index instead of silently pointing it at a different scope - which is
+    /// the one thing a magic number inside an index filter can never report. Bracket quoting
+    /// because both SQL Server and SQLite accept it, and this string is emitted verbatim by
+    /// whichever provider is building the model.
+    ///
+    /// Invariant, because the filter is compared character for character against what the
+    /// migration wrote: built under a culture with different digits it would read as a changed
+    /// index on every model build.
+    /// </remarks>
+    private static string LiveAnswersAt(AnswerScope scope, string alsoRequired = "")
+        => string.Create(
+            CultureInfo.InvariantCulture,
+            $"[SupersededAtUtc] IS NULL AND [Scope] = {(int)scope}{alsoRequired}");
 
     private static void ConfigureMatches(ModelBuilder modelBuilder)
     {
@@ -707,10 +1069,26 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
             entity.Property(e => e.Model).HasMaxLength(100);
             entity.Property(e => e.Instructions).HasMaxLength(2000);
 
-            // Unbounded: whole documents.
+            // Unbounded: whole documents, and two JSON columns read back whole.
             entity.Property(e => e.CurriculumVitaeMarkdown);
             entity.Property(e => e.CoverLetterMarkdown);
             entity.Property(e => e.EmphasisedJson);
+            entity.Property(e => e.DraftedAnswersJson);
+
+            // The rendered files. SubmissionLimits.MaxScreenshotRefLength is the Azure blob-name
+            // ceiling rather than a fact about screenshots - read its remarks - so these four
+            // columns share it because they share the ceiling. That is the opposite case from
+            // MaxApplyUrlLength and MaxFinalUrlLength above, which agree by coincidence and are
+            // deliberately kept apart: here, widening one and not the others would be the bug.
+            // A path too long for these is a path the store would have refused anyway, so the
+            // column can never be what breaks a reference to a file that exists.
+            entity.Property(e => e.CvBlobPath).HasMaxLength(SubmissionLimits.MaxScreenshotRefLength);
+            entity.Property(e => e.CvDocxBlobPath).HasMaxLength(SubmissionLimits.MaxScreenshotRefLength);
+            entity.Property(e => e.CoverLetterBlobPath).HasMaxLength(SubmissionLimits.MaxScreenshotRefLength);
+
+            // 64 and fixed, exactly as every other SHA-256 hex column here - see the note on
+            // JobPostings.CrossBoardKey.
+            entity.Property(e => e.CvSha256).HasMaxLength(64).IsFixedLength();
 
             entity.HasOne(e => e.Profile)
                 .WithMany()

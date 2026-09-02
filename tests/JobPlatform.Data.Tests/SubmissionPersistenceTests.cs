@@ -472,17 +472,50 @@ public sealed class SubmissionPersistenceTests : IDisposable
         Assert.Equal([6, 2, 1], rows.Select(r => r.PostingId));
     }
 
+    /// <summary>
+    /// What a submission row does to the shortlist depends on what it says.
+    /// </summary>
+    /// <remarks>
+    /// This asserted that any row at all removed a posting, and that rule is what made parking
+    /// impossible: a park has to write a row to park against, so parking for a captcha and never
+    /// wanting to see the posting again were the same operation. The rule it is rewritten to is
+    /// the one <c>ParkReasonPolicy</c> holds - a live application or a permanent park excludes,
+    /// and everything else comes back - so the case that used to pass, an ordinary application,
+    /// still passes here.
+    /// </remarks>
     [Fact]
-    public async Task A_posting_already_submitted_leaves_the_shortlist()
+    public async Task A_live_application_or_a_permanent_park_leaves_the_shortlist_and_a_retryable_park_does_not()
     {
         await SeedMatchesAsync();
 
         await using var db = CreateContext();
-        await new SubmissionRepository(db).CreateAsync(ProfileId, 6, SubmissionChannel.Ats, null, Now);
+        var submissions = new SubmissionRepository(db);
+
+        await submissions.CreateAsync(ProfileId, 6, SubmissionChannel.Ats, null, Now);
+        var (expired, _) = await submissions.CreateAsync(ProfileId, 2, SubmissionChannel.Board, null, Now);
+        var (captcha, _) = await submissions.CreateAsync(ProfileId, 1, SubmissionChannel.Ats, null, Now);
+
+        // Parked round the repository, the way the index assertions above are written: the queue
+        // predicate reads these columns, so going through a writer would assert the writer's
+        // opinion of them rather than the predicate's.
+        foreach (var (id, reason) in new[]
+                 {
+                     (expired.Id, ParkReason.Expired),
+                     (captcha.Id, ParkReason.Captcha),
+                 })
+        {
+            var parked = await db.Submissions.SingleAsync(s => s.Id == id);
+            parked.ParkedReason = reason;
+            parked.ParkedAtUtc = Now;
+        }
+
+        await db.SaveChangesAsync();
 
         var rows = await new JobMatchRepository(db).ListApplyableAsync(ProfileId, channel: null, limit: 50);
 
-        Assert.Equal([2, 1], rows.Select(r => r.PostingId));
+        // 6 was applied to and 2 is gone for good; 1 was parked on a challenge, which is a fact
+        // about the attempt rather than about the vacancy, so it is offered again.
+        Assert.Equal([1], rows.Select(r => r.PostingId));
     }
 
     [Fact]

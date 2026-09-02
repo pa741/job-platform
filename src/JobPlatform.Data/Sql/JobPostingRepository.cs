@@ -363,6 +363,11 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
         JobLocation location)
     {
         entity.ContentHash = contentHash;
+
+        // The other fingerprint, and it is written here rather than beside the insert because
+        // both paths reach this method: a posting whose title or city was corrected on a later
+        // run has to move clusters, and one stamped only at creation never would.
+        entity.CrossBoardKey = JobFingerprint.CrossBoardKeyHash(posting);
         entity.Title = posting.Title;
         entity.Company = posting.Company;
         entity.LocationRaw = posting.Location;

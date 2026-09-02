@@ -202,6 +202,64 @@ public sealed class ApplicationDocumentEntity
     /// <summary>What this draft chose to lead with, as a JSON array of sentences.</summary>
     public string? EmphasisedJson { get; set; }
 
+    /// <summary>
+    /// The free-text form answers drafted alongside the documents, as JSON.
+    /// </summary>
+    /// <remarks>
+    /// <b>Store facts, generate prose.</b> A visibly generic "why do you want to work here" is
+    /// worse than an empty box - it is detectable in one sentence and gets the candidate
+    /// remembered as the person who sent the template - and an answer that names this employer
+    /// cannot be reused across employers by construction. At generation time the advert, the
+    /// profile, the gap list and the emphasise list are already in the writer's prompt, so
+    /// drafting these costs a few hundred output tokens against work already paid for.
+    ///
+    /// Written and read through <c>DraftedAnswerCatalog</c>, which shapes it exactly like
+    /// <see cref="EmphasisedJson"/> - camelCase, a plain array, no envelope - so the two JSON
+    /// columns on one table read the same way. Unbounded for the same reason as the columns
+    /// above: read back whole, never queried into.
+    ///
+    /// <b>An empty list means "not generated yet", never "this posting has nothing worth
+    /// saying".</b> There is no scheduled generation pass; documents are written when a person
+    /// presses generate, so today almost every posting has none.
+    /// </remarks>
+    public string? DraftedAnswersJson { get; set; }
+
+    /// <summary>Where the rendered CV was stored, or null before it was rendered.</summary>
+    /// <remarks>
+    /// <b>The markdown stays the record and this is a rendering of it.</b> Storing the bytes in
+    /// SQL would put megabytes into a database billed by the second and billed again on every
+    /// read; storing nothing at all means the pack cannot hand an agent a file, which is the
+    /// whole of what an ATS upload box wants. So the blob holds the file and the row holds the
+    /// path - and the path only, never a signed URL. A user-delegation SAS expires, and an
+    /// expired URL stored beside a document is a dead pointer that still looks live; whoever
+    /// serves the pack mints a fresh short-lived one from the path.
+    /// </remarks>
+    public string? CvBlobPath { get; set; }
+
+    /// <summary>Where the DOCX rendering was stored. A second file, not a second document.</summary>
+    /// <remarks>
+    /// Emitted alongside the PDF because Workday parses DOCX more reliably, and a CV an ATS
+    /// mis-parses is a CV nobody reads. Both are rendered from the same markdown by the same AST
+    /// walk to a second backend rather than from a second template, so the two files cannot
+    /// disagree about what the candidate said.
+    /// </remarks>
+    public string? CvDocxBlobPath { get; set; }
+
+    /// <summary>Where the rendered cover letter was stored, or null before it was rendered.</summary>
+    public string? CoverLetterBlobPath { get; set; }
+
+    /// <summary>
+    /// SHA-256 of the CV bytes as rendered, so "which CV did they send" is answerable.
+    /// </summary>
+    /// <remarks>
+    /// <b>Over the rendered file rather than over the markdown</b>, which is the only version
+    /// that answers the question: an employer read a PDF, and a renderer change moves the bytes
+    /// without moving a character of the source. It is also what makes the blob's contents
+    /// checkable against this row after the fact - a path alone cannot say whether the file at
+    /// the end of it is still the one that was sent.
+    /// </remarks>
+    public string? CvSha256 { get; set; }
+
     /// <summary>What the candidate asked for, verbatim. Kept so a revision is comparable.</summary>
     public string? Instructions { get; set; }
 

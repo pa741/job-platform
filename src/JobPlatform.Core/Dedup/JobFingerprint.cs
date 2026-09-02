@@ -69,6 +69,34 @@ public static class JobFingerprint
         return string.Join('|', Normalize(posting.Title), Normalize(posting.Company), city);
     }
 
+    /// <summary>
+    /// <see cref="CrossBoardKey"/> as the fixed-width value the column stores.
+    /// </summary>
+    /// <remarks>
+    /// <b>The key is stored hashed because the readable form cannot be indexed.</b> Title,
+    /// employer and city against this schema's own widths reach 952 characters, which is 1,904
+    /// bytes, and SQL Server caps a nonclustered index key at 1,700 - the same arithmetic already
+    /// recorded on the <c>(Company, LocationCity)</c> index. So the column is <c>char(64)</c> and
+    /// this is what may be written to it.
+    ///
+    /// <b>It exists so that the two writers cannot disagree.</b> Ingest stamps the key on every
+    /// upsert and the operator backfill stamps it on the corpus that predates the column; those
+    /// are different code paths reaching the same rows, and a second spelling of the hash would
+    /// silently split one cluster into two. Nothing else may hash this key.
+    ///
+    /// Null propagates rather than hashing the empty string: a posting with no city and a posting
+    /// with no employer are not the same job, and giving them a shared key would recreate exactly
+    /// the collision <see cref="CrossBoardKey"/> answers null to avoid.
+    /// </remarks>
+    public static string? CrossBoardKeyHash(JobPosting posting)
+    {
+        var key = CrossBoardKey(posting);
+
+        return key is null
+            ? null
+            : Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(key)));
+    }
+
     /// <summary>Case-, punctuation- and whitespace-insensitive form.</summary>
     private static string Normalize(string? value)
     {

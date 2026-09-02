@@ -1,5 +1,7 @@
-using System.Text.Json;
+﻿using System.Text.Json;
+using JobPlatform.Core.Dedup;
 using JobPlatform.Core.Enrichment;
+using JobPlatform.Core.Model;
 using JobPlatform.Core.Searches;
 using JobPlatform.Data.Cosmos;
 using JobPlatform.Data.Sql;
@@ -63,6 +65,9 @@ internal static class Program
                 "coverage" => await CoverageAsync(
                     connectionString,
                     args.Length >= 3 && int.TryParse(args[2], out var top) ? top : 40),
+                "backfill-crossboard" => await BackfillCrossBoardAsync(
+                    connectionString,
+                    args.Contains("--confirm", StringComparer.Ordinal)),
                 "apply-links" => await ApplyLinksAsync(
                     connectionString,
                     args.Length >= 3 && int.TryParse(args[2], out var days) ? days : 7),
@@ -737,4 +742,123 @@ internal static class Program
         Console.Error.WriteLine(message);
         return 1;
     }
+
+    /// <summary>
+    /// Stamps the cross-board key on the postings that predate the column.
+    /// </summary>
+    /// <remarks>
+    /// <b>A console command rather than a step in the migration, because the key is C#.</b>
+    /// <c>JobFingerprint.CrossBoardKey</c> parses a city out of a free-text location and folds
+    /// case, punctuation and whitespace; rewriting that in T-SQL would be a second implementation
+    /// of the one rule the whole of deduplication rests on, and the two would drift on the first
+    /// posting either spelled differently. This calls the same function ingest calls, so the rows
+    /// written today and the rows written in August end up in the same clusters.
+    ///
+    /// <b>It is idempotent and it is not a one-off.</b> Re-running it is how the corpus is
+    /// re-keyed after a change to the normalisation, which is a thing that has already happened
+    /// once to the other fingerprint. It writes only where the value actually differs, so a
+    /// second run touches nothing and says so.
+    ///
+    /// A null key is a null column, never a hash of the empty string: a posting with no city or
+    /// no employer is not the same job as another one missing the same field, and the queue's
+    /// clustering reads null as "this row clusters with nothing".
+    ///
+    /// Dry run unless <c>--confirm</c>, like every other command here that writes.
+    /// </remarks>
+    private static async Task<int> BackfillCrossBoardAsync(string connectionString, bool confirm)
+    {
+        await using var db = new JobsDbContext(Options(connectionString));
+
+        const int BatchSize = 500;
+
+        var scanned = 0;
+        var changed = 0;
+        var keyed = 0;
+        var unkeyable = 0;
+        var lastId = 0L;
+
+        while (true)
+        {
+            // Keyset paging on the primary key rather than Skip/Take. The rows are being
+            // rewritten as they are read, so an offset would walk over a shifting result set.
+            var batch = await db.JobPostings
+                .Where(p => p.Id > lastId)
+                .OrderBy(p => p.Id)
+                .Take(BatchSize)
+                .Select(p => new { p.Id, p.Title, p.Company, p.LocationRaw, p.CrossBoardKey })
+                .ToListAsync();
+
+            if (batch.Count == 0)
+            {
+                break;
+            }
+
+            lastId = batch[^1].Id;
+            scanned += batch.Count;
+
+            foreach (var row in batch)
+            {
+                var hash = JobFingerprint.CrossBoardKeyHash(new JobPosting
+                {
+                    ExternalId = string.Empty,
+                    Site = string.Empty,
+                    Title = row.Title,
+                    Company = row.Company,
+                    Location = row.LocationRaw,
+                });
+
+                if (hash is null)
+                {
+                    unkeyable++;
+                }
+                else
+                {
+                    keyed++;
+                }
+
+                if (string.Equals(hash, row.CrossBoardKey, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                changed++;
+
+                if (confirm)
+                {
+                    // Attached by key alone. Loading the entity would drag an unbounded
+                    // description across for every row of a 7,000-row corpus to write 64 bytes.
+                    var stub = new JobPostingEntity
+                    {
+                        Id = row.Id,
+                        SourceKey = string.Empty,
+                        Site = string.Empty,
+                        ExternalId = string.Empty,
+                        ContentHash = string.Empty,
+                        Title = string.Empty,
+                        CrossBoardKey = hash,
+                    };
+
+                    db.JobPostings.Attach(stub);
+                    db.Entry(stub).Property(e => e.CrossBoardKey).IsModified = true;
+                }
+            }
+
+            if (confirm)
+            {
+                await db.SaveChangesAsync();
+                db.ChangeTracker.Clear();
+            }
+        }
+
+        Console.WriteLine($"Scanned      : {scanned}");
+        Console.WriteLine($"Keyable      : {keyed}");
+        Console.WriteLine($"No key       : {unkeyable}  (no city or no employer - clusters with nothing)");
+        Console.WriteLine($"Out of date  : {changed}");
+        Console.WriteLine(confirm
+            ? $"Written      : {changed}"
+            : "Dry run. Nothing was written - pass --confirm to write.");
+
+        return 0;
+    }
+
 }
