@@ -357,7 +357,26 @@ export class JobPlatformApi {
     const headers = new Headers({ Accept: 'application/pdf' });
     if (token) headers.set('Authorization', `Bearer ${token}`);
 
-    const response = await fetch(this.applicationPdfUrl(id, kind), { headers });
+    // The same deadline every other call carries. This one used a bare fetch with no
+    // AbortController, so the single download in the product was the single request that
+    // could hang forever - against endpoints that render the PDF per request out of a
+    // database which pauses when idle, which is exactly where a request hangs.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+
+    let response: Response;
+    try {
+      response = await fetch(this.applicationPdfUrl(id, kind), {
+        headers, signal: controller.signal,
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new ApiTimeoutError(DEFAULT_TIMEOUT_MS);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
 
     if (!response.ok) {
       throw new ApiError(response.status, `Could not download the PDF (${response.status}).`);

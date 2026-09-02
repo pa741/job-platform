@@ -13,26 +13,6 @@ body {
 
 .app { min-height: 100vh; display: flex; flex-direction: column; }
 
-.topbar {
-  display: flex; align-items: center; gap: 16px;
-  padding: 12px 20px;
-  background: var(--surface-1);
-  border-bottom: 1px solid var(--border);
-  position: sticky; top: 0; z-index: 10;
-  flex-wrap: wrap;
-}
-.topbar h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
-.topbar .spacer { flex: 1; }
-
-.nav { display: flex; gap: 4px; }
-.nav button {
-  border: 0; background: transparent; color: var(--text-secondary);
-  padding: 6px 12px; border-radius: var(--radius); cursor: pointer;
-  font: inherit; font-size: 13px;
-}
-.nav button:hover { background: var(--gridline); color: var(--text-primary); }
-.nav button[aria-current="page"] { background: var(--gridline); color: var(--text-primary); font-weight: 600; }
-
 .btn {
   border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
   padding: 6px 12px; border-radius: var(--radius); cursor: pointer; font: inherit; font-size: 13px;

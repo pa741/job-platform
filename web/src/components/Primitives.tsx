@@ -78,19 +78,6 @@ export function Meter({ label, ratio, caption }: { label: string; ratio: number;
   );
 }
 
-export function Legend({ items }: { items: { name: string; color: string }[] }) {
-  return (
-    <div className="legend">
-      {items.map((item) => (
-        <span key={item.name}>
-          <i style={{ background: item.color }} aria-hidden="true" />
-          {item.name}
-        </span>
-      ))}
-    </div>
-  );
-}
-
 export function ErrorNote({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   const message = error instanceof Error ? error.message : String(error);
   const detail = (error as { detail?: string })?.detail;
