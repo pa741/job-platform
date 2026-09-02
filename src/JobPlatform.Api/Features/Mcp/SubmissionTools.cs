@@ -1,8 +1,10 @@
 using System.ComponentModel;
 using System.Security.Claims;
+using JobPlatform.Api.Configuration;
 using JobPlatform.Api.Infrastructure;
 using JobPlatform.Core.Submissions;
 using JobPlatform.Data.Sql;
+using Microsoft.Extensions.Options;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
@@ -35,6 +37,13 @@ namespace JobPlatform.Api.Features.Mcp;
 /// arguments are named by a router and these are named by a model: an unused <c>profileId</c>
 /// parameter is exactly the kind of thing a model would helpfully fill in.
 ///
+/// <b>An unattended client authenticates app-only, and that does not weaken the rule.</b> Its
+/// token names a service principal rather than a person, so <c>McpOptions.AppPrincipals</c> says
+/// which candidate that principal acts for. The identity still arrives with the token; the
+/// indirection is written by whoever deployed the server and cannot be named by a caller. What
+/// changes is the audit: a disclosure then records the candidate and the principal separately,
+/// because "whose data left" and "what took it" stop being the same answer.
+///
 /// <b>Two of the reads disclose the candidate's own data and both are logged.</b> There is no
 /// <c>get_profile</c> - a tool result is transcript content wherever the client runs - so
 /// <see cref="GetFormFieldAsync"/> answers one allowlisted question at a time. But
@@ -54,6 +63,7 @@ public sealed class SubmissionTools(
     SubmissionRepository submissions,
     ApplicationDocumentRepository documents,
     TimeProvider time,
+    IOptions<McpOptions> mcp,
     IDisclosureLog? disclosures = null)
 {
     /// <summary>Hard ceiling regardless of what a caller asks for. Mirrors the matches endpoint.</summary>
@@ -210,7 +220,9 @@ public sealed class SubmissionTools(
                 + string.Join(", ", FormFieldCatalog.Names) + ".");
         }
 
-        var subjectId = Subject(context)!;
+        // The mapped subject, not the token's principal: an app-only caller reads the
+        // candidate it acts for, and ResolveAsync has already established there is one.
+        var subjectId = Caller(context).SubjectId!;
         var view = await profiles.GetAsync(subjectId, ct);
         var value = view is null ? null : requested.Read(view.Profile);
 
@@ -443,13 +455,24 @@ public sealed class SubmissionTools(
     private async Task<(long? ProfileId, object? Failure)> ResolveAsync(
         RequestContext<CallToolRequestParams> context, CancellationToken ct)
     {
-        var subjectId = Subject(context);
+        var (actorId, subjectId) = Caller(context);
 
         if (string.IsNullOrWhiteSpace(subjectId))
         {
             return (null, Refused(
                 "This request carries no identified caller. The token must contain an 'oid' "
                 + "claim; there is no way to answer without knowing whose data to read."));
+        }
+
+        // An app-only token that nothing mapped is a deployment that is not finished, not a
+        // candidate who has not filled the form in. The two produce the same empty answer and
+        // want opposite fixes, so they are told apart here rather than left to look alike.
+        if (actorId == subjectId && IsApplicationToken(context))
+        {
+            return (null, Refused(
+                "This token identifies an application rather than a person, and no candidate is "
+                + "mapped to it. Whoever deployed this server maps an application principal to "
+                + "the candidate it acts for; until that is done there is no pipeline to read."));
         }
 
         var profileId = await profiles.GetIdAsync(subjectId, ct);
@@ -470,8 +493,42 @@ public sealed class SubmissionTools(
     /// registration would be invisible through another, and the failure would look like data loss
     /// rather than like a claim mix-up.
     /// </remarks>
-    private static string? Subject(RequestContext<CallToolRequestParams> context)
-        => context?.JsonRpcRequest?.Context?.User is { } user ? user.SubjectId() : null;
+    private (string? ActorId, string? SubjectId) Caller(RequestContext<CallToolRequestParams> context)
+    {
+        var actorId = context?.JsonRpcRequest?.Context?.User is { } user ? user.SubjectId() : null;
+
+        if (string.IsNullOrWhiteSpace(actorId))
+        {
+            return (null, null);
+        }
+
+        return (actorId, AppPrincipalMap.Resolve(actorId, mcp.Value.AppPrincipals));
+    }
+
+    /// <summary>
+    /// Whether the token was issued to software rather than to a person.
+    /// </summary>
+    /// <remarks>
+    /// A role claim and no scope claim, which is what the client-credentials flow produces.
+    /// <c>idtyp</c> would say so directly and is not read: it is an optional claim absent unless
+    /// the registration asks for it, so a check resting on it would silently answer "person" for
+    /// every app-only token in a tenant that had not configured it.
+    /// </remarks>
+    private static bool IsApplicationToken(RequestContext<CallToolRequestParams> context)
+    {
+        if (context?.JsonRpcRequest?.Context?.User is not { } user)
+        {
+            return false;
+        }
+
+        var hasScope = user.FindFirstValue("scp") is not null
+            || user.FindFirstValue("http://schemas.microsoft.com/identity/claims/scope") is not null;
+
+        var hasRole = user.FindFirstValue("roles") is not null
+            || user.FindFirstValue(ClaimTypes.Role) is not null;
+
+        return !hasScope && hasRole;
+    }
 
     private async Task RecordAsync(
         RequestContext<CallToolRequestParams> context,
@@ -480,15 +537,23 @@ public sealed class SubmissionTools(
         bool answered,
         CancellationToken ct)
     {
-        if (disclosures is null || Subject(context) is not { Length: > 0 } subjectId)
+        if (disclosures is null)
+        {
+            return;
+        }
+
+        var (actorId, subjectId) = Caller(context);
+
+        if (subjectId is not { Length: > 0 } || actorId is not { Length: > 0 })
         {
             return;
         }
 
         // The record carries what was asked for and never what came back. An audit log holding
-        // the data it audits has moved the problem rather than solved it.
+        // the data it audits has moved the problem rather than solved it. Both principals are
+        // written: whose data left, and what took it.
         await disclosures.RecordAsync(
-            DisclosureRecord.Create(time.GetUtcNow(), subjectId, tool, detail, answered), ct);
+            DisclosureRecord.Create(time.GetUtcNow(), subjectId, actorId, tool, detail, answered), ct);
     }
 
     /// <summary>

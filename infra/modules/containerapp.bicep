@@ -38,6 +38,9 @@ param allowAnonymousReads bool = false
 @description('Origins allowed to call the API from a browser, e.g. the Static Web App.')
 param allowedOrigins array = []
 
+@description('Application principals that act for a candidate, as "<principalObjectId>=<candidateObjectId>" pairs. An MCP client running unattended authenticates app-only, so its token names a service principal and matches no profile; this says whose pipeline it acts on. Object ids, not secrets - but tenant identifiers, so they arrive from CI rather than the repository.')
+param mcpAppPrincipals array = []
+
 @description('Which AI provider the API resolves: none, or azureopenai.')
 @allowed([
   'none'
@@ -74,6 +77,16 @@ var allowedOriginEnv = [
   for (origin, index) in allowedOrigins: {
     name: 'Api__AllowedOrigins__${index}'
     value: origin
+  }
+]
+
+// Keyed by the principal's object id rather than by index, because a dictionary binds by key.
+// Split on '=' for the same reason the origins arrive comma-separated: the whole parameter file
+// is environment variables, and a pair is the smallest thing that survives that round trip.
+var mcpAppPrincipalEnv = [
+  for pair in mcpAppPrincipals: {
+    name: 'Mcp__AppPrincipals__${split(pair, '=')[0]}'
+    value: split(pair, '=')[1]
   }
 ]
 
@@ -211,7 +224,7 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'APPLICATIONINSIGHTS_AUTHENTICATION_STRING'
               value: 'ClientId=${identityClientId};Authorization=AAD'
             }
-          ], allowedOriginEnv, useAzureOpenAi ? [
+          ], allowedOriginEnv, mcpAppPrincipalEnv, useAzureOpenAi ? [
             {
               // Configuration, not a credential. The identity named above is what the token is
               // issued for; this only says which resource to ask.

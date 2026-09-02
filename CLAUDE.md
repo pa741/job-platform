@@ -466,6 +466,17 @@ mechanism, and it is derived from the corpus rather than guessed at.
 - **No tool takes a profile id.** A tool signature is an easier place to get this wrong than a
   route, because the argument is named by a model rather than by a router — an unused `profileId`
   parameter is precisely what a model would helpfully fill in.
+- **An app-only client is mapped to a candidate by configuration, never by a tool argument.**
+  A token from the client-credentials flow names software: its `oid` is a service principal's, it
+  matches no profile, and every tool would answer "this candidate has no profile yet" against a
+  pipeline that is full. `McpOptions.AppPrincipals` says whose pipeline such a principal acts on,
+  which keeps the rule above literally true - the identity still arrives with the token, through
+  an indirection an operator wrote and no caller can name. **Resolve it in the MCP feature and
+  never in `CallerIdentity`**: the API has one authenticated policy and no per-scope
+  discrimination, so an app role admits its holder to every route, and resolving the map centrally
+  would let an unattended client act as the candidate across all of them instead of on six tools.
+  An unmapped app-only token is told so specifically - "not finished deploying" and "has not
+  filled the form in" produce the same empty answer and want opposite fixes.
 - **Pin an authorization policy as endpoint metadata, not only as a 401.** Written after the
   behavioural version of that test turned out not to pin what it claimed: every handler also calls
   `CallerIdentity.TryGetSubjectId`, which answers 401 when the token carries no `oid`, so swapping

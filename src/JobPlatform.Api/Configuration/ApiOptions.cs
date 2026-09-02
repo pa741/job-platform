@@ -65,3 +65,35 @@ public sealed class RateLimitOptions
 
     public bool Enabled { get; set; } = true;
 }
+
+public sealed class McpOptions
+{
+    public const string SectionName = "Mcp";
+
+    /// <summary>
+    /// Application principals that act for a candidate, keyed by directory object id.
+    /// </summary>
+    /// <remarks>
+    /// <b>An app-only token names software, never a person.</b> A client running unattended
+    /// authenticates with its own credential, so the <c>oid</c> on its token is a service
+    /// principal's and matches no profile - every tool would answer "this candidate has no
+    /// profile yet" against a pipeline that is in fact full. This is what says whose pipeline
+    /// such a principal acts on.
+    ///
+    /// <b>Configuration rather than a tool argument, and that is the whole point.</b> The rule
+    /// in <c>SubmissionTools</c> is that no tool takes a profile id, because a tool's arguments
+    /// are named by a model and an unused <c>profileId</c> is exactly what a model would
+    /// helpfully fill in. The mapping keeps that intact: identity still arrives with the token,
+    /// through one indirection an operator wrote and no caller can name.
+    ///
+    /// <b>Scoped to this surface, not to <c>CallerIdentity</c>.</b> Resolving it there would let
+    /// an app-only token act as the candidate across every route the API serves. Here it reaches
+    /// the six tools and nothing else, so the app role's breadth - the API has one authenticated
+    /// policy and no per-scope discrimination - buys access to a surface that still resolves to
+    /// nobody everywhere else.
+    ///
+    /// Both halves are directory object ids. Neither is a secret, and both are tenant
+    /// identifiers, so they are supplied by deployment configuration rather than committed.
+    /// </remarks>
+    public Dictionary<string, string> AppPrincipals { get; set; } = [];
+}

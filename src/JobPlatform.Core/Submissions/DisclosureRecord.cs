@@ -59,6 +59,24 @@ public sealed record DisclosureRecord
     [JsonPropertyName("subjectId")]
     public required string SubjectId { get; init; }
 
+    /// <summary>
+    /// Which principal asked. The same object id as <see cref="SubjectId"/> when the candidate
+    /// called for themselves, and a different one when something called on their behalf.
+    /// </summary>
+    /// <remarks>
+    /// <b>Separate from <see cref="SubjectId"/> because an unattended client is not the
+    /// candidate.</b> A client running app-only presents its own service principal, mapped to a
+    /// candidate by <c>Mcp:AppPrincipals</c>; without this the log would record that a CV was
+    /// disclosed and lose what pulled it. "Whose data left" and "what took it" are two questions,
+    /// and the second is the one that matters when the answer to the first was expected.
+    ///
+    /// This is the same distinction <c>SubmissionEvent.Source</c> draws on the write side, where
+    /// an event written by a tool is <c>Client</c> and never <c>Candidate</c>. A log that cannot
+    /// tell a person from their agent cannot be audited after one of them turns out to be wrong.
+    /// </remarks>
+    [JsonPropertyName("actorId")]
+    public required string ActorId { get; init; }
+
     /// <summary>Which tool asked - <c>get_form_field</c>, <c>get_submission_pack</c>.</summary>
     [JsonPropertyName("tool")]
     public required string Tool { get; init; }
@@ -88,11 +106,17 @@ public sealed record DisclosureRecord
     public static DisclosureRecord Create(
         DateTimeOffset occurredAtUtc,
         string subjectId,
+        string actorId,
         string tool,
         string detail,
         bool answered)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(subjectId);
+
+        // Guarded rather than defaulted to the subject. A caller that cannot say what acted has
+        // not established that the candidate did, and quietly recording them as the actor would
+        // put a claim in the log that nothing checked.
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ArgumentException.ThrowIfNullOrWhiteSpace(tool);
 
         return new DisclosureRecord
@@ -103,6 +127,7 @@ public sealed record DisclosureRecord
             Day = occurredAtUtc.UtcDateTime.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
             OccurredAtUtc = occurredAtUtc,
             SubjectId = subjectId,
+            ActorId = actorId,
             Tool = Bound(tool),
             Detail = Bound(detail),
             Answered = answered,

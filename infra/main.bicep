@@ -53,6 +53,9 @@ param apiAllowAnonymousReads bool = false
 @description('Browser origins allowed to call the API, e.g. the Static Web App.')
 param apiAllowedOrigins array = []
 
+@description('Application principals that act for a candidate on the MCP surface, as "<principalObjectId>=<candidateObjectId>" pairs. Empty leaves the surface delegated-only: an app-only token then resolves to no candidate and every tool says so.')
+param apiMcpAppPrincipals array = []
+
 // Defaults to none so a fresh deploy provisions no model capacity and incurs no model spend.
 // Selecting azureopenai adds a Foundry resource with two deployments - and, notably, no
 // secret: the shared managed identity authenticates to it the same way it does to SQL, Cosmos
@@ -343,6 +346,7 @@ module containerApp 'modules/containerapp.bicep' = {
     allowedOrigins: deployWeb
       ? union(apiAllowedOrigins, [staticWebApp!.outputs.url])
       : apiAllowedOrigins
+    mcpAppPrincipals: apiMcpAppPrincipals
     aiProvider: aiProvider
     openAiEndpoint: aiProvider == 'azureopenai' ? openAi!.outputs.endpoint : ''
     openAiBulkDeployment: aiProvider == 'azureopenai' ? openAi!.outputs.bulkDeployment : ''

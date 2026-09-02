@@ -67,3 +67,9 @@ param aiOpenAiBatchEnabled = empty(readEnvironmentVariable('JP_AI_OPENAI_BATCH',
 param apiAllowedOrigins = empty(readEnvironmentVariable('JP_API_ALLOWED_ORIGINS', ''))
   ? []
   : split(readEnvironmentVariable('JP_API_ALLOWED_ORIGINS', ''), ',')
+// Comma-separated "<principalObjectId>=<candidateObjectId>" pairs, e.g. a NAS running an MCP
+// client unattended. Both halves are directory object ids: not secrets, but tenant
+// identifiers, so they stay out of this file for the reason at the top of it.
+param apiMcpAppPrincipals = empty(readEnvironmentVariable('JP_MCP_APP_PRINCIPALS', ''))
+  ? []
+  : split(readEnvironmentVariable('JP_MCP_APP_PRINCIPALS', ''), ',')

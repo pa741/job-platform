@@ -34,6 +34,7 @@ var rateLimitOptions = configuration.GetSection(RateLimitOptions.SectionName).Ge
 builder.Services.Configure<ApiOptions>(configuration.GetSection(ApiOptions.SectionName));
 builder.Services.Configure<CacheOptions>(configuration.GetSection(CacheOptions.SectionName));
 builder.Services.Configure<RateLimitOptions>(configuration.GetSection(RateLimitOptions.SectionName));
+builder.Services.Configure<McpOptions>(configuration.GetSection(McpOptions.SectionName));
 
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddApplicationInsightsTelemetry();

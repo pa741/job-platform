@@ -57,6 +57,10 @@ env:
   JP_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
   JP_API_CLIENT_ID: ${{ vars.JP_API_CLIENT_ID }}
   JP_API_ALLOWED_ORIGINS: ${{ vars.JP_API_ALLOWED_ORIGINS }}
+  # "<principalObjectId>=<candidateObjectId>" pairs, comma-separated. Says which candidate an
+  # app-only MCP client acts for; unset leaves the surface delegated-only. Object ids rather
+  # than secrets, so a repository variable rather than a repository secret.
+  JP_MCP_APP_PRINCIPALS: ${{ vars.JP_MCP_APP_PRINCIPALS }}
   JP_AI_PROVIDER: ${{ vars.JP_AI_PROVIDER }}
   # Which models sit behind the two deployments. Both empty-guarded in main.bicepparam, so an
   # undefined repository variable takes the default rather than reaching the template as ''.
