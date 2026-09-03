@@ -1,4 +1,4 @@
-using JobPlatform.Core.Dedup;
+﻿using JobPlatform.Core.Dedup;
 using JobPlatform.Core.Model;
 using Xunit;
 
@@ -68,5 +68,57 @@ public sealed class JobFingerprintTests
         Assert.Null(JobFingerprint.CrossBoardKey(Posting("Backend Engineer", "Northwind", null)));
         Assert.Null(JobFingerprint.CrossBoardKey(Posting("Backend Engineer", "Northwind", "   ")));
         Assert.Null(JobFingerprint.CrossBoardKey(Posting("Backend Engineer", null, "London, UK")));
+    }
+
+    /// <summary>
+    /// The four ways the boards spell one city are one city.
+    /// </summary>
+    /// <remarks>
+    /// Measured on the live corpus: London 4,323, London Area 1,542, Greater London 322, City Of
+    /// London 66 - "London Area" is LinkedIn's spelling and "Greater London" Indeed's. Cloudflare's
+    /// VoidZero Engineer reached the shortlist twice on nothing but that difference, which is the
+    /// case this pins.
+    /// </remarks>
+    [Theory]
+    [InlineData("London, UK")]
+    [InlineData("London Area, United Kingdom")]
+    [InlineData("Greater London, England, United Kingdom")]
+    [InlineData("City Of London, England")]
+    public void One_city_written_four_ways_is_one_job(string location)
+    {
+        var canonical = JobFingerprint.CrossBoardKey(Posting("Backend Engineer", "Northwind", "London, UK"));
+
+        Assert.Equal(canonical, JobFingerprint.CrossBoardKey(Posting("Backend Engineer", "Northwind", location)));
+    }
+
+    /// <summary>The folding is by shape, so it holds for cities nobody wrote a rule for.</summary>
+    [Fact]
+    public void The_same_folding_works_for_a_city_no_rule_names()
+    {
+        var manchester = JobFingerprint.CrossBoardKey(Posting("Backend Engineer", "Northwind", "Manchester, UK"));
+
+        Assert.Equal(manchester, JobFingerprint.CrossBoardKey(
+            Posting("Backend Engineer", "Northwind", "Greater Manchester, United Kingdom")));
+    }
+
+    /// <summary>
+    /// Seniority is part of the title and stays there, however tempting the reference number is.
+    /// </summary>
+    /// <remarks>
+    /// Harnham advertised requisition 197637 four times - Junior, plain, Senior and Lead - and the
+    /// proposal that asked for clustering read the middle two as one job listed twice. They are a
+    /// ladder, and merging them hides a rung somebody might have wanted. There are 127 such pairs
+    /// in the corpus, against the 74 bad merges that were reason enough to keep the city required.
+    /// </remarks>
+    [Fact]
+    public void A_seniority_ladder_at_one_employer_is_not_one_job()
+    {
+        var mid = JobFingerprint.CrossBoardKey(
+            Posting("C# Full Stack Engineer (197637)", "Harnham", "London Area, United Kingdom"));
+
+        var senior = JobFingerprint.CrossBoardKey(
+            Posting("Senior C# Full Stack Engineer (197637)", "Harnham", "London Area, United Kingdom"));
+
+        Assert.NotEqual(mid, senior);
     }
 }

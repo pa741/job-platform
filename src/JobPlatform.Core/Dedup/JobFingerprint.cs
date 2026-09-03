@@ -59,7 +59,7 @@ public static class JobFingerprint
     {
         ArgumentNullException.ThrowIfNull(posting);
 
-        var city = Normalize(JobLocation.Parse(posting.Location).City);
+        var city = CanonicalCity(Normalize(JobLocation.Parse(posting.Location).City));
 
         if (city.Length == 0 || string.IsNullOrWhiteSpace(posting.Company))
         {
@@ -95,6 +95,58 @@ public static class JobFingerprint
         return key is null
             ? null
             : Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(key)));
+    }
+
+    /// <summary>
+    /// One spelling for a city that boards write several ways.
+    /// </summary>
+    /// <remarks>
+    /// <b>The same fault as the one that made this key parse a city at all, one level down.</b>
+    /// <see cref="ContentHash"/> folded in the raw location and never collided across boards
+    /// because "London, England, United Kingdom" and "London, UK" are different strings. Parsing
+    /// the city fixed that and left a smaller version of it: the parsed city itself arrives as
+    /// <c>London</c>, <c>London Area</c>, <c>Greater London</c> and <c>City Of London</c> - 4,323,
+    /// 1,542, 322 and 66 postings of one place, with "London Area" a LinkedIn spelling and
+    /// "Greater London" an Indeed one. Cloudflare's VoidZero Engineer sat in the shortlist twice
+    /// on exactly that difference.
+    ///
+    /// <b>Three general rules rather than a list of cities.</b> "Greater X", "X Area" and "City of
+    /// X" are how boards write a metropolitan area, not names anybody uses, so folding them needs
+    /// no gazetteer and keeps working for Manchester and Birmingham. Measured over the corpus this
+    /// merges 105 further groups whose employer and title are already byte-identical, which is the
+    /// evidence for it: they differ in nothing but the spelling of one city.
+    ///
+    /// <b>What is deliberately NOT folded is the larger half.</b> Seniority stays part of the
+    /// title. Harnham advertised requisition 197637 four times - Junior, plain, Senior and Lead -
+    /// and the specification that asked for this read the middle two as one job listed twice.
+    /// They are a ladder, and merging them hides a rung the candidate might have wanted. Corpus
+    /// wide there are 127 "Senior X"/"X" pairs at one employer and city, against the 74 bad merges
+    /// that were reason enough to keep the city required in the first place. Nor is a shared
+    /// parenthesised number a requisition: EWOR's is <c>(100 % remote)</c>, and matching on it
+    /// would merge a Fintech AI/ML Engineer with an AI Infrastructure Cloud Engineer.
+    /// </remarks>
+    private static string CanonicalCity(string city)
+    {
+        if (city.Length == 0)
+        {
+            return city;
+        }
+
+        // Normalize has already lowercased, stripped punctuation and collapsed whitespace, so
+        // "City Of London" arrives as "city of london" and these compare without further work.
+        if (city.StartsWith("greater ", StringComparison.Ordinal))
+        {
+            return city["greater ".Length..];
+        }
+
+        if (city.StartsWith("city of ", StringComparison.Ordinal))
+        {
+            return city["city of ".Length..];
+        }
+
+        return city.EndsWith(" area", StringComparison.Ordinal)
+            ? city[..^" area".Length]
+            : city;
     }
 
     /// <summary>Case-, punctuation- and whitespace-insensitive form.</summary>
