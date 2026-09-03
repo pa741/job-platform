@@ -772,13 +772,49 @@ public sealed class JobMatchRepository(JobsDbContext db)
     /// only whether any submission existed for the pair, and that single clause made parking
     /// impossible in the way that matters most: a park has to write a row to park against, and the
     /// instant that row existed the posting left the queue for good - so "come back to this once
-    /// the captcha is gone" and "never show me this again" were the same operation. Four clauses
+    /// the captcha is gone" and "never show me this again" were the same operation. Five clauses
     /// replace it and each holds a posting back for a different reason: a <i>live</i> application
     /// - one never parked, or parked and since let back in - on this posting, and one on any other
     /// listing of the same job; a <i>permanent</i> park, the reasons <c>ParkReasonPolicy</c>
-    /// classifies as never returning; and a park awaiting an answer, held while an answer this
-    /// candidate owes an advert is still outstanding. Everything else - a captcha, a login wall,
-    /// a spent daily quota - comes back on the next run, which is what parking was for.
+    /// classifies as never returning; a park awaiting an answer, held while an answer this
+    /// candidate owes an advert is still outstanding; and a park awaiting a CV, held while nothing
+    /// in the library covers what that park recorded as missing. Everything else - a captcha, a
+    /// login wall, a spent daily quota - comes back on the next run, which is what parking was for.
+    ///
+    /// <b>The fifth clause is the corner the CV library turns on, and its condition is coverage of
+    /// a recorded gap rather than the library having grown.</b> A posting nothing fits is parked
+    /// <c>NoCvVariant</c>, and the gap is a pure function of what the advert asks for and what the
+    /// library holds - neither of which a run changes. So offering it again next run means meeting
+    /// the same advert, scoring the same variants, computing the same gap and parking it again,
+    /// having spent a page load to learn what the last run already knew; and because one library
+    /// serves the whole queue, a single missing CV would do that to every posting that wanted it,
+    /// on every run, for ever. Releasing on <i>any</i> authoring event is the same loop at a longer
+    /// period, and it hands the bill to the person who has just written a CV. What the clause joins
+    /// against is therefore <c>SubmissionParkGaps</c>: the concepts <i>this</i> park recorded as
+    /// missing, and whether one sendable variant now covers them.
+    ///
+    /// <b>Some one variant must cover every standing gap, and both halves of that are load-bearing
+    /// in opposite directions.</b> The universal is over the gaps because the document that goes
+    /// out is one document: a library holding Kubernetes in one CV and Terraform in another covers
+    /// neither posting that needs both, and releasing on the strength of the pair would send an
+    /// employer a CV answering half their advert - the invisible failure a curated library exists
+    /// to remove, since a badly aimed application simply never comes back. The existential is over
+    /// variants; the test over the gaps is existential too, and that is the half most likely to be
+    /// tightened by somebody who has not read this. <b>Requiring one variant to cover every
+    /// recorded gap was written first and is wrong</b>, because releasing a posting sends nothing:
+    /// it returns to the queue and <see cref="CvVariantSelector"/> runs again, applying a floor of
+    /// half the stated requirements and a margin. A library that still does not fit yields NoFit
+    /// and parks the posting once more. So the universal buys no protection against a badly aimed
+    /// application - selection already provides that - while it silently strands any posting whose
+    /// park recorded five missing concepts and whose candidate then wrote a CV covering four of
+    /// them. A wrong release costs one re-park, in arithmetic, bounded by how often a person
+    /// writes a CV; a wrong hold costs the application, and nothing reports it.
+    ///
+    /// <b>And a park with no standing gaps is held rather than released.</b> A universal over an
+    /// empty set is vacuously true, so the clause asks for standing gaps explicitly. Without that,
+    /// a park whose gap rows failed to be written - a bug, an older row, a client that stopped half
+    /// way - would be released the moment the candidate had any CV at all, which is the loop
+    /// arriving through an oversight rather than through a decision.
     ///
     /// <b>Only a live application suppresses the other listings of the same job.</b> Applying
     /// twice to one vacancy is worse than not applying at all and the recruiter sees both, so an
@@ -837,13 +873,15 @@ public sealed class JobMatchRepository(JobsDbContext db)
     /// form and parking on the same missing answer on every run for the rest of time, having
     /// spent a page load each time to learn nothing.
     ///
-    /// <b><c>ParkReasonPolicy</c> is read as lists here rather than called.</b> <c>Permanent</c>
-    /// and <c>AwaitingAnswer</c> exist so that <c>Contains</c> becomes an <c>IN</c>;
-    /// <c>Retryable</c> is a static call over a column and has no SQL at all. The policy is still
-    /// written once - those lists are derived from the same function - which is the difference
-    /// between this pair and the channel filter below, where there was no way to avoid a second
-    /// spelling. <c>AtsVendorDetector.Detect</c> cannot be translated either, and so runs after
-    /// materialisation rather than in the projection.
+    /// <b><c>ParkReasonPolicy</c> is read as lists here rather than called.</b> <c>Permanent</c>,
+    /// <c>AwaitingAnswer</c> and <c>AwaitingCvVariant</c> exist so that <c>Contains</c> becomes an
+    /// <c>IN</c>; <c>Retryable</c> is a static call over a column and has no SQL at all. The policy
+    /// is still written once - those lists are derived from the same function - which is the
+    /// difference between this trio and the channel filter below, where there was no way to avoid a
+    /// second spelling. <c>CvVariant.IsSendable</c> has the same limitation and the same escape:
+    /// <c>CvVariantEntity.Sendable</c> is its one shadow over columns, composed above rather than
+    /// respelled here. <c>AtsVendorDetector.Detect</c> has no escape at all - it reads a URL rather
+    /// than compares one - so it runs after materialisation rather than in the projection.
     ///
     /// <b>Dismissed pairs were being returned, and this was the only match query that let
     /// them.</b> <see cref="ListAsync"/> and <see cref="GetUnassessedAsync"/> both exclude them;
@@ -883,6 +921,17 @@ public sealed class JobMatchRepository(JobsDbContext db)
         {
             return [];
         }
+
+        // The variants a selection pass may choose between, as the database can ask it.
+        // <c>CvVariant.IsSendable</c> is the authority and has no SQL at all - a computed property
+        // cannot be translated, and a caller that materialised first would run the filter in
+        // memory over every CV the candidate has ever written. CvVariantEntity.Sendable is its one
+        // shadow over columns, so this composes that rather than spelling out "not archived and
+        // rendered" a second time: the same arrangement ParkReasonPolicy.Permanent has on the
+        // clause three lines below, and the opposite of the channel filter, which is written twice
+        // because there was no way to avoid it and is held together by a test that has already
+        // caught the two diverging.
+        var sendable = db.CvVariants.Where(CvVariantEntity.Sendable);
 
         var matches = db.JobMatches
             .AsNoTracking()
@@ -934,7 +983,63 @@ public sealed class JobMatchRepository(JobsDbContext db)
                             && q.AnsweredAtUtc == null)
                         : db.OpenQuestions.Any(q => q.ProfileId == profileId
                             && q.PostingId != null
-                            && q.AnsweredAtUtc == null))));
+                            && q.AnsweredAtUtc == null)))
+                // A park waiting on a CV, while the library still does not cover what that park
+                // recorded as missing. The fifth clause, and the only one whose condition lives in
+                // a table of its own - SubmissionParkGaps - because the release is a join and not
+                // a flag.
+                //
+                // Read the innermost part outwards. The posting is held unless it has standing
+                // gaps AND some one sendable variant covers every one of them:
+                //
+                //  1. Only the gaps this park recorded count - RecordedAtUtc at or after
+                //     ParkedAtUtc. A submission may be parked, unparked and parked again for
+                //     something else, and the rows of a superseded park leave the predicate by
+                //     arithmetic rather than by a delete, which is the rule that table lives under.
+                //  2. Covering ANY standing gap releases the posting; covering all of them is
+                //     deliberately not required. This was written the other way first, on the
+                //     argument that a candidate with Kubernetes in one CV and Terraform in another
+                //     would otherwise have a posting needing both released and be sent a document
+                //     answering half the advert. That argument does not hold, and the reason is
+                //     worth keeping: releasing a posting sends nothing. It returns it to the
+                //     queue, where CvVariantSelector runs again and applies the floor and the
+                //     margin - so a library that still does not fit produces NoFit and parks it
+                //     once more. Selection is what decides what goes out; this clause only decides
+                //     whether the question is worth re-asking.
+                //
+                //     Requiring every gap covered fails in the worse direction. Selection's floor
+                //     is half the stated requirements, not all of them, so a posting whose park
+                //     recorded five missing concepts is answerable by a CV covering four of them
+                //     and much else - and under the universal that posting stays parked for ever,
+                //     silently, while a CV that would have been chosen sits in the library. A
+                //     wrong release costs one re-park, priced in arithmetic and bounded by how
+                //     often a person writes a CV. A wrong hold costs the application.
+                //  3. A park with no standing gaps is held. A universal over an empty set is
+                //     vacuously true, so without the first Any() every posting whose gap rows
+                //     failed to be written would be released the moment any CV existed - the loop
+                //     arriving through an oversight rather than through a decision. Holding costs
+                //     a delay the standing gap brief already names; releasing costs a run that
+                //     does nothing, every run, for ever.
+                //
+                // Coverage goes through ConceptClosure in the direction MatchScorer credits: the
+                // gap is the ancestor and the variant's concept the descendant, so a CV naming EKS
+                // covers a posting asking for Kubernetes, and the depth-0 self rows answer the
+                // exact case in the same join. It is deliberately narrower than Core's own
+                // reading, which also entails through the curated `implies` edges - so a variant
+                // covering a gap only by implication holds the posting rather than releasing it,
+                // which is the direction every other judgement call on this path takes.
+                && !db.Submissions.Any(s => s.ProfileId == profileId
+                    && s.PostingId == m.PostingId
+                    && s.ParkedReason != null
+                    && s.UnparkedAtUtc == null
+                    && ParkReasonPolicy.AwaitingCvVariant.Contains(s.ParkedReason.Value)
+                    && !(s.ParkGaps.Any(g => g.RecordedAtUtc >= s.ParkedAtUtc)
+                        && sendable.Any(v => v.ProfileId == profileId
+                            && v.Concepts.Any(c => s.ParkGaps.Any(g =>
+                                g.RecordedAtUtc >= s.ParkedAtUtc
+                                && db.ConceptClosure.Any(cc =>
+                                    cc.AncestorId == g.ConceptId
+                                    && cc.DescendantId == c.ConceptId)))))));
 
         if (query.Since is { } since)
         {
@@ -1281,6 +1386,88 @@ public sealed class JobMatchRepository(JobsDbContext db)
         DateTimeOffset FirstSeenUtc,
         bool HasDocuments,
         string? DedupeKey);
+
+    /// <summary>
+    /// The postings this candidate cannot apply to for want of a CV, with what each was missing.
+    /// </summary>
+    /// <remarks>
+    /// <b>The input to <c>CvGapBrief.Compute</c>, and the whole of this method's job is to fetch
+    /// rather than to decide.</b> The ranking - which CV is worth writing first, and what it has to
+    /// cover - is arithmetic that lives in Core so it can be asserted exactly, for the reason
+    /// <c>MatchScorer</c> and <c>SubmissionState</c> live there. Counting is a group-by anybody
+    /// could write; which gap comes second once the first is written is the part with a decision in
+    /// it, and it is not in this file.
+    ///
+    /// <b>No set difference is computed here, deliberately.</b> The keys come back exactly as the
+    /// park recorded them, and the park recorded what <c>CvSelection.Missing</c> had already
+    /// differenced against the whole library. Re-deriving that here would be a second definition of
+    /// "covers" - and it would be the wrong one, because coverage is a walk over the graph rather
+    /// than a subtraction, so a variant naming Bicep partly answers a posting asking for Terraform
+    /// exactly as the match breakdown says it does. Two definitions would let the brief name a
+    /// concept selection had already treated as answered. <c>CvGapBrief</c> takes already-differenced
+    /// input for precisely this reason; it says so at the top of the file.
+    ///
+    /// <b>A posting with no standing gaps still comes back, carrying an empty set.</b> It is
+    /// blocked - it is parked for want of a CV and nothing has released it - so it belongs in the
+    /// brief's headline count, and dropping it here would make that total quietly disagree with the
+    /// queue. <c>CvGapBrief.BlockedPostings</c> is documented as being larger than its gaps add up
+    /// to, and as being worth noticing when the difference is large: postings parked over
+    /// requirements that are all tags, all domains or all unnameable are a selection or vocabulary
+    /// fault rather than a CV anybody can write. That signal only exists if the rows are here.
+    ///
+    /// <b>Only the gaps of the park that stands are read</b> - recorded at or after
+    /// <c>ParkedAtUtc</c> - which is the same standing-set arithmetic the queue clause applies, and
+    /// it is what keeps a superseded park from putting a concept nothing is waiting on any more at
+    /// the top of somebody's afternoon.
+    ///
+    /// <b>What this does not do is re-run the release clause.</b> A posting whose gap a variant
+    /// written since covers is already on its way back to the queue and will be offered on the next
+    /// run - and it drops out of the brief then, once it has been applied to or re-parked with
+    /// whatever is missing now. Filtering it out here would mean a second copy of that clause, in
+    /// the file whose whole point is that it contains no second definition of coverage, and free to
+    /// disagree with the one that actually decides. The brief is a report recomputed every time it
+    /// is asked, so an overstatement costs one stale line for one run; a copied predicate costs a
+    /// drift nobody can see.
+    ///
+    /// The order is by posting id so two identical calls answer identically. Nothing downstream
+    /// depends on it - <c>Compute</c> deduplicates on the way in and breaks every tie on the
+    /// concept key - which is exactly why it is cheap to make deterministic here.
+    /// </remarks>
+    /// <param name="profileId">The candidate, resolved by the caller.</param>
+    public async Task<IReadOnlyList<BlockedPosting>> ListCvBlockedPostingsAsync(
+        long profileId, CancellationToken ct = default)
+    {
+        // One query with the gaps as a collection projection, rather than a row per gap grouped
+        // afterwards: this is one candidate's parked backlog against a database billed by
+        // wall-clock time, and the alternative shape is a GroupBy that EF cannot project into a
+        // positional record's constructor anyway - it compiles and fails at runtime.
+        var rows = await db.Submissions
+            .AsNoTracking()
+            .Where(s => s.ProfileId == profileId
+                && s.ParkedReason != null
+                && s.UnparkedAtUtc == null
+                && ParkReasonPolicy.AwaitingCvVariant.Contains(s.ParkedReason.Value))
+            .OrderBy(s => s.PostingId)
+            .Select(s => new
+            {
+                s.PostingId,
+                Missing = s.ParkGaps
+                    .Where(gap => gap.RecordedAtUtc >= s.ParkedAtUtc)
+                    .Select(gap => gap.Concept!.ConceptKey)
+                    .ToList(),
+            })
+            .ToListAsync(ct);
+
+        // The key and not the id, because that is the identity the vocabulary and the brief are
+        // both written against - skill.kubernetes is what a later query joins on, where an id is a
+        // projection of it that means nothing outside this database.
+        return
+        [
+            .. rows.Select(row => new BlockedPosting(
+                row.PostingId,
+                [.. row.Missing.Distinct(StringComparer.Ordinal).OrderBy(key => key, StringComparer.Ordinal)]))
+        ];
+    }
 
     /// <summary>
     /// Where an application for this pair would go, or null where the pair is not matched.

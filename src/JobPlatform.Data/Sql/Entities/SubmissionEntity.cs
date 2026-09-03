@@ -147,6 +147,50 @@ public sealed class SubmissionEntity
     public int? DocumentRevision { get; set; }
 
     /// <summary>
+    /// Which CV the candidate's library actually sent, where one was chosen.
+    /// </summary>
+    /// <remarks>
+    /// <b>The missing link that finally gives outcome feedback something to correlate.</b> C4 was
+    /// specified to tell you which CV works, and until now there was nothing to compare:
+    /// <c>ApplicationDraft.WriterVersion</c> is a constant and revisions differ only by free-text
+    /// instructions, so every application was made with the same document written twice. A library
+    /// of variants is what makes the question answerable, and this column is where the answer is
+    /// recorded - one id per application, joined against the replies that came back.
+    ///
+    /// <b>The id and never the label.</b> Labels are reused: rewriting "Backend .NET" archives the
+    /// old variant and takes its name back, so a history keyed on the label would say two different
+    /// documents were the same CV - which is exactly the question this column exists to answer.
+    ///
+    /// <b>Null is ordinary and means three different things, all of them "no choice was
+    /// recorded"</b>: a submission a person made by hand, one made before the library existed, and
+    /// one where selection abstained and the posting was parked. It is nullable because this column
+    /// arrives on a populated table, and because a row with no variant is not a broken row.
+    ///
+    /// <b><c>Restrict</c>, and there is no navigation property.</b> Restrict because a variant a
+    /// submission names must stay fetchable - archiving is an update and deleting would make a sent
+    /// file unexplainable - and additionally because the profile already cascades into both tables
+    /// and SQL Server refuses two cascade paths into one. No navigation for the reason
+    /// <see cref="AwaitingQuestionId"/> has none: a read of this row must not be able to drag a
+    /// whole CV's markdown across by accident.
+    /// </remarks>
+    public long? CvVariantId { get; set; }
+
+    /// <summary>
+    /// Which selection rule chose it. <c>CvSelection.CurrentVersion</c> at the time.
+    /// </summary>
+    /// <remarks>
+    /// Recorded beside the variant for the reason <c>JobMatches.ScorerVersion</c> and
+    /// <c>RankerVersion</c> are recorded beside a score: C4 correlates replies against the CV that
+    /// was sent, and a floor or a margin moved halfway through that window silently averages two
+    /// experiments together. Without it the correlation is over a rule nobody can name afterwards.
+    ///
+    /// Nullable, and null wherever <see cref="CvVariantId"/> is - a CV attached by hand was chosen
+    /// by a person, and stamping the arithmetic's version on it would claim an experiment that never
+    /// ran.
+    /// </remarks>
+    public int? CvSelectionVersion { get; set; }
+
+    /// <summary>
     /// The unattended pass that created this, where one did. Null for a submission a person made.
     /// </summary>
     /// <remarks>
@@ -165,6 +209,18 @@ public sealed class SubmissionEntity
     public RunEntity? Run { get; set; }
 
     public List<SubmissionEventEntity> Events { get; } = [];
+
+    /// <summary>
+    /// What a <c>NoCvVariant</c> park is waiting to see covered. Empty for every other reason.
+    /// </summary>
+    /// <remarks>
+    /// A collection because the queue's release clause is a universal over these rows - "some
+    /// variant covers every one of them" - and a universal reads as one in the query only if the
+    /// rows are reachable from the submission being tested. See
+    /// <see cref="SubmissionParkGapEntity"/> for the two other halves of that clause, both of which
+    /// reintroduce the loop if they are dropped.
+    /// </remarks>
+    public List<SubmissionParkGapEntity> ParkGaps { get; } = [];
 }
 
 /// <summary>

@@ -485,6 +485,40 @@ public sealed class SubmissionRepository(JobsDbContext db)
     /// reader treats as a live application, which is the exact fault parking exists to fix. What
     /// is given up is the history of earlier parks on that row; that history is in the run
     /// summaries and the notes, and the alternative is a row that lies about the present.
+    ///
+    /// <b>A park for a missing CV records what it is missing, on the same terms the question id
+    /// is recorded on.</b> <c>ParkReason.NoCvVariant</c> returns the posting when a covering
+    /// variant exists rather than on the next run, and the fact the queue joins against is
+    /// <c>SubmissionParkGaps</c> - so a park written without them is a posting held for ever with
+    /// nothing saying what would let it out. They are written only for a reason in
+    /// <c>ParkReasonPolicy.AwaitingCvVariant</c>, exactly as <c>AwaitingQuestionId</c> is written
+    /// only for one in <c>AwaitingAnswer</c>: a captcha must not inherit a gap from an earlier
+    /// park of the same advert, and the class a reason is in is the only thing that can say so.
+    ///
+    /// <b>The keys are resolved through <c>Concepts</c> and the ids are what is stored</b>, so the
+    /// release clause can reach <c>ConceptClosure</c> - which is what lets a variant naming a
+    /// specialisation cover the demand above it, exactly as the matcher already scores it. A key
+    /// the projection does not carry has no id and cannot be recorded; every key that gets here
+    /// came off a <c>PostingConcepts</c> row, so that is the state <c>dbadmin seed-concepts</c>
+    /// exists to prevent rather than an ordinary one.
+    ///
+    /// <b>A re-park replaces the gaps it recorded before, and it does so without a delete.</b>
+    /// Rewriting the library and meeting the advert again is a new answer to the same question,
+    /// so what the park is waiting on has to be what this pass computed and not the union of every
+    /// pass. Nothing is erased to say that: the standing set is the rows stamped at or after
+    /// <c>ParkedAtUtc</c>, so a gap this park no longer names falls out by arithmetic, which is the
+    /// rule <c>SubmissionParkGapEntity</c> lives under and the one that keeps a superseded park
+    /// explicable. The composite key <c>(SubmissionId, ConceptId)</c> has no room for a second row
+    /// per concept, so a gap that survives is restamped rather than inserted again.
+    ///
+    /// <b>Which means the gap set is part of the park's state, and a change to it moves
+    /// <c>ParkedAtUtc</c>.</b> The idempotence above is by state rather than by a key, and this is
+    /// the same rule applied to a second column: parking for the same reason on the same gaps
+    /// writes nothing at all, so "blocked since Tuesday" stays true through a nightly pass that
+    /// keeps meeting the same advert. Parking for the same reason on <i>different</i> gaps is a
+    /// real change - the library moved underneath it - and the timestamp has to move with it or
+    /// the rows the last park wrote would still be standing beside the rows this one wrote, and
+    /// the posting would be held against a concept nothing is missing any more.
     /// </remarks>
     /// <param name="profileId">The candidate, resolved by the caller.</param>
     /// <param name="postingId">What is being put down.</param>
@@ -492,6 +526,15 @@ public sealed class SubmissionRepository(JobsDbContext db)
     /// <param name="now">When.</param>
     /// <param name="applyUrl">Where the attempt was headed, for the row this has to create.</param>
     /// <param name="runId">The unattended pass doing this, where one is.</param>
+    /// <param name="awaitingQuestionId">The question this park waits on, for a reason that waits on one.</param>
+    /// <param name="missingConceptKeys">
+    /// What this posting asked for that no sendable variant covers, as
+    /// <c>CvSelection.Missing</c> computed it. <b>Already differenced by the caller</b>, and this
+    /// is not the place to re-derive it: coverage is a walk over the graph rather than a set
+    /// subtraction, and a second definition of it here would record a gap selection had already
+    /// treated as answered. Read for a reason in <c>ParkReasonPolicy.AwaitingCvVariant</c> and
+    /// ignored for every other, so passing it with a captcha is not a way to hold a posting.
+    /// </param>
     /// <returns>The row as it now stands, and whether this park brought it into existence.</returns>
     public async Task<(SubmissionRow Row, bool Created)> ParkAsync(
         long profileId,
@@ -501,6 +544,7 @@ public sealed class SubmissionRepository(JobsDbContext db)
         string? applyUrl = null,
         long? runId = null,
         long? awaitingQuestionId = null,
+        IReadOnlyCollection<string>? missingConceptKeys = null,
         CancellationToken ct = default)
     {
         // AsTracking, explicitly, because this row is about to be mutated. It reads as
@@ -548,8 +592,23 @@ public sealed class SubmissionRepository(JobsDbContext db)
             ? awaitingQuestionId
             : null;
 
+        // The same shape as the assignment above, against a different class of reason and a
+        // different fact. Nothing is cleared for a reason that waits on neither: a re-park with a
+        // new reason has already moved ParkedAtUtc, so the gaps of the park it replaced stop
+        // standing without a row being touched - which is the whole of how this table supersedes,
+        // and why it can afford to have no eraser.
+        if (ParkReasonPolicy.AwaitingCvVariant.Contains(reason))
+        {
+            await RecordParkGapsAsync(entity, created, missingConceptKeys, now, ct);
+        }
+
         // A no-op where nothing moved: EF issues no round trip with nothing tracked to write, so
         // the idempotent path costs the read it has already made and nothing else.
+        //
+        // One SaveChanges for the park and its gaps together, the way CreateWithEventAsync writes a
+        // submission and its event: the gap rows go in through the navigation, so EF's fix-up
+        // carries an id assigned in this very round trip into their foreign key - and a park whose
+        // gaps landed in a second write that failed is a posting held with nothing saying why.
         await db.SaveChangesAsync(ct);
 
         var row = await GetAsync(profileId, entity.Id, now, ct);
@@ -730,6 +789,126 @@ public sealed class SubmissionRepository(JobsDbContext db)
         await db.SaveChangesAsync(ct);
 
         return SubmissionEventResult.Recorded;
+    }
+
+    /// <summary>
+    /// Writes what a park for a missing CV is waiting to see covered, replacing what it waited on before.
+    /// </summary>
+    /// <remarks>
+    /// <b>The standing set is defined by arithmetic and never by a delete</b>, which is the rule
+    /// <c>SubmissionParkGapEntity</c> states and the reason its rows carry a timestamp at all: a
+    /// gap counts while it was recorded at or after <c>ParkedAtUtc</c>, so superseding one costs
+    /// nothing and destroys nothing. That matters more here than it looks. A park is the only
+    /// record of why an application was not made, and a table that erased rows to keep itself
+    /// tidy could not answer "what was this waiting for in March" - which is the same question
+    /// <c>UnparkedAtUtc</c> exists so that the park itself can answer.
+    ///
+    /// <b>Every row is stamped from <see cref="SubmissionEntity.ParkedAtUtc"/> and never from a
+    /// second clock read.</b> The two are compared by the queue, so a writer taking its own
+    /// <c>UtcNow</c> a millisecond early would drop every gap it had just written out of the
+    /// predicate - and a park whose gaps have all fallen out is the empty set the release clause
+    /// has to refuse to read as coverage. One value, written twice, is the single-writer rule this
+    /// codebase applies to every derived key.
+    ///
+    /// <b>The gap set is part of the park's state, so a change to it moves that instant.</b>
+    /// Parking again for the same reason on the same gaps writes nothing: the rows are restamped
+    /// with the value they already hold, EF sees no modification, and "blocked since Tuesday"
+    /// survives a pass that meets the advert nightly. Parking again on a <i>different</i> set is
+    /// the library having moved, and the instant moves with it - otherwise the rows the previous
+    /// park wrote would still be standing beside these, and the posting would be held against a
+    /// concept that is not missing any more. That is the loop this table exists to end, arriving
+    /// through a timestamp that did not move rather than through a class that was got wrong.
+    ///
+    /// <b>A key the vocabulary projection does not carry cannot be recorded</b>, because the join
+    /// the queue makes is on the concept id. Every key that reaches here came off a
+    /// <c>PostingConcepts</c> row and therefore has one, so an unresolved key means the projection
+    /// is behind the vocabulary shipped in the build - the state <c>dbadmin seed-concepts</c>
+    /// exists to prevent, and the same one <c>PostingExtractionWriter</c> warns about. It is worth
+    /// knowing which way the loss falls: one gap fewer is one requirement fewer for a variant to
+    /// cover, so the posting comes back a little early and costs a re-park, rather than being held
+    /// against a concept nothing can name.
+    /// </remarks>
+    private async Task RecordParkGapsAsync(
+        SubmissionEntity submission,
+        bool created,
+        IReadOnlyCollection<string>? missingConceptKeys,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        // A submission this call has just made has no rows to load and no id to load them by. For
+        // one that already existed they are loaded through the navigation, tracked - explicitly,
+        // because a gap that survives a re-park is restamped rather than inserted again, and the
+        // API host once registered this context with NoTracking, under which a read-then-mutate
+        // saves nothing and throws nothing.
+        if (!created)
+        {
+            await db.Entry(submission).Collection(s => s.ParkGaps).LoadAsync(ct);
+        }
+
+        var conceptIds = await ResolveConceptIdsAsync(missingConceptKeys, ct);
+
+        var parkedAt = submission.ParkedAtUtc ?? now;
+
+        var standing = submission.ParkGaps
+            .Where(gap => gap.RecordedAtUtc >= parkedAt)
+            .Select(gap => gap.ConceptId)
+            .ToHashSet();
+
+        if (!standing.SetEquals(conceptIds))
+        {
+            parkedAt = now;
+            submission.ParkedAtUtc = now;
+        }
+
+        foreach (var conceptId in conceptIds)
+        {
+            var recorded = submission.ParkGaps.FirstOrDefault(gap => gap.ConceptId == conceptId);
+
+            if (recorded is null)
+            {
+                submission.ParkGaps.Add(new SubmissionParkGapEntity
+                {
+                    ConceptId = conceptId,
+                    RecordedAtUtc = parkedAt,
+                });
+            }
+            else
+            {
+                // Restamped rather than inserted: (SubmissionId, ConceptId) is the key, so a
+                // concept still missing after a re-park has one row and it is this one. Where the
+                // park did not move, this assigns the value already there and EF writes nothing.
+                recorded.RecordedAtUtc = parkedAt;
+            }
+        }
+    }
+
+    /// <summary>The concept ids behind a set of keys, as the projection carries them.</summary>
+    /// <remarks>
+    /// <b>Ids and not keys, so the release clause can reach <c>ConceptClosure</c></b> - which is
+    /// what lets a variant naming a specialisation cover the demand above it, exactly as
+    /// <c>MatchScorer</c> already scores it. A query that had to resolve strings first could not.
+    ///
+    /// One round trip whatever the caller passed, and none at all where it passed nothing. Blanks
+    /// and repeats are dropped on the way in rather than refused: this is called while putting a
+    /// posting down, and throwing over a duplicate key would lose the record of why the attempt
+    /// was abandoned in order to complain about the shape of a list.
+    /// </remarks>
+    private async Task<IReadOnlyList<int>> ResolveConceptIdsAsync(
+        IReadOnlyCollection<string>? keys, CancellationToken ct)
+    {
+        var wanted = (keys ?? [])
+            .Where(key => !string.IsNullOrWhiteSpace(key))
+            .Select(key => key.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        return wanted.Count == 0
+            ? []
+            : await db.Concepts
+                .AsNoTracking()
+                .Where(concept => wanted.Contains(concept.ConceptKey))
+                .Select(concept => concept.Id)
+                .ToListAsync(ct);
     }
 
     /// <summary>

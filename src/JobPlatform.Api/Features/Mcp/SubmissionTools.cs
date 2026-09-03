@@ -1386,6 +1386,21 @@ public sealed class SubmissionTools(
                 + "actually happened rather than the nearest.");
         }
 
+        // Refused rather than accepted and mishandled. A NoCvVariant park is held until the
+        // library covers the concepts it recorded as missing, and only the pack knows those,
+        // because only the pack runs a selection. Parked from here it would carry none, and the
+        // release clause reads an empty set as "nothing has been covered yet" - so the posting
+        // would be held for ever by a client trying to be helpful. The server establishes this
+        // reason or nobody does.
+        if (parsed is ParkReason.NoCvVariant)
+        {
+            return Refused(
+                "'NoCvVariant' is not a reason a client may park for. It means a selection ran and "
+                + "no CV covered the posting, which only get_submission_pack can establish - and it "
+                + "parks the posting itself when that happens. If you are here because the pack "
+                + "returned no CV, the posting is already parked and there is nothing to do.");
+        }
+
         if (parsed is ParkReason.MissingAnswer && string.IsNullOrWhiteSpace(questionText))
         {
             return Refused(
@@ -1455,8 +1470,14 @@ public sealed class SubmissionTools(
                 ct);
         }
 
+        // No missing concepts from this path. A NoCvVariant park is written by the pack, which is
+        // the only caller that has run a selection and therefore the only one that knows what was
+        // missing; a park arriving through this tool names a reason a browser met, and inventing
+        // an empty gap set for it would hold the posting for ever - the release clause reads an
+        // empty set as "nothing has been covered yet".
         var (row, created) = await submissions.ParkAsync(
-            profileId.Value, postingId, parsed, now, target.ApplyUrl, runId, question?.Id, ct);
+            profileId.Value, postingId, parsed, now, target.ApplyUrl, runId, question?.Id,
+            missingConceptKeys: null, ct);
 
         var requeue = ParkReasonPolicy.Requeue(parsed);
 

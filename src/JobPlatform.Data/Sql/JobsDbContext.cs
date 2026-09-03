@@ -1,4 +1,5 @@
 ﻿using System.Globalization;
+using JobPlatform.Core.Applications;
 using JobPlatform.Core.Submissions;
 using JobPlatform.Data.Sql.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -45,6 +46,18 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
 
     public DbSet<SubmissionEntity> Submissions => Set<SubmissionEntity>();
     public DbSet<SubmissionEventEntity> SubmissionEvents => Set<SubmissionEventEntity>();
+
+    /// <summary>What a <c>NoCvVariant</c> park is waiting to see covered, as rows a query can join.</summary>
+    public DbSet<SubmissionParkGapEntity> SubmissionParkGaps => Set<SubmissionParkGapEntity>();
+
+    /// <summary>The CVs the candidate wrote, and what each of them says.</summary>
+    /// <remarks>
+    /// <c>CvVariantConcepts</c> is the selection side of <c>ProfileConcepts</c> and never a second
+    /// copy of it: nothing may move a row from one to the other. See
+    /// <see cref="ConfigureCvLibrary"/>.
+    /// </remarks>
+    public DbSet<CvVariantEntity> CvVariants => Set<CvVariantEntity>();
+    public DbSet<CvVariantConceptEntity> CvVariantConcepts => Set<CvVariantConceptEntity>();
 
     /// <summary>Apply passes. Not <see cref="ScrapeRuns"/>, which belongs to ingestion.</summary>
     public DbSet<RunEntity> Runs => Set<RunEntity>();
@@ -261,6 +274,7 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
         ConfigureProfiles(modelBuilder);
         ConfigureMatches(modelBuilder);
         ConfigureSubmissions(modelBuilder);
+        ConfigureCvLibrary(modelBuilder);
         ConfigureRuns(modelBuilder);
         ConfigureFormAnswers(modelBuilder);
         ConfigureExtractionBatches(modelBuilder);
@@ -654,6 +668,25 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
                 .WithMany()
                 .HasForeignKey(e => e.AwaitingQuestionId)
                 .OnDelete(DeleteBehavior.Restrict);
+
+            // Which CV was actually sent - the column outcome feedback correlates against, and the
+            // one this system had nothing to put in until there were variants to choose between.
+            // Indexed because the question it exists for is asked in that direction: given a
+            // variant, what came back from the applications that carried it.
+            entity.HasIndex(e => e.CvVariantId);
+
+            // No navigation property, exactly as for the question above: a submission read must not
+            // be able to drag a whole CV's markdown across because somebody wrote an Include.
+            //
+            // Restrict on its own terms first - a variant a submission names has to stay fetchable,
+            // because "what did we send them" is a question about a file that must still exist, and
+            // archiving is how a variant is retired. It also could not be Cascade: the profile
+            // already cascades into Submissions and into CvVariants, and SQL Server refuses two
+            // cascade paths into one table.
+            entity.HasOne<CvVariantEntity>()
+                .WithMany()
+                .HasForeignKey(e => e.CvVariantId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<SubmissionEventEntity>(entity =>
@@ -701,6 +734,192 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
                 .WithMany(s => s.Events)
                 .HasForeignKey(e => e.SubmissionId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+    }
+
+    /// <summary>
+    /// The filter the live-label index is built on: the variants a person is still using.
+    /// </summary>
+    /// <remarks>
+    /// Bracket quoting because both SQL Server and SQLite accept it and this string is emitted
+    /// verbatim by whichever provider builds the model - the same reason
+    /// <see cref="LiveAnswersAt"/> quotes the way it does. A boolean is compared against 0 rather
+    /// than written as <c>NOT [IsArchived]</c>, which SQL Server will not accept in a filtered
+    /// index predicate.
+    /// </remarks>
+    private const string LiveVariantsFilter = "[IsArchived] = 0";
+
+    /// <summary>
+    /// The CV library, what each variant says, and what a park is waiting to see covered.
+    /// </summary>
+    /// <remarks>
+    /// <b>The unique index is filtered on <c>IsArchived</c>, and the filter is the feature.</b> A
+    /// label has to be distinguishable at a glance - the pack reports which CV it chose in the
+    /// label's own words, and an explanation naming something ambiguous cannot be checked by the
+    /// person reading it - but only among the variants in use. Rewriting a CV and giving the new one
+    /// the old one's name is the ordinary case, and an index that reserved a label forever would
+    /// push people into calling their CVs "Backend .NET v3" to get around a constraint meant to help
+    /// them. Nothing is lost by letting the name go: a submission records
+    /// <c>CvVariants.Id</c>, so the label is the live handle and the id is the record.
+    ///
+    /// <b>No nullable column is a key column in any unique index here, and that is deliberate
+    /// rather than incidental.</b> SQL Server treats two NULLs as equal in a unique index and
+    /// SQLite, like the standard, treats them as distinct - so an index over a nullable column
+    /// would be a production guarantee the tests could not exercise and a test-suite guarantee
+    /// production did not have, and the difference would first appear as a live constraint
+    /// violation. <c>ProfileId</c> and <c>LabelKey</c> are both required, so
+    /// <c>IX_CvVariants_LiveLabel</c> behaves identically on both engines; the same is true of the
+    /// two composite keys below. This schema relies on neither engine's NULL semantics, which is
+    /// what makes <c>CvLibrarySchemaTests</c> worth having. The rule and its reasoning are
+    /// <see cref="ConfigureFormAnswers"/>'s, applied again.
+    ///
+    /// <b>Nothing about a label's uniqueness depends on a collation either.</b>
+    /// <c>CvVariantLibrary.FoldLabel</c> lower-cases and collapses whitespace in Core, so the index
+    /// compares two already-folded strings - which is the one arrangement that means the same thing
+    /// under SQLite's <c>BINARY</c> and Azure SQL's case-insensitive default. An index over
+    /// <c>Label</c> itself would have quietly enforced two different rules.
+    ///
+    /// <b><c>CvVariantConcepts</c> mirrors <c>ProfileConcepts</c> column for column, <c>Source</c>
+    /// included</b>, and that mirroring is the payoff of a shape fixed before there was a profile
+    /// to put in it: selection is a join between tables of identical shape rather than a
+    /// translation layer. Do not let them drift - and note that the mirror is a join and never a
+    /// merge. A variant's concepts feed selection only; nothing may copy one into
+    /// <c>ProfileConcepts</c> or let one move a match score, because a CV is written from the
+    /// profile and a document that could write back would inflate the record it came from.
+    /// </remarks>
+    private static void ConfigureCvLibrary(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<CvVariantEntity>(entity =>
+        {
+            entity.ToTable("CvVariants");
+            entity.HasKey(e => e.Id);
+
+            // One label per candidate, among the variants still in use. Named rather than left to
+            // the convention because the filter is the interesting half and a generated name says
+            // nothing about it.
+            entity.HasIndex(e => new { e.ProfileId, e.LabelKey }, "IX_CvVariants_LiveLabel")
+                .IsUnique()
+                .HasFilter(LiveVariantsFilter);
+
+            // The selection read: this candidate's live variants, once per pack request against a
+            // database billed by the second. The filtered index above cannot serve it - it is keyed
+            // on the label, which selection never looks at.
+            entity.HasIndex(e => new { e.ProfileId, e.IsArchived });
+
+            entity.Property(e => e.Label).HasMaxLength(CvVariantLimits.MaxLabelLength).IsRequired();
+
+            // The label's own width, and that is a claim about the fold rather than a guess.
+            // CvVariantLibrary.FoldLabel collapses runs of whitespace to one space, which shrinks,
+            // and then lower-cases - and .NET's ToLowerInvariant uses simple case mapping, which is
+            // one character in and one out. The worry worth naming is the alternative: *full* case
+            // folding expands, ß to ss and U+0130 to i plus a combining dot, and a fold written
+            // that way would produce keys longer than the labels they came from. That would surface
+            // as a refused insert - somebody's typing lost on a page whose whole purpose is that
+            // they typed something - so if the fold ever changes, this width changes with it.
+            // The_folded_label_is_never_longer_than_the_label_it_came_from is what would notice.
+            entity.Property(e => e.LabelKey)
+                .HasMaxLength(CvVariantLimits.MaxLabelLength)
+                .IsRequired();
+
+            // Unbounded, and that is CvVariantLimits.MaxMarkdownLength's own reading of itself: the
+            // bound is a product decision about what a CV is - twenty thousand characters is about
+            // ten pages, past which the template stops producing something a recruiter reads - and
+            // it is enforced by CvVariant.Create, which refuses rather than truncating. SQL Server
+            // cannot hold it in row anyway, so the column is nvarchar(max) whether the width is
+            // declared or not. Declaring it would turn a later product decision into a data
+            // migration over documents people have already sent.
+            entity.Property(e => e.Markdown).IsRequired();
+
+            // The pointers. MaxBlobPathLength is the storage platform's own ceiling rather than a
+            // guess at what a path will be, for the reason SubmissionLimits.MaxScreenshotRefLength
+            // gives: truncating a pointer costs the thing pointed at - a rendered document that
+            // exists, was uploaded to an employer, and can never be found again, with nothing in
+            // the row admitting it. A path too long for this column is one the store would have
+            // refused anyway.
+            entity.Property(e => e.PdfBlobPath).HasMaxLength(CvVariantLimits.MaxBlobPathLength);
+            entity.Property(e => e.DocxBlobPath).HasMaxLength(CvVariantLimits.MaxBlobPathLength);
+
+            // Fixed, like every other SHA-256 hex column here. The constant rather than the 64
+            // spelled out next door on JobPostings.CrossBoardKey, because this one has a Core
+            // constant declaring it - so the column and whatever validates the value are one
+            // decision, which is the whole reason CvVariantLimits exists.
+            entity.Property(e => e.Sha256)
+                .HasMaxLength(CvVariantLimits.Sha256Length)
+                .IsFixedLength();
+
+            // Cascading from the profile like every other child of it: a CV means nothing without
+            // the person, and deleting a profile must not leave their documents behind.
+            entity.HasOne(e => e.Profile)
+                .WithMany()
+                .HasForeignKey(e => e.ProfileId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<CvVariantConceptEntity>(entity =>
+        {
+            entity.ToTable("CvVariantConcepts");
+
+            // Source in the key, exactly as on the posting and profile sides. Two rows rather than
+            // one for a concept read from a heading and again from a bullet: they are not equally
+            // good evidence and a collapse cannot be undone.
+            entity.HasKey(e => new { e.VariantId, e.ConceptId, e.Source });
+
+            // The coverage query: which variants hold this concept. The mirror of the supply index
+            // on ProfileConcepts and of the demand index on PostingConcepts, and what the release
+            // clause for a NoCvVariant park reads.
+            entity.HasIndex(e => new { e.ConceptId, e.VariantId });
+
+            entity.Property(e => e.Source).HasConversion<int>();
+            entity.Property(e => e.Polarity).HasConversion<int>();
+
+            // 120, which is the width the other two sides use. Not a constant, because the rule
+            // here is the mirror rather than a bound somebody chose: a column one character
+            // narrower than its counterpart truncates evidence on one side only, and the failure
+            // reads as an extractor bug rather than as a schema difference.
+            entity.Property(e => e.EvidenceText).HasMaxLength(120);
+
+            entity.HasOne(e => e.Variant)
+                .WithMany(v => v.Concepts)
+                .HasForeignKey(e => e.VariantId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Restrict, as on both other sides: a concept is a lookup shared with the whole corpus,
+            // and removing one must not silently delete evidence.
+            entity.HasOne(e => e.Concept)
+                .WithMany()
+                .HasForeignKey(e => e.ConceptId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // Configured here rather than beside Submissions, deliberately: this table exists only for
+        // the release condition of ParkReason.NoCvVariant, and the join it is read through is
+        // against CvVariantConcepts directly above. Keeping the two halves of one clause apart is
+        // how the shape of one stops matching the other.
+        modelBuilder.Entity<SubmissionParkGapEntity>(entity =>
+        {
+            entity.ToTable("SubmissionParkGaps");
+
+            // One row per concept per parked submission. Both key columns are required, so this
+            // behaves the same on SQL Server and on the SQLite the tests run against.
+            entity.HasKey(e => new { e.SubmissionId, e.ConceptId });
+
+            // The gap brief's direction: how many parked postings this concept blocks, which is
+            // what ranks the CVs worth writing. A group-by over the whole parked backlog, and
+            // unreachable had these been a JSON column on the submission.
+            entity.HasIndex(e => new { e.ConceptId, e.SubmissionId });
+
+            entity.HasOne(e => e.Submission)
+                .WithMany(s => s.ParkGaps)
+                .HasForeignKey(e => e.SubmissionId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Restrict, like every other reference to the vocabulary. One cascade path reaches this
+            // table - profile, submission, gap - which is a chain and not the second path SQL
+            // Server refuses.
+            entity.HasOne(e => e.Concept)
+                .WithMany()
+                .HasForeignKey(e => e.ConceptId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
     }
 
