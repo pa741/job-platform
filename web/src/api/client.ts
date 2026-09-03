@@ -6,6 +6,7 @@ import type {
   AiCallResponse, AiCallTotalsResponse,
   ScraperSearchRequest, ScraperSearchListResponse, ScraperSearchOptionsResponse,
   SkillGapResponse, Submission, SubmissionEvent,
+  AnswerQuestionRequest, AnswerQuestionResponse, OpenQuestion,
 } from './types';
 
 /** Thrown for any non-2xx response, carrying the RFC 9457 detail the API returns. */
@@ -287,6 +288,38 @@ export class JobPlatformApi {
     this.request<{ recorded: boolean }>(`/api/v1/submissions/${id}/events`, {
       method: 'POST',
       body: JSON.stringify({ ...event, idempotencyKey: crypto.randomUUID() }),
+    });
+
+  /**
+   * The questions this system refused to answer and has put to the candidate, oldest first.
+   *
+   * Oldest first inverts every other list in this client, and that is the point: those are
+   * histories, where the last thing that happened is the interesting one, and this is a queue
+   * to be drained. The question that has held an application back for three days is the one to
+   * put in front of somebody.
+   *
+   * Per-principal and SQL-backed like the submissions, so it is read when the page opens and
+   * never on a bootstrap or a poll.
+   */
+  openQuestions = () => this.request<{ items: OpenQuestion[] }>('/api/v1/questions');
+
+  /**
+   * Records what the candidate answered, and closes the question.
+   *
+   * <b>The one write in this client that says a person typed it.</b> Everything arriving over
+   * the tool surface is stored as a client's assertion; only this route may stamp an answer as
+   * the candidate's own, and it is why there is no `source` in the body — the API reads it from
+   * the token rather than from anything a caller can fill in.
+   *
+   * No idempotency key, unlike the event log. Recording the same answer twice converges on the
+   * stored row rather than writing a second one, because the answer store is keyed on the
+   * question and supersedes rather than appends; and the question it closes stays closed on the
+   * first close, so a retry after a timeout is safe without one.
+   */
+  answerQuestion = (questionId: number, answer: AnswerQuestionRequest) =>
+    this.request<AnswerQuestionResponse>(`/api/v1/questions/${questionId}/answer`, {
+      method: 'POST',
+      body: JSON.stringify(answer),
     });
 
   matches = (params: MatchQuery = {}) =>

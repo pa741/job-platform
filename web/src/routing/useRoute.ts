@@ -4,7 +4,7 @@ import { buildRoute, parseRoute, type PageId, type Route } from './route';
 /**
  * The current route, and the two ways to change it.
  *
- * A hand-written router rather than a dependency. Eight pages, one path segment and a query
+ * A hand-written router rather than a dependency. Nine pages, one path segment and a query
  * string is not what `react-router` is for, and a router would have to be named in `model.md`
  * to be there at all - the architecture doc lists the frontend's technology and is binding.
  *

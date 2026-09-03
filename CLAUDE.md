@@ -138,9 +138,9 @@ worked around.
 - `src/JobPlatform.Core/Submissions/ParkReason.cs` — why an application was parked, and the whole
   of the retry policy as one pure function. Read the remarks before adding a reason, and before
   reaching for a `Blocked` event instead of a park.
-- `src/JobPlatform.Api/Features/Mcp/SubmissionTools.cs` — the whole agent surface, reads and writes
-  both, and nothing on it applies to anything. The `[Description]` on each tool is the interface a
-  model reads, so it is documentation that changes behaviour.
+- `src/JobPlatform.Api/Features/Mcp/SubmissionTools.cs` — the whole agent surface, reads and
+  writes both, and nothing on it applies to anything. The `[Description]` on each tool is the
+  interface a model reads, so it is documentation that changes behaviour.
 - `src/JobPlatform.Documents/MarkdownPdfRenderer.cs` — model output to PDF, through a parsed
   AST and a fixed node mapping. No HTML step exists.
 
@@ -377,16 +377,17 @@ mechanism, and it is derived from the corpus rather than guessed at.
   sees a parked row - appends another and reports that offer as blocked. Made terminal it wins
   outright, so one park closes an application that was in fact sent, and `IsClosed` then makes the
   row that most needs chasing permanently un-stale. Below `Submitted` there is nowhere to put it:
-  **the only free low value is 0, which is the deliberate "nothing was established" slot** -
-  `SubmissionChannel.Unknown` is what that value means here, and a nullable `ParkedReason` already
-  spells the same absence - and such a row would still carry a non-null phase, which is what the
-  dashboard counts as sent. There is no numbering that works, because the enum is a total order
+  **the only free low value is 0, which is the deliberate "nothing was established" slot** - the
+  one enum here with a zero member, `SubmissionChannel`, spends it exactly that way, and a nullable
+  `ParkedReason` already spells the same absence - and such a row would still carry a non-null
+  phase. There is no numbering that works, because the enum is a total order
   over how far an application got and parking is not a point on it: it says no attempt was made at
   all. **And parking is reversible where an event is not.** `UnparkedAtUtc` lets a posting back
   into the queue; undoing a `Blocked` would need "the most recent event wins" for one member,
   precisely the rule the fold was written to refuse. So the fold is untouched, the fact lives on
-  `Submissions`, and every reader that counts applications has to be taught that a parked row is
-  not a sent one.
+  `Submissions` as `ParkedReason` / `ParkedAtUtc` / `UnparkedAtUtc`, and **every reader that counts
+  applications has to be taught that a parked row is not a sent one** - the dashboard counts any
+  row with a non-null phase, and a park must not land in that total.
 - **No deletes, anywhere on this table, with exactly one operator-only exception.** Withdrawing
   is a `Withdrawn` event; an append-only log with no eraser is the only version worth auditing.
   `dbadmin delete-submissions` is the exception and it exists for rows that never described a
@@ -503,12 +504,41 @@ mechanism, and it is derived from the corpus rather than guessed at.
 - **The server records that something was submitted; it never submits.** There is no
   `submit_application` tool and there must never be one — applying is irreversible and
   outward-facing, so keeping it outside means no bug here can reach an employer. `McpEndpointTests`
-  asserts the tool surface is *exactly* four names, an equality rather than a superset, so adding
-  one is a red build.
+  asserts the tool surface is *exactly the list it names*, an equality rather than a superset, so
+  adding one is a red build. **The equality is the property; the number is not**, and this rule
+  said "four names" while the surface was six and then fourteen - a count repeated in prose goes
+  stale silently, where the list in the test cannot. What the test defends is that moving the
+  surface is a diff somebody signs off: a superset assertion would have accepted the apply loop's
+  eight new tools without a word, and would accept a fifteenth just as quietly.
 - **There is no `get_profile` either.** A tool result is transcript content wherever the client
   runs. `get_form_field` is the substitute: one answer, from `FormFieldCatalog`, logged.
   `get_submission_pack` is the honest exception — a tailored CV is the profile rewritten in prose
   — and is logged on the same terms rather than treated as a public-text read.
+- **Two answer namespaces, and they never mix.** `FormFieldCatalog` is the *derived* one: it reads
+  the profile and answers a fixed allowlist. `FormAnswers` is the *declared* one: it holds only
+  what a person typed as the answer to a question. That split is what makes the sensitive case safe
+  without depending on a flag being set correctly. Marking catalogue fields `sensitive: true` -
+  which is what was asked for - converts "cannot be answered" into "answered unless a boolean was
+  right", a weaker guarantee wearing the same word. An EEO question, a salary expectation, a date
+  of birth are not reachable from the profile at all, so **a sensitive value can exist only because
+  somebody wrote it, and nowhere else because there is nowhere else.** `Sensitive` on the row
+  drives redaction in the disclosure log and a confirmation on the dashboard; it is never
+  permission to infer. Answers are superseded rather than updated, for the reason the event log is
+  append-only: a store that overwrites cannot say what was submitted last year.
+- **Resolution runs on this side of the tool call, and abstains by default.** `resolve_form_field`
+  hands the question to `IFormFieldResolver`; the alternative - shipping the candidate's stored
+  answers to the client to choose between - is the whole-profile disclosure this surface exists
+  instead of, with an extra hop and a bill attached. Three of its four stages need no provider, so
+  a deployment with no AI still answers from the allowlist, from what the candidate has typed, and
+  from what the same question resolved to before; only the fourth is a model call, and it abstains
+  rather than failing. **The characteristic failure of a matcher is the confident near-miss**, and
+  a wrong answer on an application is read as a statement the candidate made rather than as a bug
+  in a tool they were using - so below the confidence floor, on a sensitive field with no exact
+  stored answer, or where an option set will not map cleanly, the answer is that a person is
+  needed. An interruption is the cheaper mistake, and it is only cheap because it is recoverable:
+  the question is raised as an `OpenQuestion` and the posting returns **when that is answered**
+  rather than on the next run, or the agent parks the same posting for the same missing answer
+  every run, which is a loop and not a retry.
 - **A disclosure record names what was asked for and never the value.** An audit log holding the
   data it audits has moved the problem rather than solved it. Cosmos, not SQL, for the reason every
   dashboard read is; its own container rather than `aiCalls`, because the two answer different
@@ -518,6 +548,32 @@ mechanism, and it is derived from the corpus rather than guessed at.
   different questions and briefly merging those two was already a mistake; do not merge a third
   into either. The reason it is the verdict is the finding behind `MatchRanker` — the score is a
   good filter and a bad final sort.
+- **The queue excludes on what a submission row *says*, never on one existing, and that single
+  clause is what made parking impossible.** `ListApplyableAsync` used to ask only whether any
+  submission existed for the pair - so the instant a park wrote the row it needs to park against,
+  the posting left the queue forever, and "come back to this once the captcha is gone" and "never
+  show me this again" were the same operation. Four clauses replace it and each holds a posting
+  back for a different reason: a live application on this posting, a live application on any other
+  listing of the same job, a permanent park, and a park waiting on an answer that has not arrived.
+  Everything else - a captcha, a login wall, a spent day's quota - comes back on the next run,
+  which is the entire point. **Only a live application suppresses the rest of a cross-board
+  cluster**: a permanent park is about one listing, so suppressing a cluster on the strength of
+  another board's 404 would hide a live vacancy for good.
+- **`ListApplyableAsync` honours `DismissedAtUtc`, and it was the only match query that did not.**
+  `ListAsync` and `GetUnassessedAsync` both exclude dismissed pairs; this one did not, so a posting
+  the candidate had said no to on the dashboard came back to the agent on every run, with the agent
+  given no way to know it had been refused. A dismissal is the candidate's own decision about a job
+  and it outranks the model's verdict. It stayed invisible for the reason these always do: **a row
+  that should be absent from a list is not something anybody notices.**
+- **The queue's filters are enforced server-side, and the strictest combination of them returns
+  nothing today.** `minAssessmentScore` is applied in SQL so that a prompt-level bug cannot fire
+  applications at bad matches, and a null score does not clear it - reading "not judged" as "let it
+  through" turns a safety rail into a way past one. But measured on 2026-09-02,
+  `ApplicationDocuments` holds **one row for the entire system**, so `documentsReady=true` with
+  `applyUrlSource=Posting` and `minAssessmentScore=80` yields **zero** postings. That is a correct
+  predicate over an empty input and must not be "fixed" by loosening it: **document generation is
+  what the loop is blocked on**, it is user-initiated, there is no scheduled pass, and adding one
+  is a `model.md` amendment rather than a tweak.
 - **The MCP surface gets its own rate-limit policy**, not `RateLimitSetup.ReadPolicy`. A client
   polls differently from a browser and must not exhaust the budget the dashboard shares — and
   these tools read SQL, which is billed on wall-clock time against a monthly grant.
@@ -1128,6 +1184,17 @@ dotnet run --project tools/JobPlatform.DbAdmin -- migrate "<connection-string>"
 # Project the concept vocabulary into SQL. Idempotent; required after any migration and
 # after any change to concepts.json.
 dotnet run --project tools/JobPlatform.DbAdmin -- seed-concepts "<connection-string>"
+
+# Stamp the cross-board key on the postings that predate the column, so the corpus and every row
+# written since land in the same clusters. A console command rather than a step in the migration
+# because the key is C#: JobFingerprint.CrossBoardKey parses a city out of a free-text location
+# and folds case, punctuation and whitespace, and rewriting that in T-SQL would be a second
+# implementation of the one rule deduplication rests on - the two would disagree on the first
+# posting either spelled differently. It writes only where the value differs, so it is idempotent
+# and it is not a one-off: re-running it is how the corpus is re-keyed after a change to the
+# normalisation, which has already happened once to the other fingerprint. Dry run unless
+# --confirm, and required once after the apply-loop migration or the queue clusters nothing.
+dotnet run --project tools/JobPlatform.DbAdmin -- backfill-crossboard "<connection-string>" --confirm
 
 # Remove submissions that never described a real application - a test of the write path, a
 # client that misfired. The one eraser in an otherwise append-only pipeline, and deliberately a

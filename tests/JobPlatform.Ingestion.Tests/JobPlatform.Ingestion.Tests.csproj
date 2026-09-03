@@ -15,6 +15,17 @@
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
     <PackageReference Include="coverlet.collector" />
+    <!-- SQLite in-memory, exactly as JobPlatform.Data.Tests uses it: the generation pass reads
+         the apply queue rather than a list somebody handed it, so a test that stubbed the
+         repository would be asserting the stub's opinion of "worth applying to" instead of the
+         one the agent surface actually pulls. No Azure account and no credentials either way. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The HTTP dispatch alongside the timer takes an HttpRequest, because the host is built
+         with ConfigureFunctionsWebApplication. Asserting its own bound needs one to hand it. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
   <ItemGroup>

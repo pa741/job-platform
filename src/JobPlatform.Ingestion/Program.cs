@@ -1,4 +1,4 @@
-using Azure.Identity;
+﻿using Azure.Identity;
 using Azure.Storage.Blobs;
 using Azure.Storage.Queues;
 using JobPlatform.Core.Ai;
@@ -11,6 +11,7 @@ using JobPlatform.Ai;
 using JobPlatform.Core.Enrichment;
 using JobPlatform.Ingestion;
 using JobPlatform.Ingestion.Curated;
+using JobPlatform.Ingestion.Functions;
 using JobPlatform.Ingestion.Extraction;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Builder;
@@ -199,5 +200,18 @@ builder.Services.AddScoped<EmbeddingRepository>();
 builder.Services.AddRealtimeFeed(builder.Configuration);
 builder.Services.AddScoped<ExtractionBatchRepository>();
 builder.Services.AddScoped<PostingExtractionWriter>();
+
+// The nightly generation pass, which is what puts documents in front of the apply loop. The
+// repository is registered here rather than only in the API because this host now writes drafts
+// too - without it the function is discovered and then fails to activate, which is a runtime
+// fault no test sees, because the tests construct the function directly.
+//
+// Bound unconditionally, like the match sweep and for the same kind of reason: the options carry
+// the batch cap, and a deployment that has not configured them should get the defaults rather
+// than an unbounded pass. Setting DocumentsPerNight to 0 switches the pass off without a deploy,
+// which is the control worth having when the number is a bill.
+builder.Services.AddScoped<ApplicationDocumentRepository>();
+builder.Services.Configure<ApplicationGenerationOptions>(
+    builder.Configuration.GetSection(ApplicationGenerationOptions.SectionName));
 
 builder.Build().Run();

@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 using JobPlatform.Api.Endpoints;
 using JobPlatform.Api.Infrastructure;
@@ -204,8 +204,20 @@ public sealed class ApplicationEndpoints : IEndpointGroup
                 statusCode: StatusCodes.Status502BadGateway);
         }
 
+        // The same two halves the nightly pass stores, merged the same way. The writer answered
+        // what needed the advert; the catalogue answers what does not and needs no model. The
+        // writer wins a collision, because if it answered a stable question it had read the
+        // advert and the canned value had not.
+        var drafted = draft.DraftedAnswers;
+
+        var answers = new List<DraftedAnswer>(drafted);
+
+        answers.AddRange(DraftedAnswerCatalog.StableAnswers(posting.SourceBoard)
+            .Where(stable => !drafted.Any(written => string.Equals(
+                written.QuestionText, stable.QuestionText, StringComparison.OrdinalIgnoreCase))));
+
         var stored = await documents.AddAsync(
-            view.Id, postingId, draft, request?.Instructions, time.GetUtcNow(), ct);
+            view.Id, postingId, draft, request?.Instructions, answers, time.GetUtcNow(), ct);
 
         // After the row exists, never before it. A stored path names the document it was rendered
         // from, so there is nothing to name until the draft has an id - and a file uploaded

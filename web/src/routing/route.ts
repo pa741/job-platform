@@ -1,12 +1,12 @@
 /**
- * The eight pages, and what each one is called in a URL.
+ * The nine pages, and what each one is called in a URL.
  *
  * A page id is unique across sections, so a path needs only the page and not the section it
  * sits in - `/shortlist`, not `/you/shortlist`. The section is derived, which also means
  * moving a page between sections does not break a link somebody saved.
  */
 export type PageId =
-  | 'shortlist' | 'applications' | 'profile'
+  | 'shortlist' | 'applications' | 'questions' | 'profile'
   | 'briefing' | 'postings' | 'vocabulary'
   | 'searches' | 'calls';
 
@@ -32,6 +32,7 @@ export const SECTIONS: readonly Section[] = [
     pages: [
       { id: 'shortlist', label: 'Shortlist' },
       { id: 'applications', label: 'Applications' },
+      { id: 'questions', label: 'Questions' },
       { id: 'profile', label: 'Profile' },
     ],
   },
@@ -60,6 +61,7 @@ export const HOME: PageId = 'shortlist';
 const PATHS: Record<PageId, string> = {
   shortlist: '/shortlist',
   applications: '/applications',
+  questions: '/questions',
   profile: '/profile',
   briefing: '/market',
   postings: '/market/postings',

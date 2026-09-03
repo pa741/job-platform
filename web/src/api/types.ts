@@ -875,3 +875,147 @@ export interface SkillGapItem {
   /** What that relation is worth before the candidate's own strength, 0-1. */
   credit: number;
 }
+
+// ---------------------------------------------------------------------------
+// The question queue: what an unattended run could not answer.
+//
+// This is the declared half of the system, and it is the only half. `FormFieldCatalog`
+// answers a fixed allowlist of questions out of the profile — eleven fields, none of them
+// sensitive, and two tests fail the build if a sensitive one is added quietly. Nothing else
+// is derivable, so a value in these shapes exists because a person typed it and for no
+// other reason. That is a stronger guarantee than a `sensitive: true` flag, and unlike a
+// flag it does not depend on having been set correctly.
+// ---------------------------------------------------------------------------
+
+/**
+ * One question waiting on the candidate, with the advert that raised it.
+ *
+ * One wording is one row however many adverts asked it — the queue folds typography, so the
+ * same question with a curly apostrophe is not asked twice. `postingId` is therefore context
+ * rather than identity: it names the advert that hit the wording first, and the other adverts
+ * that hit it record their waiting on their own parked applications.
+ */
+export interface OpenQuestion {
+  questionId: number;
+
+  /** The advert that raised it. Null for a question that came from nowhere in particular. */
+  postingId: number | null;
+  postingTitle: string | null;
+  company: string | null;
+
+  /**
+   * The employer's row, where the advert names one.
+   *
+   * Needed to offer the company scope at all: an answer is filed against a company id rather
+   * than against the name printed on the advert, because the company table already folds
+   * "Contoso" and "Contoso Ltd" into one employer and keying on the string would file the
+   * same answer twice. Null means that folding is unavailable here, and the choice is between
+   * this advert and everywhere.
+   */
+  companyId: number | null;
+
+  /** The unattended pass that raised it, so an abandoned run's questions stay attributable. */
+  runId: number | null;
+
+  /** The question as the form asked it, verbatim. What a person reads before answering. */
+  questionText: string;
+
+  /**
+   * The choices the form offered, in the form's own words.
+   *
+   * Empty covers both a free-text box and a set nobody recorded, deliberately: the form did
+   * not answer that question either, and a caller telling them apart would be acting on a
+   * distinction that was never established.
+   */
+  options: string[];
+
+  /**
+   * Whether this is one only the candidate may state.
+   *
+   * Read off the question's own wording as well as off whatever raised it, so a right-to-work
+   * or salary question is marked whether or not anything ticked a box. It drives a
+   * confirmation here and redaction in the disclosure log — never permission to infer.
+   */
+  sensitive: boolean;
+
+  askedAtUtc: string;
+
+  /** The application this question is holding back, where one is parked on it. */
+  parked: ParkedApplication | null;
+}
+
+/**
+ * An application put down without being made, waiting on an answer.
+ *
+ * Parking is an attribute on the submission rather than an event, because the event log folds
+ * to the furthest phase reached and "no attempt was made" is not a point on that ladder. A
+ * parked row is not a sent one and must never be counted as one.
+ */
+export interface ParkedApplication {
+  submissionId: number;
+  postingId: number;
+  postingTitle: string;
+  company: string | null;
+  parkedAtUtc: string;
+}
+
+/**
+ * How widely a stored answer applies.
+ *
+ * The narrow scopes are the safety property rather than a filing convenience: a posting-scoped
+ * answer is only ever offered back for that posting, so the cost of writing something specific
+ * is bounded to the place it was written for. Widening is a deliberate act by the person, never
+ * something resolution decides for them.
+ */
+export type AnswerScope = 'Global' | 'Company' | 'Posting';
+
+/**
+ * What the candidate answers, and how far it should carry.
+ *
+ * <b>No company or posting id travels in this.</b> The scope is a choice; the ids behind it are
+ * read server-side from the question's own advert. A body that named its own ids would let a
+ * mistyped number file somebody's salary expectation against an employer they never applied to,
+ * and there is nothing the server could check it against.
+ */
+export interface AnswerQuestionRequest {
+  /** In the words that would be typed into the form. Stored verbatim, never shortened. */
+  value: string;
+  scope: AnswerScope;
+  /**
+   * A canonical key where the question has one, e.g. `notice_period`.
+   *
+   * The queue does not ask a person to invent one — it is here because the route takes it, the
+   * same way the tool surface does, and because the key is the escape from phrasing: the hash
+   * folds typography and nothing more, so two employers asking the same thing in genuinely
+   * different words are two hashes and one name.
+   */
+  name?: string | null;
+}
+
+/**
+ * What answering did, including the half that is otherwise invisible.
+ *
+ * `returnedToQueue` is the causal link the queue exists for: closing a question takes it out of
+ * the unanswered set, which is the same set the applyable predicate reads, so the advert parked
+ * on it stops being held. Nothing here sends anything — the next unattended run is what picks
+ * the advert up.
+ */
+export interface AnswerQuestionResponse {
+  answerId: number;
+
+  /** False where that exact answer was already stored: nothing written, nothing superseded. */
+  created: boolean;
+
+  scope: AnswerScope;
+  sensitive: boolean;
+  answeredAtUtc: string;
+
+  /** The question this closed. Null where the answer was volunteered rather than asked for. */
+  closedQuestionId: number | null;
+
+  /** The applications no longer held back by it. Empty is ordinary, not a failure. */
+  returnedToQueue: ParkedApplication[];
+
+  /** An explanatory sentence where something is simply absent. Null where there is nothing to say. */
+  note: string | null;
+}

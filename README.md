@@ -240,7 +240,7 @@ posting endpoints during development never reaches them.
 | `GET /api/v1/submissions` | Applications actually sent, and where each stands. The status is folded from the event log, never stored |
 | `POST /api/v1/submissions` | Records that one was sent. Idempotent per posting - a retry converges rather than duplicating |
 | `GET`, `POST /api/v1/submissions/{id}/events` | The append-only log, and one append. No deletes: withdrawing is a `Withdrawn` event |
-| `POST /api/v1/mcp` | The agent surface, over MCP. Four read-only tools; see [`mcp_handoff.md`](mcp_handoff.md) |
+| `POST /api/v1/mcp` | The agent surface, over MCP. Fourteen tools, seven of which write; see [`mcp_handoff.md`](mcp_handoff.md) |
 
 OpenAPI at `/openapi/v1.json`, with a Scalar UI at `/scalar/v1`.
 
@@ -399,9 +399,20 @@ repository; the model supplies words and structure only. A node type with no map
 its plain text rather than being dropped — silently losing one would take content out of a
 document somebody is about to send to an employer.
 
-The markdown is the record and the PDF is a rendering of it, produced per request. Storing the
-PDF would mean a layout change could not reach documents already generated, and would put
-megabytes of binary into a database billed by the second.
+The markdown is the record and the download routes render from it per request. Storing the PDF in
+the database would mean a layout change could not reach documents already generated, and would put
+megabytes of binary into something billed by the second.
+
+That was the whole story while a person was the only reader. An applicant tracking system takes an
+*upload*, and an agent filling in a form cannot be handed megabytes of one in a tool result — so
+generation now also renders each draft into Blob Storage, and the agent surface hands out
+short-lived user-delegation SAS links to the files rather than the bytes. **DOCX as well as PDF,
+because several vendors parse the upload**: a PDF says where the ink goes, and a DOCX still says
+what a heading is. It is a second backend over the same parsed markdown rather than a converter or
+a second template, so there is still no step at which model output becomes markup. Each file is
+named after the candidate rather than `cv.pdf`, because that name ends up in a recruiter's file
+list, and a SHA-256 of the rendered bytes is stored beside the path — a path alone cannot say
+whether what is at the end of it is still what was sent.
 
 One trap worth writing down: PDFsharp's platform-independent build resolves **no fonts at all**,
 and throws on its first call without a resolver — including for its own internal error font.
@@ -767,6 +778,15 @@ CONN="Server=tcp:<server>.database.windows.net,1433;Database=jobsdb;Authenticati
 dotnet run --project tools/JobPlatform.DbAdmin -- status  "$CONN"
 dotnet run --project tools/JobPlatform.DbAdmin -- grant-migrator "$CONN" job-platform-deploy
 dotnet run --project tools/JobPlatform.DbAdmin -- metrics "https://<cosmos-account>.documents.azure.com:443/"
+
+# Stamp the cross-board key on postings that predate the column, so two boards' listings of one
+# job cluster together. A console command and not a migration step, because the key parses a city
+# out of a free-text location in C# and a second implementation in T-SQL would drift from it.
+# Its failure mode is silence, which is why it is written down: until it runs every key is null,
+# a null key clusters with nothing, and the shortlist stops collapsing duplicates while looking
+# entirely correct. Dry run unless --confirm, and idempotent - re-running it is also how the
+# corpus is re-keyed after a change to the normalisation.
+dotnet run --project tools/JobPlatform.DbAdmin -- backfill-crossboard "$CONN" --confirm
 ```
 
 Remember to delete the rule when you are done.
@@ -777,15 +797,41 @@ only that one had been *written*. `Submissions` and `SubmissionEvents` close tha
 event log per posting, with the status folded from it on read so staleness cannot go stale, and a
 dashboard page that makes the pipeline legible to a person before anything automated writes to it.
 
-On top of it sits a read-only MCP server at `/api/v1/mcp`, behind the same Entra token the
-dashboard already carries. Four tools - what to apply to next, the pack for one application, one
-allowlisted profile answer at a time, and the pipeline's own state.
+On top of it sits an MCP server at `/api/v1/mcp`, behind the same Entra token the dashboard
+already carries. **Fourteen tools, and seven of them write.** It started as four reads - what to
+apply to next, the pack for one application, one allowlisted profile answer at a time, and the
+pipeline's own state - which is a surface an agent can read from and then has nowhere to report
+back to. An application that exists in the world and not in the log is the one state this pipeline
+cannot recover from, because every later decision reads the log rather than the world. So: a
+submission recorded as sent in the same call that creates it, the events that follow with whatever
+evidence a browser can produce, an answer the candidate gave stored so the next form asking it is
+filled in without asking again, a posting put down with the reason that stopped it, and a run
+opened and closed so an unattended pass is attributable and its retries converge instead of
+duplicating.
+
+**Each of those writes is narrower than "write" suggests.** They append to the event log, set
+columns on a submission, supersede an answer with a newer one, and open and close a question and a
+run. None of them deletes, none of them edits, and none of them sets a status - the status is
+still a fold over the log, and the one eraser in the system is a console command that needs a
+connection string, a database user and a firewall rule. Withdrawing an application is a
+`Withdrawn` event. Being blocked is not an event at all: a captcha neither advances an application
+nor fails it, so parking is an attribute of the submission that the fold never reads and the queue
+does.
+
+**The reads grew for the same reason and kept the same leash.** The queue collapses duplicate
+listings of one job, says whose ATS form is at the end of a link and which links are inferences
+rather than published facts, enforces the assessment floor server-side so a prompt-level bug
+cannot fire applications at bad matches, and reports how much of the day's cap is left - because
+discovering a cap by being refused happens after the form has already gone. And a form field is
+resolved *inside* the server, against what this candidate has already answered: shipping the
+answer store into a model's context to fill one box would be the whole-profile disclosure the
+allowlist exists instead of, with an extra hop and a bill attached.
 
 **What it deliberately cannot do is apply.** There is no `submit_application` tool and there never
 will be: applying is irreversible and outward-facing, so it stays outside this system entirely and
 no bug in this repository can send anything to an employer. There is no `get_profile` either - a
-tool result is transcript content wherever the client runs - and the two tools that do disclose
-the candidate's own data record what they disclosed, never the value.
+tool result is transcript content wherever the client runs - and every read that discloses the
+candidate's own data records what it disclosed, never the value.
 
 ## Status
 
@@ -819,6 +865,15 @@ form-filled profile extracted into the same concept vocabulary as a posting, a p
 that runs over every pair nightly, a model pass over what clears the threshold, and a tailored
 CV and cover letter rendered to PDF. 365 tests cover them, and moving the provider to Azure
 OpenAI removed the last secret in the system on the way through.
+
+The apply loop on top of them - the fourteen tools, the answer store, parking, the duplicate
+clustering and the stored document packs - is built and tested and **has not yet been driven by a
+real MCP client**, which is the next thing rather than a footnote to it. And the measurement that
+reordered its build is worth stating plainly: exactly one posting in the corpus has generated
+documents, so the queue a careful run would compose - documents ready, an employer's own apply
+link, an assessment of 80 or better - is currently empty. **Generation, not the tool surface, is
+what the loop is waiting on.** [`mcp_handoff.md`](mcp_handoff.md) carries the numbers and the open
+work.
 
 Still to come, per the architecture in `model.md`: a Cosmos change-feed function driving
 Web PubSub for live metrics (the `leases` container is already provisioned). And when Azure's

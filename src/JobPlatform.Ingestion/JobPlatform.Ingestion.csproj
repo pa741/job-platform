@@ -30,6 +30,10 @@
     <ProjectReference Include="..\JobPlatform.Core\JobPlatform.Core.csproj" />
     <ProjectReference Include="..\JobPlatform.Data\JobPlatform.Data.csproj" />
     <ProjectReference Include="..\JobPlatform.Ai\JobPlatform.Ai.csproj" />
+    <!-- The nightly generation pass renders what it writes, so the PDF and the DOCX exist before
+         a browser opens rather than being rendered per request by whoever downloads them. Same
+         renderers as the API's, deliberately: two backends over one AST, not a second layout. -->
+    <ProjectReference Include="..\JobPlatform.Documents\JobPlatform.Documents.csproj" />
   </ItemGroup>
 
   <ItemGroup>

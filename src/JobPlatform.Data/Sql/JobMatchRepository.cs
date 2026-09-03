@@ -1406,6 +1406,7 @@ public sealed class JobMatchRepository(JobsDbContext db)
                 m.Posting!.Title,
                 m.Posting.Company,
                 m.Posting.Description,
+                m.Posting.Site,
             })
             .FirstOrDefaultAsync(ct);
 
@@ -1431,7 +1432,8 @@ public sealed class JobMatchRepository(JobsDbContext db)
                 Version = row.AssessmentVersion ?? CandidacyAssessment.CurrentVersion,
             };
 
-        return (match, assessment, new PostingBrief(postingId, row.Title, row.Company, row.Description ?? string.Empty));
+        return (match, assessment, new PostingBrief(
+            postingId, row.Title, row.Company, row.Description ?? string.Empty, row.Site));
     }
 
     /// <summary>

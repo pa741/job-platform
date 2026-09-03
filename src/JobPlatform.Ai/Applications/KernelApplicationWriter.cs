@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using JobPlatform.Core.Ai;
@@ -56,7 +56,8 @@ public sealed class KernelApplicationWriter(
         {
           "cv": "<the tailored CV, as markdown>",
           "coverLetter": "<the cover letter, as markdown>",
-          "emphasised": ["<what this draft leads with, one short sentence each>"]
+          "emphasised": ["<what this draft leads with, one short sentence each>"],
+          "draftedAnswers": [{ "question": "<the question, copied exactly>", "answer": "<the answer>" }]
         }
 
         THE ROLE
@@ -99,6 +100,18 @@ public sealed class KernelApplicationWriter(
         - Markdown only: headings, bold, italics, bullet lists, links. No tables, no HTML, no
           images, no horizontal rules.
         - British English.
+
+        Rules for the drafted answers:
+        - Answer each question below, in the same words it is given, and only those questions.
+        - {{$freeText}}
+        - OMIT a question entirely rather than answering it thinly. An empty box is better than a
+          paragraph that would fit any employer, which is detectable in one sentence and is read
+          as a mailshot.
+        - The "does NOT show" list binds these exactly as it binds the CV. A paragraph is an
+          easier place to overclaim than a bullet point.
+        - Say nothing about the company the advert does not say. An invented fact about an
+          employer is read by somebody who works there.
+        - Prose, first person, no markdown, no headings, no bullet points. British English.
 
         Rules for the cover letter:
         - Address the company by name where one is given; otherwise open without a salutation
@@ -179,6 +192,10 @@ public sealed class KernelApplicationWriter(
             ["instructions"] = string.IsNullOrWhiteSpace(request.Instructions)
                 ? "(none)"
                 : Truncate(request.Instructions, 2_000),
+
+            // The questions come from the catalogue rather than from this file, so the list the
+            // model is asked to answer and the list the parser will accept back are the same one.
+            ["freeText"] = FreeTextQuestions(),
         };
 
         // The prompt as the model will see it, so a failure can be replayed rather than
@@ -243,6 +260,12 @@ public sealed class KernelApplicationWriter(
                     CurriculumVitaeMarkdown = cv,
                     CoverLetterMarkdown = letter,
                     Emphasised = Strings(root, "emphasised"),
+
+                    // Absent, empty or malformed all read as "nothing drafted". A missing CV is
+                    // half a draft and refused above; a missing answer is a box the candidate
+                    // fills in themselves, which is the state every application was in before
+                    // this existed.
+                    DraftedAnswers = DraftedAnswers(root),
                     Model = _options.WritingDeployment,
                 },
                 null,
@@ -442,6 +465,77 @@ public sealed class KernelApplicationWriter(
         }
 
         return values;
+    }
+
+    /// <summary>
+    /// The drafted free-text answers, keeping only the questions that were actually asked.
+    /// </summary>
+    /// <remarks>
+    /// <b>The question is matched against the catalogue rather than taken as given.</b> The model
+    /// is told to copy each question exactly and mostly will, but a returned question that is not
+    /// on the list is one nobody will ever be asked - and storing it would put prose in front of
+    /// the candidate under a heading this system did not choose. Matching also repairs the
+    /// ordinary case where the wording drifts by a word, since the catalogue's spelling is the one
+    /// the form-answer store keys on.
+    ///
+    /// Everything else is dropped quietly. This is the half of a draft that is allowed to be
+    /// missing, so a malformed entry costs a box the candidate fills in by hand rather than a
+    /// regeneration.
+    /// </remarks>
+    /// <summary>The per-posting questions and their guidance, as the prompt states them.</summary>
+    /// <remarks>
+    /// Built from <see cref="DraftedAnswerCatalog.PerPosting"/> so that adding a question is one
+    /// edit in one place. The word limit is stated per question because these are boxes with
+    /// counters on real forms, and an answer cut off mid-sentence reads to an employer as
+    /// carelessness rather than as a limit.
+    /// </remarks>
+    private static string FreeTextQuestions()
+        => string.Join(
+            "\n        - ",
+            DraftedAnswerCatalog.PerPosting.Select(prompt =>
+                $"\"{prompt.QuestionText}\" - {prompt.Guidance} At most {prompt.MaxWords} words."));
+
+    private static IReadOnlyList<DraftedAnswer> DraftedAnswers(JsonElement element)
+    {
+        if (!element.TryGetProperty("draftedAnswers", out var array)
+            || array.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var answers = new List<DraftedAnswer>();
+
+        foreach (var item in array.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var question = String(item, "question");
+            var answer = String(item, "answer");
+
+            if (string.IsNullOrWhiteSpace(question) || string.IsNullOrWhiteSpace(answer))
+            {
+                continue;
+            }
+
+            var known = DraftedAnswerCatalog.PerPosting.FirstOrDefault(prompt => string.Equals(
+                prompt.QuestionText, question.Trim(), StringComparison.OrdinalIgnoreCase));
+
+            if (known is null || answers.Any(existing => string.Equals(
+                    existing.QuestionText, known.QuestionText, StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            answers.Add(new DraftedAnswer(
+                known.QuestionText,
+                answer.Trim(),
+                FreeTextCategory.PostingSpecific));
+        }
+
+        return answers;
     }
 
     private static string? String(JsonElement element, string name)
