@@ -1,4 +1,4 @@
-using JobPlatform.Core.Ai;
+﻿using JobPlatform.Core.Ai;
 using JobPlatform.Core.Model;
 using JobPlatform.Core.Submissions;
 using JobPlatform.Data.Cosmos;
@@ -40,6 +40,25 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     protected override IHost CreateHost(IHostBuilder builder)
     {
         _connection.Open();
+
+        // Every suite in this project builds its host through here, so turning the container's own
+        // checks on once covers all of them.
+        //
+        // Neither ordinary defence sees a captured dependency. Production leaves ValidateScopes
+        // off, so a singleton holding a scoped service does not fail - it quietly keeps one
+        // request's object for the life of the process. And WebApplicationFactory does not turn
+        // the checks on by default either: registering the form-field resolver as a singleton over
+        // a scoped IAiCallLog left all 313 tests here green, which is how that fault was found by
+        // experiment rather than by the suite.
+        //
+        // ValidateOnBuild is the half that matters. ValidateScopes alone only catches a service
+        // some test actually resolves; ValidateOnBuild walks every registration, so the next one
+        // is caught in whichever service nothing happens to exercise.
+        builder.UseDefaultServiceProvider(options =>
+        {
+            options.ValidateScopes = true;
+            options.ValidateOnBuild = true;
+        });
 
         builder.ConfigureHostConfiguration(config => config.AddInMemoryCollection(new Dictionary<string, string?>
         {

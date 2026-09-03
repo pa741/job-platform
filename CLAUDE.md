@@ -12,8 +12,10 @@ Azure SQL, metrics into Cosmos DB, triggered by Event Grid on blob creation.
 `../model.md` holds the target architecture for the whole system, and it is binding: amend it
 before building something it does not name, not after. Every row is built - Ingestion, Data, the
 API, the Frontend, the candidate profile, matching, generated applications, Realtime, Submissions
-and the agent surface - with the agent surface read-only so far. Its write tools and questions
-channel are the open work; see [`mcp_handoff.md`](mcp_handoff.md).
+and the agent surface - the last of which now writes as well as reads. What stays open there is the
+questions *channel*: `list_open_questions` is a poll, and pushing a question to the person who can
+answer it needs a per-candidate send the broadcast feed does not have. See
+[`mcp_handoff.md`](mcp_handoff.md) section 1.4.
 
 ## Public repo hygiene
 
@@ -133,9 +135,12 @@ worked around.
 - `src/JobPlatform.Core/Submissions/FormFieldCatalog.cs` — the only profile data the agent
   surface will ever answer, one field at a time. What is absent from it is as considered as what
   is present.
-- `src/JobPlatform.Api/Features/Mcp/SubmissionTools.cs` — the whole agent surface. Four read
-  tools; the `[Description]` on each is the interface a model reads, so it is documentation that
-  changes behaviour.
+- `src/JobPlatform.Core/Submissions/ParkReason.cs` — why an application was parked, and the whole
+  of the retry policy as one pure function. Read the remarks before adding a reason, and before
+  reaching for a `Blocked` event instead of a park.
+- `src/JobPlatform.Api/Features/Mcp/SubmissionTools.cs` — the whole agent surface, reads and writes
+  both, and nothing on it applies to anything. The `[Description]` on each tool is the interface a
+  model reads, so it is documentation that changes behaviour.
 - `src/JobPlatform.Documents/MarkdownPdfRenderer.cs` — model output to PDF, through a parsed
   AST and a fixed node mapping. No HTML step exists.
 
@@ -362,6 +367,26 @@ mechanism, and it is derived from the corpus rather than guessed at.
 - **`Type` is the phase; `Stage` is a label inside it.** "Tech round 2" is text on an
   `InterviewScheduled` event, not a member of the enum — the enum is what the dashboard groups by
   and what the fold switches on, and it must not grow every time a company invents a round.
+- **Parking is an attribute on the submission and never a member of `SubmissionEventType`.** The
+  apply-loop spec asked for a `Blocked` member, and it is the change most likely to be tried again
+  because it looks smaller than a pair of columns: the log is already the record, and "we could not
+  apply" plainly happened. It does not work, and the reason is mechanical rather than a matter of
+  taste - a new member has to survive both of the fold's rules. Ordered above `OfferReceived` it is
+  what `max` picks, so a captcha parked in the morning outranks an offer that arrived in the
+  afternoon, and the next run - which reads the parked columns rather than the log, and so still
+  sees a parked row - appends another and reports that offer as blocked. Made terminal it wins
+  outright, so one park closes an application that was in fact sent, and `IsClosed` then makes the
+  row that most needs chasing permanently un-stale. Below `Submitted` there is nowhere to put it:
+  **the only free low value is 0, which is the deliberate "nothing was established" slot** -
+  `SubmissionChannel.Unknown` is what that value means here, and a nullable `ParkedReason` already
+  spells the same absence - and such a row would still carry a non-null phase, which is what the
+  dashboard counts as sent. There is no numbering that works, because the enum is a total order
+  over how far an application got and parking is not a point on it: it says no attempt was made at
+  all. **And parking is reversible where an event is not.** `UnparkedAtUtc` lets a posting back
+  into the queue; undoing a `Blocked` would need "the most recent event wins" for one member,
+  precisely the rule the fold was written to refuse. So the fold is untouched, the fact lives on
+  `Submissions`, and every reader that counts applications has to be taught that a parked row is
+  not a sent one.
 - **No deletes, anywhere on this table, with exactly one operator-only exception.** Withdrawing
   is a `Withdrawn` event; an append-only log with no eraser is the only version worth auditing.
   `dbadmin delete-submissions` is the exception and it exists for rows that never described a
@@ -408,6 +433,17 @@ mechanism, and it is derived from the corpus rather than guessed at.
   and employer alone matched 285 postings across boards; adding the city left 211. So 74 of them,
   better than a quarter, were one employer advertising one title in several cities - and merging
   those hands somebody the apply link for the wrong city's vacancy, which is worse than no link.
+- **`CrossBoardKey` is stored hashed, and exactly one function in Core produces the hash.** The
+  readable form cannot be indexed: title, employer and city at this schema's own widths reach 952
+  characters, 1,904 bytes, against SQL Server's 1,700-byte cap on a nonclustered index key - the
+  same arithmetic already written down on the `(Company, LocationCity)` index. So the column is
+  `char(64)` and `JobFingerprint.CrossBoardKeyHash` is the only thing that may write to it. **The
+  single-writer half is the load-bearing one**: ingest stamps the key on every upsert and
+  `dbadmin backfill-crossboard` stamps it on the corpus that predates the column, so two code paths
+  reach the same rows, and a second spelling of the hash - another separator, another normaliser -
+  splits one cluster in two with nothing failing and no count to compare against. Null propagates
+  rather than hashing the empty string, for the same reason the key itself answers null: a posting
+  with no city is not the same job as another posting with no city.
 - **A missing apply link is recovered from the same job on another board, and says so.**
   `ApplyableRow.ApplyUrlSource` distinguishes `Posting` (published by the board it came from)
   from `MatchedOnAnotherBoard` (an inference) from `BoardPosting` (none known). Roughly 5% of the
@@ -421,6 +457,17 @@ mechanism, and it is derived from the corpus rather than guessed at.
   translates one and materialises the other, so a shared helper would have to be an expression
   tree nobody can read. `The_channel_is_projected_from_the_apply_link_and_filters_before_the_bound`
   is what holds them together, and it has already caught them diverging once.
+- **A static predicate over a column has no SQL, and that decides the shape of two files.**
+  `ParkReasonPolicy.Retryable` is the whole retry policy and EF cannot translate a call to it, so
+  the queue predicate would have to spell the rule out a second time in a `where` clause - the
+  channel filter's problem, survivable only because a test holds the two spellings together. Here
+  it was avoidable, so it was avoided: the policy also exposes `Permanent` and `AwaitingAnswer` as
+  lists **derived from that same function**, and `Contains` over a list becomes an `IN`. One
+  definition, two readers, nothing to drift. `AtsVendorDetector.Detect` has the same limitation
+  with no such escape - it reads a URL rather than compares one - so it runs after materialisation,
+  in the mapping and not in the projection. The consequence is worth knowing before somebody
+  promises it: the queue cannot *filter* on the vendor, and making it able to means persisting the
+  vendor on the posting, not teaching the query to call a function.
 - **A synthetic fixture can be too clean to catch a real bug.** The cross-board duplicate in
   `jobs-sample.csv` carries an identical location string on both rows, so the broken metric
   matched it and its assertion passed for as long as the metric was wrong. The test that catches
@@ -432,6 +479,20 @@ mechanism, and it is derived from the corpus rather than guessed at.
   when the row was written, so backdating a hundred is the same assertion and is capped the same
   way. The idempotency check runs *before* the cap: a client retrying a write it is unsure landed
   must not be refused for a quota that very event already spent.
+- **The burn-down belongs on `list_applyable` and `record_event`, and never on
+  `create_submission`.** The spec put `remaining` on the create call, which cannot work: creating a
+  submission spends no quota - the cap counts `Submitted` events, and a row with no events has
+  claimed nothing - so a client creating twenty rows before recording a single event is handed the
+  same number twenty times. **A figure that does not move while the client works is worse than no
+  figure**, because it reads as twenty applications of headroom and is one. The two places it
+  belongs are the two where a run can still act on it: `list_applyable`, where the batch is chosen
+  before the first tab opens, and `record_event`'s success answer, where a long run watches it
+  fall. Discovering the cap by being refused means discovering it at `record_event`, which by the
+  loop's design runs *after* the browser has sent the form - an application that exists in the
+  world and cannot be recorded, which is the worst state this system has, because every later
+  decision reads the log rather than the world. **It is a plan and never a reservation**: nothing is
+  held, another client sharing the candidate may spend some in between, and the cap in
+  `SubmissionRepository` remains the only thing that enforces.
 - **The digest's apply-link warning is keyed on the route being unknown, not on the URL being
   absent, and the first version had that wrong.** It alarmed at a 98% "board-hosted" share, which
   was right on the day LinkedIn's selector broke and wrong forever afterwards: LinkedIn publishes
