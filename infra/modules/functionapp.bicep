@@ -19,6 +19,9 @@ param landingStorageAccountName string
 
 @description('Container the nightly generation pass writes rendered CVs and cover letters to.')
 param applicationPacksContainerName string = 'application-packs'
+
+@description('Container the candidate-authored CV variants are rendered into.')
+param profileCvsContainerName string = 'profile-cvs'
 param landingContainerName string
 
 @description('Container the curated Parquet export writes into.')
@@ -227,6 +230,10 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'ApplicationPacks__ContainerName'
           value: applicationPacksContainerName
+        }
+        {
+          name: 'ApplicationPacks__VariantContainerName'
+          value: profileCvsContainerName
         }
         {
           name: 'ManagedIdentityClientId'

@@ -13,7 +13,16 @@ namespace JobPlatform.Core.Applications;
 /// </remarks>
 public enum PackDocument
 {
-    /// <summary>The tailored CV. The file an upload box asks for by that name.</summary>
+    /// <summary>The CV. The file an upload box asks for by that name.</summary>
+    /// <remarks>
+    /// <b>One member, though a CV now arrives two ways.</b> It used to be written per posting and
+    /// is now chosen from a library the candidate wrote, and there was a case for a second member
+    /// saying which. There must not be one: this enum decides what a file is <i>called</i>, the
+    /// employer is handed the same document either way, and a member that could be spelled into a
+    /// filename is a member that eventually is. Which CV was sent is
+    /// <c>Submissions.CvVariantId</c> - a fact this tenant keeps rather than one an employer is
+    /// given.
+    /// </remarks>
     CurriculumVitae = 1,
 
     /// <summary>The covering letter.</summary>
@@ -44,9 +53,19 @@ public enum PackFormat
 /// <remarks>
 /// <b>The filename is a product surface, not an implementation detail.</b> It ends up in a
 /// recruiter's file list beside forty others called <c>cv.pdf</c>, in the candidate's downloads
-/// folder, and in whatever the ATS renames it to. <c>Pablo_De_Groot_CV.pdf</c> costs nothing to
-/// produce and is the difference between a document that can be found again and one that cannot,
-/// so the name is derived from the person rather than from the row's identifiers.
+/// folder, and in whatever the ATS renames it to. <c>Pablo_De_Groot_Curriculum_Vitae.pdf</c>
+/// costs nothing to produce and is the difference between a document that can be found again and
+/// one that cannot, so the name is derived from the person rather than from the row's
+/// identifiers.
+///
+/// <b>And it is one name whatever the candidate chose to send.</b> The CV is chosen from a
+/// library of variants somebody wrote - "Backend .NET", "AI &amp; data platforms" - and the
+/// filename is the one place those labels could escape.
+/// <c>Pablo_De_Groot_AI_Engineer_CV.pdf</c> tells an employer that a different CV is kept for
+/// other roles: true, none of their business, and read off the file list before anybody opens the
+/// document. Neither <see cref="FileName"/> nor <see cref="VariantBlobPath"/> has a parameter a
+/// label could be passed in, which is what makes that a property of this file rather than a rule
+/// somebody has to remember.
 ///
 /// <b>Pure, and in Core, because the two directions have to agree.</b>
 /// <see cref="BlobPath"/> writes a reference into <c>ApplicationDocuments</c> and
@@ -74,6 +93,12 @@ public static class ApplicationPackFile
     /// truncating - the one place in this system where an over-long value is refused instead of
     /// trimmed, because a truncated pointer loses the file it points at. A path this class builds
     /// must never be one that repository would reject.
+    ///
+    /// Renaming the CV's stem spent fourteen more characters of that budget and the headroom
+    /// swallowed it whole - sixty characters of name, two nineteen-digit ids and a container name
+    /// still come to under two hundred against a ceiling of 1,024. Worth doing the arithmetic
+    /// rather than assuming it, because nothing about a stem rename looks like it could reach a
+    /// column, and the failure it would cause is a row pointing at a file nobody can fetch.
     /// </remarks>
     public const int MaxNameChars = 60;
 
@@ -90,10 +115,48 @@ public static class ApplicationPackFile
     /// </remarks>
     private static readonly char[] Apostrophes = [(char)0x0027, (char)0x2019, (char)0x02bc];
 
+    /// <summary>The CV's stem. The same one for every variant, which is the point of it.</summary>
+    /// <remarks>
+    /// <b>Written out rather than abbreviated, because <c>_CV</c> is a stem people extend.</b>
+    /// Two letters read as the start of a name - the shape somebody reaches for the moment they
+    /// keep more than one CV, and <c>Pablo_De_Groot_AI_Engineer_CV.pdf</c> is what comes out of
+    /// it. The full title of the document reads as the whole name and has nowhere to hang a role,
+    /// and it is what an upload box asks for by name.
+    ///
+    /// Private, deliberately. Exposing it would let a caller build a filename by concatenation,
+    /// and a caller building filenames is exactly how a variant's label reaches an employer.
+    /// <see cref="IsStableCvName"/> is the read-only half, for asking whether a path this class
+    /// did not build carries the stable name.
+    /// </remarks>
+    private const string CurriculumVitaeStem = "Curriculum_Vitae";
+
+    /// <summary>The covering letter's stem. Still written per posting, so still per document.</summary>
+    private const string CoverLetterStem = "Cover_Letter";
+
+    /// <summary>What a CV is called with no name in front of it, one per format.</summary>
+    /// <remarks>
+    /// Derived from <see cref="Extension"/> over the enum rather than written out, for the reason
+    /// <c>ParkReasonPolicy.Permanent</c> is derived from its own decision function: a second
+    /// spelling of a rule is a spelling free to go stale, and a format added without a line here
+    /// would make <see cref="IsStableCvName"/> quietly answer false for a file this class had just
+    /// produced.
+    /// </remarks>
+    private static readonly string[] StableCvNames =
+        [.. Enum.GetValues<PackFormat>().Select(format => $"{CurriculumVitaeStem}.{Extension(format)}")];
+
     /// <summary>
-    /// What one rendered document is called: <c>Firstname_Lastname_CV.pdf</c>.
+    /// What one rendered document is called: <c>Firstname_Lastname_Curriculum_Vitae.pdf</c>.
     /// </summary>
     /// <remarks>
+    /// <b>Every application sends the same CV filename, whichever variant was chosen, and the
+    /// reason is not tidiness.</b> A library of variants is a private fact about how somebody
+    /// looks for work; <c>Pablo_De_Groot_AI_Engineer_CV.pdf</c> hands an employer the inference
+    /// that a different CV exists for other roles, and hands it over in the file list, before
+    /// anybody has opened the document or read a word the candidate wrote. It is a true fact and
+    /// none of their business, which is the pair that makes it worth engineering against rather
+    /// than merely tidying: nothing in the loop is choosing to disclose it, so nothing in the
+    /// loop would notice it being disclosed.
+    ///
     /// <b>Underscores rather than spaces, and one separator rather than several.</b> The name
     /// travels through a URL, a shell somewhere, an email attachment and an ATS's own file
     /// handling; a space survives all of them in principle and is mangled by at least one of them
@@ -102,10 +165,18 @@ public static class ApplicationPackFile
     /// the name that produced it, and two means guessing which was which.
     ///
     /// <b>The fallback is genuinely generic, and that is the honest answer.</b> A profile with no
-    /// name gives <c>CV.pdf</c>, the very filename this exists to avoid. There is nothing else on
-    /// the profile that identifies the person without disclosing something - an email address in a
-    /// filename is worse, not better - so the fix is a name on the profile rather than a cleverer
-    /// default here, and the generic name is what says so.
+    /// name gives <c>Curriculum_Vitae.pdf</c>, the very filename this exists to avoid. There is
+    /// nothing else on the profile that identifies the person without disclosing something - an
+    /// email address in a filename is worse, not better - so the fix is a name on the profile
+    /// rather than a cleverer default here, and the generic name is what says so. It is still
+    /// <i>one</i> name across the whole library, which is the property that matters most here:
+    /// an anonymous file is a poor CV and a file called after a role is a disclosure.
+    ///
+    /// <b>Nothing about which document was chosen reaches this.</b> The signature takes a person,
+    /// a kind and a format, and that is the entire vocabulary a filename is built from - no
+    /// variant, no label, no posting. A caller wanting to say which CV was sent has
+    /// <c>Submissions.CvVariantId</c>, which is a row in this tenant rather than a string in a
+    /// stranger's file list.
     /// </remarks>
     /// <param name="candidateName">The candidate's own name, as they wrote it. Blank is allowed.</param>
     /// <param name="document">Which document this is.</param>
@@ -113,7 +184,7 @@ public static class ApplicationPackFile
     public static string FileName(string? candidateName, PackDocument document, PackFormat format)
     {
         var stem = Sanitise(candidateName);
-        var kind = document == PackDocument.CoverLetter ? "Cover_Letter" : "CV";
+        var kind = document == PackDocument.CoverLetter ? CoverLetterStem : CurriculumVitaeStem;
         var extension = Extension(format);
 
         return stem.Length == 0
@@ -199,6 +270,113 @@ public static class ApplicationPackFile
         return string.Create(
             CultureInfo.InvariantCulture,
             $"{containerName.Trim().Trim('/')}/{profileId}/{documentId}/{fileName}");
+    }
+
+    /// <summary>
+    /// Where one rendered CV variant is kept: <c>{container}/{profile}/{variant}/{stable name}</c>.
+    /// </summary>
+    /// <remarks>
+    /// <b>The filename is built here rather than passed in, and that is the whole reason this
+    /// exists beside <see cref="BlobPath"/>.</b> The two produce the same shape, so a second
+    /// function buys nothing structurally; what it buys is a signature with nowhere to put a
+    /// variant's label. The apply loop fetches a signed URL and hands a local path to a browser's
+    /// file input, and a client that saves the URL by its path and ignores
+    /// <c>Content-Disposition</c> uploads the last segment verbatim - so the header is a request
+    /// and the path is the guarantee. A caller that could pass a filename is one interpolation
+    /// away from putting <c>Pablo_De_Groot_AI_Engineer_CV.pdf</c> in an employer's file list, and
+    /// there is no argument here to put it in.
+    ///
+    /// <b>The variant id is a directory and never part of the name.</b> Two variants of one
+    /// profile therefore differ in their path and not in their file, which is exactly what the
+    /// design asks for: two applications made with two different CVs upload files whose names are
+    /// identical. The id still has to be in the path - re-rendering a variant must overwrite the
+    /// file it replaces, and one directory per variant is what makes the stored hash describe the
+    /// bytes actually at that path - so the choice is <i>where</i> it appears, not whether.
+    ///
+    /// <b>Deliberately the same segment count as <see cref="BlobPath"/></b>, so
+    /// <see cref="TryBlobName"/> reads a variant reference back with no new branch and no second
+    /// convention to keep in step. One shape, two writers, one inverse.
+    ///
+    /// <b>Variants want their own container, and that is a constraint rather than a preference.</b>
+    /// A document id and a variant id are independent identity spaces that both start at one, so
+    /// document 34 and variant 34 belonging to one profile would address the same directory - and
+    /// now that a chosen CV and a generated one spell the filename the same way, the same file.
+    /// Nothing here can detect that, because a container name is a string this class is handed;
+    /// the caller keeps them apart by passing <c>profile-cvs</c> for variants and
+    /// <c>application-packs</c> for per-posting documents.
+    /// </remarks>
+    /// <param name="containerName">The container variants are kept in. Not the pack container - see the remarks.</param>
+    /// <param name="profileId">Whose library this is. First, so a prefix listing is per candidate.</param>
+    /// <param name="variantId">Which variant. A directory, never part of the filename.</param>
+    /// <param name="candidateName">The candidate's own name, as they wrote it. Blank is allowed.</param>
+    /// <param name="format">What it was rendered as.</param>
+    public static string VariantBlobPath(
+        string containerName,
+        long profileId,
+        long variantId,
+        string? candidateName,
+        PackFormat format)
+        => BlobPath(
+            containerName,
+            profileId,
+            variantId,
+            FileName(candidateName, PackDocument.CurriculumVitae, format));
+
+    /// <summary>
+    /// Whether a reference ends in the one filename every CV is sent under.
+    /// </summary>
+    /// <remarks>
+    /// <b>The read-only half of the rule, for the paths this class did not build.</b>
+    /// <see cref="VariantBlobPath"/> makes a leaking name unreachable for anything written from
+    /// now on; it says nothing about a row written before the rename, which carries
+    /// <c>..._CV.pdf</c>, or about a path assembled by hand somewhere. The store already asserts
+    /// one invariant it believes unreachable - that <see cref="BlobPath"/> and
+    /// <see cref="TryBlobName"/> are inverses - and this is the second of that kind, asked where
+    /// the bytes and the name are both in scope.
+    ///
+    /// <b>It reads the last segment and nothing above it</b>, because the last segment is what a
+    /// client that ignores <c>Content-Disposition</c> saves the file as, and that is the entire
+    /// exposure: the directories are never seen by anyone the file is sent to.
+    ///
+    /// <b>False for a covering letter, and that is not an oversight.</b> The question is whether
+    /// this reference is a CV under the stable name. Answering true for anything this class could
+    /// have produced would turn it into "is a filename we made", which is a weaker claim and not
+    /// the one a caller wants before it hands a URL to a browser.
+    ///
+    /// Compared ordinally, because the name is this class's own output. A case-insensitive match
+    /// would accept a spelling nothing here produces - which is evidence the path came from
+    /// somewhere else, and is precisely what this exists to notice.
+    /// </remarks>
+    public static bool IsStableCvName(string? storedPathOrName)
+    {
+        if (string.IsNullOrWhiteSpace(storedPathOrName))
+        {
+            return false;
+        }
+
+        var trimmed = storedPathOrName.Trim().TrimEnd('/');
+        var lastSlash = trimmed.LastIndexOf('/');
+        var segment = lastSlash < 0 ? trimmed : trimmed[(lastSlash + 1)..];
+
+        foreach (var name in StableCvNames)
+        {
+            if (string.Equals(segment, name, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            // The underscore is checked rather than assumed: without it "MyCurriculum_Vitae.pdf"
+            // passes, and a name that merely ends in the right letters is not the same fact as a
+            // name this class built out of a person and a kind.
+            if (segment.Length > name.Length
+                && segment[segment.Length - name.Length - 1] == '_'
+                && segment.EndsWith(name, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -348,7 +526,7 @@ public static class ApplicationPackFile
             if (ch == '_')
             {
                 // A run of underscores is what a folded-away name leaves behind. Collapsing them
-                // keeps the fallback readable instead of "Li__Wang_CV.pdf".
+                // keeps the fallback readable instead of "Li__Wang_Curriculum_Vitae.pdf".
                 if (!lastWasSeparator)
                 {
                     builder.Append('_');

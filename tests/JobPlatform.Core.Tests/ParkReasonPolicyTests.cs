@@ -44,16 +44,17 @@ public sealed class ParkReasonPolicyTests
         Assert.Equal(6, (int)ParkReason.MissingAnswer);
         Assert.Equal(7, (int)ParkReason.FormError);
         Assert.Equal(8, (int)ParkReason.OutOfQuota);
+        Assert.Equal(9, (int)ParkReason.NoCvVariant);
     }
 
     /// <summary>
-    /// Every reason has a retry decision, and the three groups account for all of them.
+    /// Every reason has a retry decision, and the four groups account for all of them.
     /// </summary>
     /// <remarks>
     /// Written the way <c>The_phase_ordering_the_fold_depends_on_is_the_process_order</c> is,
     /// and for the same reason: the groups are spelled out here rather than read back from the
     /// policy, so this is a check on it rather than a restatement of it. A reason added without
-    /// a decision falls into none of the three lists and the last assertion fails - which is the
+    /// a decision falls into none of the four lists and the last assertion fails - which is the
     /// only thing standing between a new member and the lenient discard arm quietly calling it
     /// retryable.
     /// </remarks>
@@ -75,13 +76,17 @@ public sealed class ParkReasonPolicyTests
         ParkReason[] whenAnswered =
             [ParkReason.MissingAnswer];
 
+        ParkReason[] whenCovered =
+            [ParkReason.NoCvVariant];
+
         Assert.All(permanent, reason => Assert.Equal(ParkRequeue.Never, ParkReasonPolicy.Requeue(reason)));
         Assert.All(nextRun, reason => Assert.Equal(ParkRequeue.NextRun, ParkReasonPolicy.Requeue(reason)));
         Assert.All(whenAnswered, reason => Assert.Equal(ParkRequeue.WhenAnswered, ParkReasonPolicy.Requeue(reason)));
+        Assert.All(whenCovered, reason => Assert.Equal(ParkRequeue.WhenCovered, ParkReasonPolicy.Requeue(reason)));
 
         Assert.Equal(
             Enum.GetValues<ParkReason>().Order(),
-            permanent.Concat(nextRun).Concat(whenAnswered).Order());
+            permanent.Concat(nextRun).Concat(whenAnswered).Concat(whenCovered).Order());
     }
 
     [Theory]
@@ -96,6 +101,12 @@ public sealed class ParkReasonPolicyTests
         // one already applied to on another board.
         Assert.False(ParkReasonPolicy.ReturnsToQueue(reason, answerRecorded: false));
         Assert.False(ParkReasonPolicy.ReturnsToQueue(reason, answerRecorded: true));
+
+        // Nor by a CV written since. A vacancy that has closed does not reopen because the
+        // candidate's library got better, and a job already applied to is still already applied
+        // to.
+        Assert.False(ParkReasonPolicy.ReturnsToQueue(
+            reason, answerRecorded: true, coveringVariantExists: true));
     }
 
     [Theory]
@@ -111,6 +122,12 @@ public sealed class ParkReasonPolicyTests
         Assert.True(ParkReasonPolicy.Retryable(reason));
         Assert.True(ParkReasonPolicy.ReturnsToQueue(reason, answerRecorded: false));
         Assert.True(ParkReasonPolicy.ReturnsToQueue(reason, answerRecorded: true));
+
+        // And it reads the coverage argument no more than the answer one: a captcha waiting on a
+        // CV nobody was asked to write is the same posting stranded for good, by the other
+        // conditional class this time.
+        Assert.True(ParkReasonPolicy.ReturnsToQueue(
+            reason, answerRecorded: false, coveringVariantExists: false));
     }
 
     [Fact]
@@ -123,6 +140,89 @@ public sealed class ParkReasonPolicyTests
 
         Assert.False(ParkReasonPolicy.ReturnsToQueue(ParkReason.MissingAnswer, answerRecorded: false));
         Assert.True(ParkReasonPolicy.ReturnsToQueue(ParkReason.MissingAnswer, answerRecorded: true));
+    }
+
+    /// <summary>
+    /// A posting nothing in the library fits waits for the CV, not for the next run.
+    /// </summary>
+    /// <remarks>
+    /// <b>The whole point of the third requeue class, asserted as the loop it prevents.</b> The
+    /// gap is computed from the posting's requirements and the variants that exist, and a run
+    /// changes neither - so a reason classified <see cref="ParkRequeue.NextRun"/> here would put
+    /// the same posting in front of the same library on every pass, compute the same gap, and park
+    /// it again for ever, at a page load a time. Retryable is still true, because the CV is one
+    /// somebody can write.
+    /// </remarks>
+    [Fact]
+    public void A_posting_no_cv_variant_covers_returns_only_once_one_that_covers_it_is_written()
+    {
+        Assert.True(ParkReasonPolicy.Retryable(ParkReason.NoCvVariant));
+        Assert.NotEqual(ParkRequeue.NextRun, ParkReasonPolicy.Requeue(ParkReason.NoCvVariant));
+
+        Assert.False(ParkReasonPolicy.ReturnsToQueue(
+            ParkReason.NoCvVariant, answerRecorded: false, coveringVariantExists: false));
+
+        Assert.True(ParkReasonPolicy.ReturnsToQueue(
+            ParkReason.NoCvVariant, answerRecorded: false, coveringVariantExists: true));
+    }
+
+    /// <summary>
+    /// Each conditional reason reads its own fact, and neither is released by the other's.
+    /// </summary>
+    /// <remarks>
+    /// The arrangement an <c>or</c> between the two conditions would quietly accept, and the one
+    /// a swapped pair of arguments at a call site produces. Answering an open question does not
+    /// write a CV, and writing a CV does not answer a question - so a posting held for either must
+    /// stay held while only the other has moved.
+    /// </remarks>
+    [Fact]
+    public void Each_conditional_reason_reads_its_own_fact_and_not_the_other_ones()
+    {
+        Assert.False(ParkReasonPolicy.ReturnsToQueue(
+            ParkReason.MissingAnswer, answerRecorded: false, coveringVariantExists: true));
+
+        Assert.False(ParkReasonPolicy.ReturnsToQueue(
+            ParkReason.NoCvVariant, answerRecorded: true, coveringVariantExists: false));
+    }
+
+    /// <summary>
+    /// A missing CV is not filed with the parks that wait on an answer.
+    /// </summary>
+    /// <remarks>
+    /// <b>The cheaper-looking change, and the one that reintroduces the loop.</b> Both reasons
+    /// wait on a fact, so a single conditional class would have taken this one and left every
+    /// caller compiling. It would also be wrong in the queue: a park awaiting an answer names the
+    /// question it waits on, a park for a missing CV raises no question at all - the report is
+    /// aggregated rather than asked per posting - and the predicate's fallback for a park naming
+    /// no question holds the row only while some other advert's question is outstanding. So the
+    /// posting would come back when an unrelated answer arrived, meet the same library, and park
+    /// again.
+    /// </remarks>
+    [Fact]
+    public void A_park_waiting_on_a_cv_is_not_filed_with_the_ones_waiting_on_an_answer()
+    {
+        Assert.DoesNotContain(ParkReason.NoCvVariant, ParkReasonPolicy.AwaitingAnswer);
+        Assert.DoesNotContain(ParkReason.MissingAnswer, ParkReasonPolicy.AwaitingCvVariant);
+
+        Assert.NotEqual(
+            ParkReasonPolicy.Requeue(ParkReason.MissingAnswer),
+            ParkReasonPolicy.Requeue(ParkReason.NoCvVariant));
+    }
+
+    /// <summary>
+    /// An omitted coverage argument leaves the posting parked rather than offering it.
+    /// </summary>
+    /// <remarks>
+    /// The default is the state the row is already in - nothing covered this posting, or it would
+    /// not have been put down - so a caller that has not looked at the library repeats the park
+    /// rather than guessing towards a re-offer. The lenient direction is right for an unrecognised
+    /// stored value, where the alternative is losing a live vacancy silently; it is wrong here,
+    /// where the alternative is the loop.
+    /// </remarks>
+    [Fact]
+    public void An_omitted_coverage_argument_holds_the_posting_rather_than_offering_it()
+    {
+        Assert.False(ParkReasonPolicy.ReturnsToQueue(ParkReason.NoCvVariant, answerRecorded: true));
     }
 
     [Fact]
@@ -140,6 +240,11 @@ public sealed class ParkReasonPolicyTests
         Assert.NotEqual(
             ParkReasonPolicy.Retryable(ParkReason.MissingAnswer),
             ParkReasonPolicy.ReturnsToQueue(ParkReason.MissingAnswer, answerRecorded: false));
+
+        Assert.NotEqual(
+            ParkReasonPolicy.Retryable(ParkReason.NoCvVariant),
+            ParkReasonPolicy.ReturnsToQueue(
+                ParkReason.NoCvVariant, answerRecorded: true, coveringVariantExists: false));
     }
 
     [Fact]
@@ -150,10 +255,12 @@ public sealed class ParkReasonPolicyTests
         // again, and this is what pins that they still name what a reader expects.
         Assert.Equal([ParkReason.Expired, ParkReason.Duplicate], ParkReasonPolicy.Permanent);
         Assert.Equal([ParkReason.MissingAnswer], ParkReasonPolicy.AwaitingAnswer);
+        Assert.Equal([ParkReason.NoCvVariant], ParkReasonPolicy.AwaitingCvVariant);
 
         var elsewhere = Enum.GetValues<ParkReason>()
             .Except(ParkReasonPolicy.Permanent)
-            .Except(ParkReasonPolicy.AwaitingAnswer);
+            .Except(ParkReasonPolicy.AwaitingAnswer)
+            .Except(ParkReasonPolicy.AwaitingCvVariant);
 
         Assert.All(elsewhere, reason => Assert.Equal(ParkRequeue.NextRun, ParkReasonPolicy.Requeue(reason)));
         Assert.NotEmpty(elsewhere);
@@ -174,5 +281,11 @@ public sealed class ParkReasonPolicyTests
         Assert.Equal(ParkRequeue.NextRun, ParkReasonPolicy.Requeue(reason));
         Assert.True(ParkReasonPolicy.Retryable(reason));
         Assert.True(ParkReasonPolicy.ReturnsToQueue(reason, answerRecorded: false));
+
+        // Including with neither conditional fact supplied. The discard arm is the lenient one on
+        // purpose, and adding a conditional class must not quietly move an unknown value into it -
+        // a stored int nobody can name would then be held for a CV nobody knows the shape of.
+        Assert.True(ParkReasonPolicy.ReturnsToQueue(
+            reason, answerRecorded: false, coveringVariantExists: false));
     }
 }

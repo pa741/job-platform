@@ -18,6 +18,9 @@ param scraperConfigContainerName string
 @description('Container the rendered application documents are written to. Scoped write access.')
 param applicationPacksContainerName string
 
+@description('Container the candidate-authored CV variants are rendered into. Scoped write access.')
+param profileCvsContainerName string
+
 // Built-in role ids, hard-coded because they are stable platform GUIDs.
 var storageBlobDataReader = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
 var storageBlobDataContributor = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
@@ -140,6 +143,25 @@ resource applicationPacksContainer 'Microsoft.Storage/storageAccounts/blobServic
 resource applicationPacksBlobWrite 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: applicationPacksContainer
   name: guid(applicationPacksContainer.id, ingestPrincipalId, storageBlobDataContributor)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributor)
+    principalId: ingestPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// And the CV library, on the same terms as the packs container above.
+//
+// Its own grant rather than a wider one covering both, because they are separate containers for a
+// reason: a variant outlives every application that chose it, and a scope that spans the two would
+// let a fault in the per-application path reach the artefacts an employer was actually sent.
+resource profileCvsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' existing = {
+  name: '${landingStorageAccountName}/default/${profileCvsContainerName}'
+}
+
+resource profileCvsBlobWrite 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: profileCvsContainer
+  name: guid(profileCvsContainer.id, ingestPrincipalId, storageBlobDataContributor)
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributor)
     principalId: ingestPrincipalId

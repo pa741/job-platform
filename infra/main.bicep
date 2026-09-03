@@ -35,6 +35,9 @@ param scraperConfigContainerName string = 'scraper-config'
 @description('Container holding rendered CVs and cover letters, handed out as short-lived signed URLs.')
 param applicationPacksContainerName string = 'application-packs'
 
+@description('Container holding the candidate-authored CV variants, rendered to PDF and DOCX.')
+param profileCvsContainerName string = 'profile-cvs'
+
 @description('Object id of the Microsoft Entra principal to make SQL admin and Cosmos data reader (i.e. you).')
 param administratorObjectId string
 
@@ -200,6 +203,25 @@ resource applicationPacksContainer 'Microsoft.Storage/storageAccounts/blobServic
   }
 }
 
+// The candidate's own CV library, rendered.
+//
+// A fifth container rather than a prefix under application-packs, and the reason is a collision
+// rather than tidiness: a document id and a variant id are independent identity spaces that both
+// start at one, so document 34 and variant 34 for one candidate would address the same directory -
+// and since a chosen CV and a generated one now spell the filename identically, the same blob. One
+// would silently overwrite the other, and the stored sha256 would then describe bytes nobody sent.
+//
+// It also separates two lifetimes. A rendered pack belongs to one application and could be expired;
+// a variant is the artefact that answers "what did we send them" about every application that chose
+// it, and must outlive all of them.
+resource profileCvsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: landingBlobService
+  name: profileCvsContainerName
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
 // Events Event Grid could not deliver land here rather than being dropped silently.
 resource deadLetterContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
   parent: landingBlobService
@@ -292,6 +314,7 @@ module functionApp 'modules/functionapp.bicep' = {
     landingContainerName: landingContainerName
     curatedContainerName: curatedBlobContainer.name
     applicationPacksContainerName: applicationPacksContainer.name
+    profileCvsContainerName: profileCvsContainer.name
     cosmosAccountEndpoint: cosmos.outputs.accountEndpoint
     cosmosDatabaseName: cosmos.outputs.databaseName
     sqlConnectionString: sql.outputs.connectionString
@@ -381,6 +404,7 @@ module containerApp 'modules/containerapp.bicep' = {
     landingStorageAccountName: landingStorageAccountName
     scraperConfigContainerName: scraperConfigContainer.name
     applicationPacksContainerName: applicationPacksContainer.name
+    profileCvsContainerName: profileCvsContainer.name
   }
 }
 
@@ -394,6 +418,7 @@ module rbac 'modules/rbac.bicep' = {
     curatedContainerName: curatedBlobContainer.name
     scraperConfigContainerName: scraperConfigContainer.name
     applicationPacksContainerName: applicationPacksContainer.name
+    profileCvsContainerName: profileCvsContainer.name
   }
 }
 
