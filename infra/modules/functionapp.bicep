@@ -1,4 +1,4 @@
-@description('Azure region.')
+﻿@description('Azure region.')
 param location string
 
 @description('Resource name prefix.')
@@ -16,6 +16,9 @@ param identityPrincipalId string
 param applicationInsightsConnectionString string
 
 param landingStorageAccountName string
+
+@description('Container the nightly generation pass writes rendered CVs and cover letters to.')
+param applicationPacksContainerName string = 'application-packs'
 param landingContainerName string
 
 @description('Container the curated Parquet export writes into.')
@@ -211,6 +214,19 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'CuratedContainerName'
           value: curatedContainerName
+        }
+        {
+          // The nightly generation pass renders the PDF and DOCX an applicant tracking system
+          // takes as an upload, and without these two it silently does not: the pack store
+          // registers nothing when no service URI is configured, the pass takes its degraded
+          // branch, and it stores markdown and reports success. It runs unattended at night, so
+          // that is the one path with no witness.
+          name: 'ApplicationPacks__serviceUri'
+          value: 'https://${landingStorageAccountName}.blob.${environment().suffixes.storage}'
+        }
+        {
+          name: 'ApplicationPacks__ContainerName'
+          value: applicationPacksContainerName
         }
         {
           name: 'ManagedIdentityClientId'

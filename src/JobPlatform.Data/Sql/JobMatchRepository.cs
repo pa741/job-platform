@@ -912,17 +912,29 @@ public sealed class JobMatchRepository(JobsDbContext db)
                 // parked for an answer and that an answer is outstanding somewhere, never that
                 // the outstanding question names this posting. Nesting them again is the loop -
                 // see the remarks.
-                && !(db.Submissions.Any(s => s.ProfileId == profileId
-                        && s.PostingId == m.PostingId
-                        && s.ParkedReason != null
-                        && s.UnparkedAtUtc == null
-                        && ParkReasonPolicy.AwaitingAnswer.Contains(s.ParkedReason.Value))
-                    // Raised by an advert, never from the dashboard. A note somebody wrote
-                    // themselves is not what any application is waiting for, and reading it as
-                    // one would empty this queue every time the dashboard was used.
-                    && db.OpenQuestions.Any(q => q.ProfileId == profileId
-                        && q.PostingId != null
-                        && q.AnsweredAtUtc == null)));
+                // A park waiting on an answer, while THAT answer is still missing. The park
+                // names the question it is waiting on, which is the only thing that can say so:
+                // one question serves every advert that asked it, and the question row keeps the
+                // first advert's id, so a clause matching on that id never held the second - it
+                // was offered again, met the same form, and was parked again for ever.
+                //
+                // The fallback covers a park that named no question - a row written before this
+                // column, or a client that parked for a missing answer without saying which. It
+                // holds while any advert-raised question is outstanding, which is coarse and
+                // deliberately so: it can delay an advert, where offering it cannot stop.
+                // Dashboard-raised questions are excluded from that fallback, because a note
+                // somebody wrote themselves is not what an application is waiting for.
+                && !db.Submissions.Any(s => s.ProfileId == profileId
+                    && s.PostingId == m.PostingId
+                    && s.ParkedReason != null
+                    && s.UnparkedAtUtc == null
+                    && ParkReasonPolicy.AwaitingAnswer.Contains(s.ParkedReason.Value)
+                    && (s.AwaitingQuestionId != null
+                        ? db.OpenQuestions.Any(q => q.Id == s.AwaitingQuestionId
+                            && q.AnsweredAtUtc == null)
+                        : db.OpenQuestions.Any(q => q.ProfileId == profileId
+                            && q.PostingId != null
+                            && q.AnsweredAtUtc == null))));
 
         if (query.Since is { } since)
         {

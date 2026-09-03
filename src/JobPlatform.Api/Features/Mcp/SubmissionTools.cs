@@ -1456,7 +1456,7 @@ public sealed class SubmissionTools(
         }
 
         var (row, created) = await submissions.ParkAsync(
-            profileId.Value, postingId, parsed, now, target.ApplyUrl, runId, ct);
+            profileId.Value, postingId, parsed, now, target.ApplyUrl, runId, question?.Id, ct);
 
         var requeue = ParkReasonPolicy.Requeue(parsed);
 

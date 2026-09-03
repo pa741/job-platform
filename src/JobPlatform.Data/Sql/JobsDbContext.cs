@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using JobPlatform.Core.Submissions;
 using JobPlatform.Data.Sql.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -642,6 +642,17 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
             entity.HasOne(e => e.Run)
                 .WithMany()
                 .HasForeignKey(e => e.RunId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // The question an awaiting-answer park is waiting on. No navigation property, so the
+            // queue reads it as a plain id and no read can drag a question across by accident.
+            // Restrict for the reason above: the profile already cascades into both tables, and
+            // SQL Server refuses two cascade paths into one.
+            entity.HasIndex(e => e.AwaitingQuestionId);
+
+            entity.HasOne<OpenQuestionEntity>()
+                .WithMany()
+                .HasForeignKey(e => e.AwaitingQuestionId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
 

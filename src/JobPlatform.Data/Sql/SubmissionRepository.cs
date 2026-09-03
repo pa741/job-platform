@@ -500,6 +500,7 @@ public sealed class SubmissionRepository(JobsDbContext db)
         DateTimeOffset now,
         string? applyUrl = null,
         long? runId = null,
+        long? awaitingQuestionId = null,
         CancellationToken ct = default)
     {
         // AsTracking, explicitly, because this row is about to be mutated. It reads as
@@ -534,6 +535,18 @@ public sealed class SubmissionRepository(JobsDbContext db)
             entity.ParkedAtUtc = now;
             entity.UnparkedAtUtc = null;
         }
+
+        // Written outside the idempotence check above, which compares the reason and would call a
+        // re-park on the same reason a no-op. It is not one when the question has moved: an advert
+        // parked on a question that has since been answered, met again and parked on a second
+        // question, is waiting on the second - and leaving the first there would hold it against
+        // an answer that had already arrived, which is the loop this column ends.
+        //
+        // Only for a reason that waits on one, so a captcha cannot inherit a question from an
+        // earlier park of the same advert.
+        entity.AwaitingQuestionId = ParkReasonPolicy.AwaitingAnswer.Contains(reason)
+            ? awaitingQuestionId
+            : null;
 
         // A no-op where nothing moved: EF issues no round trip with nothing tracked to write, so
         // the idempotent path costs the read it has already made and nothing else.

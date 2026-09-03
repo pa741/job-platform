@@ -1,4 +1,4 @@
-using JobPlatform.Core.Submissions;
+﻿using JobPlatform.Core.Submissions;
 
 namespace JobPlatform.Data.Sql.Entities;
 
@@ -74,6 +74,29 @@ public sealed class SubmissionEntity
 
     /// <summary>When it was parked. Set with <see cref="ParkedReason"/> and cleared by neither.</summary>
     public DateTimeOffset? ParkedAtUtc { get; set; }
+
+    /// <summary>
+    /// The question this park is waiting on, where it is waiting on one.
+    /// </summary>
+    /// <remarks>
+    /// <b>Written because one question can hold several adverts and only this says which.</b>
+    /// A question is stored once per candidate while it is unanswered - two adverts asking the
+    /// same thing converge on one row, which is right, because a person should be asked once.
+    /// The row keeps the first advert's id, so nothing else records that the second is waiting
+    /// too, and a queue matching on that id offered the second advert again on the next run, met
+    /// the same form, and parked it again for ever.
+    ///
+    /// <b>The alternative, and why it was not kept.</b> Holding every awaiting-answer park while
+    /// <i>any</i> question is outstanding also ends the loop, needs no column, and was what the
+    /// first fix did - but it serialises the whole parked queue behind the slowest question, so
+    /// an advert whose own answer arrived this morning waits on an unrelated one nobody has got
+    /// to. That is the difference between "returns once the answer exists", which is what the
+    /// loop was specified to do, and "returns once every answer exists".
+    ///
+    /// Null for every other reason, and null is not "no question": it means this park was never
+    /// waiting on one, which is the ordinary case for a captcha or a login wall.
+    /// </remarks>
+    public long? AwaitingQuestionId { get; set; }
 
     /// <summary>
     /// When it was let back into the queue. Null while the park stands.

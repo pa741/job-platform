@@ -731,4 +731,105 @@ public sealed class ApplyQueueTests : IDisposable
         Assert.Equal(Now.AddDays(1), row.UnparkedAtUtc);
     }
 
+    /// <summary>
+    /// Answering one advert's question returns that advert, while another waits on its own.
+    /// </summary>
+    /// <remarks>
+    /// <b>The case that separates "returns once the answer exists" from "returns once every
+    /// answer exists".</b> Holding every awaiting-answer park while any question is outstanding
+    /// also ends the loop and needs no column, but it serialises the whole parked queue behind
+    /// the slowest question - so an advert whose own answer arrived this morning waits on an
+    /// unrelated one nobody has got to. The loop was specified to do the first, and the park
+    /// naming its question is what makes the difference expressible.
+    /// </remarks>
+    [Fact]
+    public async Task Answering_one_question_returns_only_the_posting_that_was_waiting_on_it()
+    {
+        var first = await AskWithHashAsync(1, new string('1', 64));
+        var second = await AskWithHashAsync(2, new string('2', 64));
+
+        await ParkAwaitingAsync(1, first);
+        await ParkAwaitingAsync(2, second);
+
+        var parked = Ids(await QueueAsync(new ApplyableQuery { Limit = 50 }));
+
+        Assert.DoesNotContain(1L, parked);
+        Assert.DoesNotContain(2L, parked);
+
+        await AnswerAsync(first);
+
+        var ids = Ids(await QueueAsync(new ApplyableQuery { Limit = 50 }));
+
+        // Posting 1's answer arrived, so posting 1 comes back. Posting 2 is still waiting on a
+        // question of its own, which is a different fact and must not be released by this one.
+        Assert.Contains(1L, ids);
+        Assert.DoesNotContain(2L, ids);
+    }
+
+    /// <summary>Two adverts naming one question are both released by the one answer.</summary>
+    /// <remarks>
+    /// The precise rule has to keep the property the coarse one had: a question is stored once
+    /// however many adverts asked it, so the answer has to let all of them out at once.
+    /// </remarks>
+    [Fact]
+    public async Task Answering_a_question_two_postings_named_returns_both()
+    {
+        var shared = await AskWithHashAsync(1, new string('3', 64));
+
+        await ParkAwaitingAsync(1, shared);
+        await ParkAwaitingAsync(2, shared);
+
+        var parked = Ids(await QueueAsync(new ApplyableQuery { Limit = 50 }));
+
+        Assert.DoesNotContain(1L, parked);
+        Assert.DoesNotContain(2L, parked);
+
+        await AnswerAsync(shared);
+
+        var ids = Ids(await QueueAsync(new ApplyableQuery { Limit = 50 }));
+
+        Assert.Contains(1L, ids);
+        Assert.Contains(2L, ids);
+    }
+
+    private async Task<long> AskWithHashAsync(long postingId, string questionHash)
+    {
+        await using var db = CreateContext();
+
+        var question = new OpenQuestionEntity
+        {
+            ProfileId = ProfileId,
+            PostingId = postingId,
+            QuestionText = $"Question keyed {questionHash[..4]}",
+            QuestionHash = questionHash,
+            AskedAtUtc = Now,
+        };
+
+        db.OpenQuestions.Add(question);
+
+        await db.SaveChangesAsync();
+
+        return question.Id;
+    }
+
+    private async Task ParkAwaitingAsync(long postingId, long questionId)
+    {
+        await using var db = CreateContext();
+
+        await new SubmissionRepository(db).ParkAsync(
+            ProfileId, postingId, ParkReason.MissingAnswer, Now, awaitingQuestionId: questionId);
+    }
+
+    private async Task AnswerAsync(long questionId)
+    {
+        await using var db = CreateContext();
+
+        var question = await db.OpenQuestions.SingleAsync(q => q.Id == questionId);
+
+        question.AnsweredAtUtc = Now;
+
+        await db.SaveChangesAsync();
+    }
+
+
 }

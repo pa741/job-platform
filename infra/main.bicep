@@ -291,6 +291,7 @@ module functionApp 'modules/functionapp.bicep' = {
     landingStorageAccountName: landingStorageAccountName
     landingContainerName: landingContainerName
     curatedContainerName: curatedBlobContainer.name
+    applicationPacksContainerName: applicationPacksContainer.name
     cosmosAccountEndpoint: cosmos.outputs.accountEndpoint
     cosmosDatabaseName: cosmos.outputs.databaseName
     sqlConnectionString: sql.outputs.connectionString
