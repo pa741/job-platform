@@ -52,16 +52,46 @@ public sealed class RateLimitOptions
     public int ReadsPerMinute { get; set; } = 120;
 
     /// <summary>
-    /// What one MCP client may spend a minute.
+    /// What one MCP client may spend a minute, sustained.
     /// </summary>
     /// <remarks>
-    /// An order of magnitude below <see cref="ReadsPerMinute"/>, deliberately. A browser makes a
-    /// burst of calls when a page opens and then stops; an agent can loop. The tools read Azure
-    /// SQL, which is billed on wall-clock time online against a monthly grant one daily ingest
-    /// half-consumes, so a client polling every few seconds would exhaust it and pause the
-    /// database for everything else. Asking "what changed" once a day is what this is sized for.
+    /// An order of magnitude below <see cref="ReadsPerMinute"/>, deliberately, and unchanged when
+    /// the tool surface went from six to fourteen. A browser makes a burst of calls when a page
+    /// opens and then stops; an agent can loop. The tools read Azure SQL, which is billed on
+    /// wall-clock time online against a monthly grant one daily ingest half-consumes, so a client
+    /// polling every few seconds would exhaust it and pause the database for everything else.
+    ///
+    /// <b>The arithmetic still fits, which is why the number did not move.</b> The real bound on
+    /// this loop is <c>SubmissionLimits.MaxSubmittedPerDay</c>, and twenty-five applications at a
+    /// few dozen tool calls each is under a thousand calls in a day - well under one a minute
+    /// averaged over one. What grew is not the total but its <i>shape</i>: an application is a
+    /// pack read, a field resolution per input on somebody's form and then a write, all inside a
+    /// few seconds, followed by minutes of a browser doing something a database never hears
+    /// about. <see cref="McpBurst"/> is what absorbs that, and <c>RateLimitSetup.McpPolicy</c> is
+    /// a token bucket rather than a fixed window for the same reason.
     /// </remarks>
     public int McpRequestsPerMinute { get; set; } = 20;
+
+    /// <summary>
+    /// How many calls one MCP client may make back to back before the sustained rate binds.
+    /// </summary>
+    /// <remarks>
+    /// <b>Sized to one application rather than to a minute.</b> Forty covers the handshake a
+    /// stateless transport repeats per connection, the pack read, thirty-odd field resolutions -
+    /// <c>SubmissionLimits.MaxSubmittedFieldCount</c> calls a hundred fields "well above the
+    /// longest real application form" - and the submission and its event at the end. Past that a
+    /// client is filling in a form larger than any this corpus has and can afford to wait a few
+    /// seconds a field.
+    ///
+    /// <b>What this exists to prevent is a refusal landing between the send and the record.</b>
+    /// The loop's writes come last: <c>create_submission</c> and <c>record_event</c> run
+    /// <i>after</i> the browser has posted the form, so a limiter that refuses the twenty-first
+    /// call of a form leaves an application that exists in the world and not in the log - the one
+    /// state this pipeline cannot recover from, because every later decision reads the log rather
+    /// than the world. A retry fixes it, and under a fixed window that retry waits for a window
+    /// boundary it cannot see.
+    /// </remarks>
+    public int McpBurst { get; set; } = 40;
 
     public bool Enabled { get; set; } = true;
 }

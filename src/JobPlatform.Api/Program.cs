@@ -1,9 +1,12 @@
 using Azure.Identity;
 using Azure.Storage.Blobs;
 using JobPlatform.Ai;
+using JobPlatform.Ai.Applications;
 using JobPlatform.Api.Configuration;
 using JobPlatform.Core.Ai;
+using JobPlatform.Core.Submissions;
 using JobPlatform.Api.Endpoints;
+using JobPlatform.Api.Features.Applications;
 using JobPlatform.Api.Features.Mcp;
 using JobPlatform.Api.Features.Searches;
 using JobPlatform.Api.Infrastructure;
@@ -99,6 +102,14 @@ builder.Services.AddScoped<ScraperSearchRepository>();
 builder.Services.AddScoped<JobMatchRepository>();
 builder.Services.AddScoped<SubmissionRepository>();
 
+// The apply loop's three stores, scoped beside the submission one they are read with. All four
+// are read in a single tool call - the queue, the answers a form is filled from, the questions
+// waiting on a person, and the run doing it - so one DbContext per request serves all of them
+// and a singleton anywhere here would be a DbContext shared across concurrent requests.
+builder.Services.AddScoped<FormAnswerRepository>();
+builder.Services.AddScoped<OpenQuestionRepository>();
+builder.Services.AddScoped<RunRepository>();
+
 // The realtime feed. Registers nothing when no endpoint is configured, so every consumer
 // resolves IRealtimeFeed as nullable and the dashboard falls back to polling.
 builder.Services.AddRealtimeFeed(builder.Configuration);
@@ -115,9 +126,38 @@ builder.Services.AddScoped<IMetricsSource>(sp => sp.GetRequiredService<MetricsQu
 
 builder.Services.AddAiProvider(configuration);
 
+// Registered whether or not that call found a provider, which is the one place in this file
+// where an AI service is unconditional. Three of the resolver's four stages are lookups over the
+// allowlist, over what the candidate has already typed and over what the same question resolved
+// to before; folding it into AddAiProvider would take those down with the model, so a missing
+// environment variable would stop a candidate's own stored answers from being found. The fourth
+// stage abstains when no Kernel was registered - see FormFieldResolverRegistration.
+//
+// Registered scoped here rather than left to that call's singleton, which is the substitution its
+// TryAdd exists to allow. The resolver takes an optional IAiCallLog so a resolution that consults
+// the model leaves a record like every other call site, and this host registers that log scoped -
+// so a singleton resolver is a singleton consuming a scoped service. Under Development's
+// ValidateOnBuild the provider then refuses to build at all, and in production, where that
+// validation is off, it would capture one request's log for the life of the process. Nothing in
+// the resolver is worth keeping between requests: the Kernel it calls through is the singleton,
+// and it is injected either way.
+builder.Services.AddScoped<IFormFieldResolver, FormFieldResolver>();
+builder.Services.AddFormFieldResolver();
+
 // The agent surface. An MCP server over the repositories above, behind the same Entra
 // validation and the same authorisation boundary - see Features/Mcp.
 builder.Services.AddMcpFeature();
+
+// ---------------------------------------------------------------------------
+// Rendered application documents, in a container of their own.
+// ---------------------------------------------------------------------------
+
+// Registers nothing when ApplicationPacks:serviceUri is absent or will not parse, exactly as the
+// scraper publisher below and the realtime feed above do: generation still writes the markdown,
+// which is the record, and the pack says no file is available rather than the API refusing to
+// start over a container it does not need. The section is bound inside that call rather than
+// here, so a deployment with no storage carries no half-configured options either.
+builder.Services.AddApplicationPacks(configuration);
 
 // ---------------------------------------------------------------------------
 // The scraper's configuration, published to a blob it reads.

@@ -15,8 +15,30 @@ public static class RateLimitSetup
     /// <b>Not <see cref="ReadPolicy"/>, and that is the point.</b> A client polls differently
     /// from a browser and must not be able to exhaust the budget the dashboard shares - the
     /// dashboard is what a person uses to find out that something is wrong.
+    ///
+    /// <b>A token bucket rather than a fixed window, which is the one thing the apply loop
+    /// changed here.</b> The budget did not move - see <c>RateLimitOptions.McpRequestsPerMinute</c>
+    /// for the arithmetic that says it still fits - but a surface of fourteen tools driven by a
+    /// browser filling in forms spends that budget in bursts rather than evenly, and a fixed
+    /// window turns a burst into a refusal at a boundary the client cannot see. Refusing the
+    /// twenty-first call of one application is not a slowed-down client: the writes come last, so
+    /// it leaves the application sent and unrecorded, and the wait before a retry can be almost a
+    /// whole window. A bucket refuses the same number of calls over any minute and refills
+    /// continuously, so the retry is seconds away instead of a boundary away.
     /// </remarks>
     public const string McpPolicy = "mcp";
+
+    /// <summary>
+    /// How often the MCP bucket refills: a tenth of a minute.
+    /// </summary>
+    /// <remarks>
+    /// Short deliberately. The period is the worst wait a refused client faces, and the call most
+    /// likely to be refused is the one recording that a form has already gone. A minute-long
+    /// period would spend the same permits and make that wait sixty times longer for nothing.
+    /// A configured rate that is not a multiple of ten rounds down to the nearest one - a permit
+    /// or two a minute, and not worth a second setting to express exactly.
+    /// </remarks>
+    private static readonly TimeSpan McpReplenishment = TimeSpan.FromSeconds(6);
 
     /// <summary>
     /// Per-caller rate limits.
@@ -53,12 +75,23 @@ public static class RateLimitSetup
             // one person's agent and one person's browser each get their own budget rather than
             // competing for one.
             limiter.AddPolicy(McpPolicy, context =>
-                RateLimitPartition.GetFixedWindowLimiter(
+                RateLimitPartition.GetTokenBucketLimiter(
                     $"mcp:{PartitionKey(context)}",
-                    _ => new FixedWindowRateLimiterOptions
+                    _ => new TokenBucketRateLimiterOptions
                     {
-                        PermitLimit = options.McpRequestsPerMinute,
-                        Window = TimeSpan.FromMinutes(1),
+                        // The burst, not the rate. A full bucket is one application's worth of
+                        // calls; what refills it is the line below, which is the sustained
+                        // budget and the number the SQL grant is actually protected by.
+                        TokenLimit = Math.Max(options.McpBurst, options.McpRequestsPerMinute),
+                        TokensPerPeriod = Math.Max(1, options.McpRequestsPerMinute / 10),
+                        ReplenishmentPeriod = McpReplenishment,
+
+                        // Refused rather than queued, as the fixed window this replaced was. A
+                        // queued tool call is a client that has stopped and cannot say why; a 429
+                        // is something an agent can read, wait on and retry with the same
+                        // idempotency key.
+                        QueueLimit = 0,
+                        AutoReplenishment = true,
                     }));
         });
     }

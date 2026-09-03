@@ -1,4 +1,3 @@
-using Markdig;
 using Markdig.Extensions.Tables;
 using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
@@ -27,19 +26,6 @@ namespace JobPlatform.Documents;
 /// </remarks>
 public static class MarkdownPdfRenderer
 {
-    /// <summary>
-    /// The pipeline the markdown is parsed with.
-    /// </summary>
-    /// <remarks>
-    /// Deliberately close to plain CommonMark. Every extension enabled is a construct the
-    /// renderer below then has to handle, and a CV needs headings, emphasis, lists and links -
-    /// not footnotes, task lists or custom containers. The prompt asks for the same subset, so
-    /// this is the second half of one agreement rather than an independent guess.
-    /// </remarks>
-    private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder()
-        .UseAutoLinks()
-        .Build();
-
     /// <summary>Body text, in points. Small enough that a CV fits, large enough to read.</summary>
     private const double BodySize = 10;
 
@@ -62,7 +48,9 @@ public static class MarkdownPdfRenderer
         section.PageSetup.LeftMargin = Unit.FromCentimeter(2.0);
         section.PageSetup.RightMargin = Unit.FromCentimeter(2.0);
 
-        var parsed = Markdown.Parse(markdown ?? string.Empty, Pipeline);
+        // The pipeline lives in MarkdownAst because the DOCX renderer walks the same tree, and
+        // two builders would eventually disagree about what the markdown means.
+        var parsed = MarkdownAst.Parse(markdown);
 
         foreach (var block in parsed)
         {

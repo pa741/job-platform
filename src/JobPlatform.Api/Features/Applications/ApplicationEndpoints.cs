@@ -51,6 +51,21 @@ public sealed record ApplicationDetail : ApplicationSummary
 /// writer is handed the gap list as the set of claims it must not make, and a document written
 /// without one has nothing stopping it from inventing the very skills the candidate lacks.
 /// Refusing to generate for an unscored posting is what keeps that guarantee real.
+///
+/// <b>Generation now renders as well as writes, and rendering is deliberately the part allowed
+/// to fail.</b> The model call took tens of seconds and cost real money; a MigraDoc page and an
+/// OOXML package take milliseconds and cost nothing, and losing one costs a re-render rather
+/// than a regeneration. So the draft is stored first, the files are rendered and uploaded
+/// afterwards, and whatever survived is recorded on the row - the pack then reports what it has.
+/// Failing the request because a container's role assignment has not finished propagating would
+/// throw away the expensive half to protect the cheap one. It is the argument
+/// <c>ProfileEndpoints.ExtractAsync</c> already makes about a save whose extraction failed.
+///
+/// <b>The download routes still render per request, and that is not a duplicate.</b> They serve
+/// a person clicking a link in the dashboard, where the markdown is the record and a layout
+/// change should reach documents already generated. What is stored serves the other consumer: an
+/// agent needs a URL an employer's upload box can fetch, and that cannot be a route behind this
+/// API's bearer token.
 /// </remarks>
 public sealed class ApplicationEndpoints : IEndpointGroup
 {
@@ -134,8 +149,15 @@ public sealed class ApplicationEndpoints : IEndpointGroup
         [FromServices] JobMatchRepository matches,
         [FromServices] ApplicationDocumentRepository documents,
         [FromServices] TimeProvider time,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct,
-        [FromServices] IApplicationWriter? writer = null)
+        [FromServices] IApplicationWriter? writer = null,
+
+        // Nullable for the reason the writer above is: a deployment with no storage configured
+        // registers no store, and that is a capability it does not have rather than a dependency
+        // it is missing. Generation then produces markdown and no files, which is what the pack
+        // already says when a posting's documents were never written.
+        [FromServices] IApplicationPackStore? packs = null)
     {
         if (!user.TryGetSubjectId(out var subjectId, out var error))
         {
@@ -185,7 +207,177 @@ public sealed class ApplicationEndpoints : IEndpointGroup
         var stored = await documents.AddAsync(
             view.Id, postingId, draft, request?.Instructions, time.GetUtcNow(), ct);
 
+        // After the row exists, never before it. A stored path names the document it was rendered
+        // from, so there is nothing to name until the draft has an id - and a file uploaded
+        // against an id that never landed is a blob nothing will ever look for again.
+        await RenderAsync(
+            packs,
+            documents,
+            view.Id,
+            view.Profile.FullName,
+            stored,
+            loggerFactory.CreateLogger<ApplicationEndpoints>(),
+            ct);
+
         return TypedResults.Created($"/api/v1/applications/{stored.Id}", ToDetail(stored));
+    }
+
+    /// <summary>
+    /// Renders this draft, stores what rendered, and records where it went.
+    /// </summary>
+    /// <remarks>
+    /// <b>Every step is allowed to fail on its own and none of them may fail the caller.</b> The
+    /// PDF, the DOCX and the cover letter are three independent renders and three independent
+    /// uploads, so the ordinary partial outcome - a backend that threw on one document, a role
+    /// assignment that has not propagated yet - is recorded as what it is rather than discarded
+    /// wholesale. <c>RenderedDocuments</c> reads a null member as "nothing to say about this
+    /// file" and never as "clear the one on the row", which is what makes recording a partial
+    /// result safe to do repeatedly.
+    ///
+    /// <b>The hash is paired with the PDF and with nothing else.</b> <c>CvSha256</c> sits beside
+    /// <c>CvBlobPath</c> and describes the bytes at it; carrying the DOCX's hash there when the
+    /// PDF had failed would leave a row asserting that the file at a path it does not have hashes
+    /// to something. A checksum that describes a different file is worse than no checksum,
+    /// because the whole point of storing it is that somebody may check a document against it
+    /// after it has been sent.
+    ///
+    /// <b>Nothing is written when nothing was stored.</b> <c>RecordRenderedAsync</c> would answer
+    /// true and change no column, but only after a round trip to a database billed on wall-clock
+    /// time - which is the round trip <c>RenderedDocuments.IsEmpty</c> exists to let a caller
+    /// skip.
+    /// </remarks>
+    private static async Task RenderAsync(
+        IApplicationPackStore? packs,
+        ApplicationDocumentRepository documents,
+        long profileId,
+        string? candidateName,
+        StoredApplication stored,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        if (packs is null)
+        {
+            return;
+        }
+
+        var cvPdf = await StoreAsync(
+            packs, profileId, candidateName, stored, PackDocument.CurriculumVitae, PackFormat.Pdf, logger, ct);
+
+        var cvDocx = await StoreAsync(
+            packs, profileId, candidateName, stored, PackDocument.CurriculumVitae, PackFormat.Docx, logger, ct);
+
+        var letterPdf = await StoreAsync(
+            packs, profileId, candidateName, stored, PackDocument.CoverLetter, PackFormat.Pdf, logger, ct);
+
+        var rendered = new RenderedDocuments
+        {
+            CvBlobPath = cvPdf?.BlobPath,
+            CvDocxBlobPath = cvDocx?.BlobPath,
+            CoverLetterBlobPath = letterPdf?.BlobPath,
+            CvSha256 = cvPdf?.Sha256,
+        };
+
+        if (rendered.IsEmpty)
+        {
+            return;
+        }
+
+        try
+        {
+            await documents.RecordRenderedAsync(profileId, stored.Id, rendered, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Error rather than warning, and the only line in this path that is. The two above
+            // report a file that was never made; this reports files that exist, were paid for and
+            // now have nothing pointing at them - and the reference validation this can throw on
+            // is one ApplicationPackFile promises never to produce, so a throw here is a bug in
+            // this system rather than a service having a bad minute. It still does not fail the
+            // request: the draft is saved, it is what the candidate reads, and a re-generation
+            // re-renders and records again.
+            logger.LogError(
+                ex,
+                "Rendered files for draft {DocumentId} were stored but could not be recorded "
+                + "against it. The blobs exist and no row references them; regenerating will "
+                + "write them again.",
+                stored.Id);
+        }
+    }
+
+    /// <summary>
+    /// Renders one document in one format and uploads it. Null where either half did not happen.
+    /// </summary>
+    /// <remarks>
+    /// <b>Only the render is wrapped, because only the render can throw.</b> A renderer walks
+    /// model output, and the failures it can have - a construct the AST maps onto nothing, a font
+    /// resolver that did not install, an OOXML part the SDK refused - are exactly the failures a
+    /// generated document is most likely to produce and least likely to have been tested against.
+    /// The upload below needs no guard of its own: <c>IApplicationPackStore</c> answers null for
+    /// every storage failure by contract, which is the half of this that was already safe.
+    ///
+    /// The title is the document's own metadata rather than its filename: it is what a PDF reader
+    /// puts in a window title and what Word shows in properties. The filename is
+    /// <c>ApplicationPackFile</c>'s, derived from the candidate's name, and the two are
+    /// deliberately different - one is read by a person looking at an open document, the other by
+    /// a recruiter looking at a list of forty.
+    /// </remarks>
+    private static async Task<StoredPackFile?> StoreAsync(
+        IApplicationPackStore packs,
+        long profileId,
+        string? candidateName,
+        StoredApplication stored,
+        PackDocument document,
+        PackFormat format,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        var markdown = document == PackDocument.CoverLetter
+            ? stored.CoverLetterMarkdown
+            : stored.CurriculumVitaeMarkdown;
+
+        if (string.IsNullOrWhiteSpace(markdown))
+        {
+            return null;
+        }
+
+        var kind = document == PackDocument.CoverLetter ? "Cover letter" : "CV";
+        byte[] content;
+
+        try
+        {
+            content = format == PackFormat.Docx
+                ? MarkdownDocxRenderer.Render(markdown, $"{kind} - {stored.PostingTitle}")
+                : MarkdownPdfRenderer.Render(markdown, $"{kind} - {stored.PostingTitle}");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Warning rather than error, and the draft id rather than the markdown: the document
+            // itself is saved and is what the candidate reads, and this log line is read by
+            // somebody deciding whether a renderer has a bug rather than by somebody recovering
+            // data. The markdown is a tailored CV and does not belong in a log at all.
+            logger.LogWarning(
+                ex,
+                "Could not render the {Kind} of draft {DocumentId} as {Format}. The draft is "
+                + "saved and the markdown is the record; the pack will report that no file of "
+                + "that format is available for it.",
+                kind,
+                stored.Id,
+                format);
+
+            return null;
+        }
+
+        return await packs.StoreAsync(
+            new PackFileRequest
+            {
+                ProfileId = profileId,
+                DocumentId = stored.Id,
+                Document = document,
+                Format = format,
+                Content = content,
+                CandidateName = candidateName,
+            },
+            ct);
     }
 
     private static async Task<IResult> GetAsync(

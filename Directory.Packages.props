@@ -98,6 +98,15 @@
     <!-- MIT, and deliberately the platform-independent build rather than -gdi: the API runs
          in a Linux container with no GDI+ and no system fonts to draw through. -->
     <PackageVersion Include="PDFsharp-MigraDoc" Version="6.2.4" />
+    <!-- MIT, first-party, and the second rendering backend rather than a second template.
+         MigraDoc cannot write DOCX, and DOCX is what an applicant tracking system parses
+         reliably on upload - a PDF says where the ink goes, a DOCX still says what a heading
+         is. This clears the same bar PDFsharp did: no native dependency, nothing to install in
+         the container, and no Office to shell out to. Its object model is generated from the
+         OOXML schema, so MarkdownDocxRenderer's node map is checked by the compiler rather than
+         by eye, which a hand-rolled ZIP-and-XML writer would give up exactly where the
+         ATS-facing structure lives. -->
+    <PackageVersion Include="DocumentFormat.OpenXml" Version="3.5.1" />
   </ItemGroup>
 
   <ItemGroup Label="Testing">

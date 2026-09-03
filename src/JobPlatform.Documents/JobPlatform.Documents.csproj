@@ -13,6 +13,7 @@
   <ItemGroup>
     <PackageReference Include="Markdig" />
     <PackageReference Include="PDFsharp-MigraDoc" />
+    <PackageReference Include="DocumentFormat.OpenXml" />
   </ItemGroup>
 
   <ItemGroup>
