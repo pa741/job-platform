@@ -1,13 +1,28 @@
 using Azure.Identity;
 using Azure.Storage.Blobs;
 using JobPlatform.Core.Applications;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
-namespace JobPlatform.Api.Features.Applications;
+namespace JobPlatform.Data.Applications;
 
 /// <summary>
 /// Registers the pack store, or registers nothing at all.
 /// </summary>
 /// <remarks>
+/// <b>In <c>JobPlatform.Data</c> rather than beside the endpoints that read it, because two hosts
+/// register this and only one of them is the API.</b> The other is the Functions host, which
+/// renders the nightly pass's documents and references Core, Data, Ai and Documents - a worker
+/// cannot take a reference on a web project, so for as long as this lived in
+/// <c>JobPlatform.Api</c> there was no arrangement of <c>src/JobPlatform.Ingestion/Program.cs</c>
+/// that could register it. The failure that caused was silent and total:
+/// <c>GenerateApplicationsFunction</c> resolves <see cref="IApplicationPackStore"/> as nullable,
+/// so every unattended run took the "no pack store" path, stored its markdown with null paths and
+/// reported success - and putting the rendered file where a browser can upload it is the entire
+/// purpose of that pass. Data is also where it belongs on its own terms: it is where the
+/// identity-based clients both hosts need already live, beside <c>CosmosClientFactory</c> and the
+/// realtime feed's registration.
+///
 /// <b>Nothing is registered where no service URI is configured, and that is the feature.</b> A
 /// deployment with no storage account still generates documents, still serves the pack, and says
 /// in its <c>note</c> that no file is available - the same answer the pack already gives for a
@@ -24,25 +39,28 @@ namespace JobPlatform.Api.Features.Applications;
 /// account key anywhere in this path - not for writing, and not for signing, because the
 /// account-wide Blob Data Reader assignment already carries <c>generateUserDelegationKey</c>.
 ///
-/// <b>A singleton, unlike the scraper publisher beside it.</b> That one is scoped because it
+/// <b>A singleton, unlike the scraper configuration publisher.</b> That one is scoped because it
 /// depends on a scoped repository; this depends on nothing scoped, owns a connection pool that one
 /// instance per request would exhaust, and caches a user delegation key that a per-request
-/// instance would re-fetch on every call.
+/// instance would re-fetch on every call. A singleton also survives the Functions worker's
+/// per-invocation scope, where a scoped store would fetch a delegation key per document.
 /// </remarks>
 public static class ApplicationPackSetup
 {
     /// <summary>
-    /// Wires the store when storage is configured. Call once, from <c>Program</c>.
+    /// Wires the store when storage is configured. Call once from each host's <c>Program</c>.
     /// </summary>
     /// <remarks>
     /// <b>Both spellings of the key are read.</b> The container app sets
     /// <c>ApplicationPacks__serviceUri</c> and <c>ApplicationPacks__ContainerName</c>; a host that
     /// maps environment variables in the usual way turns those into the <c>ApplicationPacks</c>
-    /// section, which is what the options class binds. The literal double-underscore lookup is the
-    /// same belt-and-braces <c>Program</c> already applies to <c>ScraperConfig__serviceUri</c>, and
-    /// it is cheap insurance against a configuration source that does not do the mapping - the
-    /// failure it prevents is a deployment that has storage, is configured for it, and silently
-    /// reports that no documents are available.
+    /// section, which is what the options class binds - and that mapping is the whole of how the
+    /// Functions host, whose app settings reach the worker as environment variables and nothing
+    /// else, resolves the same two names. The literal double-underscore lookup is the same
+    /// belt-and-braces both <c>Program</c> files already apply to <c>ScraperConfig__serviceUri</c>
+    /// and <c>LandingStorage__serviceUri</c>, and it is cheap insurance against a configuration
+    /// source that does not do the mapping - the failure it prevents is a deployment that has
+    /// storage, is configured for it, and silently reports that no documents are available.
     ///
     /// <b>A URI that will not parse is treated as no URI.</b> Failing fast would be defensible for
     /// a database, and is what <c>Program</c> does for the SQL connection string and the Cosmos

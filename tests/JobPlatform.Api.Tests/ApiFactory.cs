@@ -97,9 +97,11 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         {
             RemoveDbContextRegistrations(services);
 
-            services.AddDbContext<JobsDbContext>(options => options
-                .UseSqlite(_connection)
-                .UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking));
+            // Tracking left at the default, matching Program.cs. It was NoTracking here for as
+            // long as it was there, which is exactly why this suite could not see that the API's
+            // four read-then-mutate repositories were saving nothing: the fixture reproduced the
+            // fault rather than catching it.
+            services.AddDbContext<JobsDbContext>(options => options.UseSqlite(_connection));
 
             // The Cosmos client would try to authenticate on construction, so both it and the
             // repository that wraps it are replaced outright.

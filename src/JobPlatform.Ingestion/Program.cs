@@ -4,6 +4,7 @@ using Azure.Storage.Queues;
 using JobPlatform.Core.Ai;
 using JobPlatform.Core.Metrics;
 using JobPlatform.Core.Parsing;
+using JobPlatform.Data.Applications;
 using JobPlatform.Data.Cosmos;
 using JobPlatform.Data.Realtime;
 using JobPlatform.Data.Sql;
@@ -213,5 +214,17 @@ builder.Services.AddScoped<PostingExtractionWriter>();
 builder.Services.AddScoped<ApplicationDocumentRepository>();
 builder.Services.Configure<ApplicationGenerationOptions>(
     builder.Configuration.GetSection(ApplicationGenerationOptions.SectionName));
+
+// Where those rendered files go. The same call the API makes, from JobPlatform.Data, because a
+// Functions worker cannot reference a web project: while the store lived in JobPlatform.Api this
+// host could not register it at all, IApplicationPackStore resolved null on every invocation, and
+// the pass took its "no pack store" path - storing markdown with null paths and reporting success
+// while never producing a PDF or a DOCX. Nothing said so, because this pass runs unattended.
+//
+// Registers nothing where ApplicationPacks__serviceUri is absent or will not parse, exactly like
+// the realtime feed and the AI provider above: a deployment with no storage account still writes
+// the markdown, which is the record. The keys are read from the section and from their literal
+// double-underscore spelling, so the app settings infra sets reach it however the host maps them.
+builder.Services.AddApplicationPacks(configuration);
 
 builder.Build().Run();

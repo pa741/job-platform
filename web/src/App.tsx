@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
 import { AuthenticatedTemplate, UnauthenticatedTemplate, useMsal } from '@azure/msal-react';
 import { useApi } from './auth/useApi';
 import { apiRequest } from './auth/msalConfig';
@@ -10,6 +10,7 @@ import { Profile } from './pages/Profile';
 import { Searches } from './pages/Searches';
 import { Shortlist } from './pages/Shortlist';
 import { Applications } from './pages/Applications';
+import { Questions } from './pages/Questions';
 import { Vocabulary } from './pages/Vocabulary';
 import { AiCalls } from './pages/AiCalls';
 import { ErrorNote } from './components/Primitives';
@@ -252,12 +253,21 @@ function Dashboard({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => 
 }
 
 /**
- * The eight pages, still the ones that exist today.
+ * The nine pages `route.ts` declares, each with a case here.
  *
- * The shell, the routing and the request states land first and the page bodies are replaced a
- * section at a time behind them. Swapping all nine at once would mean nothing rendered until
- * the last one was finished, and every problem found on the way would be found in a dashboard
- * that could not be opened.
+ * <b>The return type is what makes the switch exhaustive, and it is load-bearing rather than
+ * documentation.</b> A `PageId` with no case falls out of the bottom and returns undefined,
+ * which React renders as nothing at all - so the nav offers the page, the URL changes, the
+ * section pill moves, and the body is blank with no error in the console and nothing red
+ * anywhere. That is how `questions` sat declared, routed and linked while rendering nothing.
+ * Annotating `ReactElement | null` excludes undefined, so the next page added to `route.ts`
+ * without a case here fails `tsc` with "function lacks ending return statement" instead of
+ * shipping blank. Do not widen it back to an inferred type.
+ *
+ * The shell, the routing and the request states landed first and the page bodies were replaced
+ * a section at a time behind them. Swapping all nine at once would have meant nothing rendered
+ * until the last one was finished, and every problem found on the way would have been found in
+ * a dashboard that could not be opened.
  */
 function Page({ page, api, searchTerm, go, route, replace, back }: {
   page: PageId;
@@ -267,10 +277,24 @@ function Page({ page, api, searchTerm, go, route, replace, back }: {
   route: Route;
   replace: (page: PageId, id?: string | null) => void;
   back: (fallback: () => void) => void;
-}) {
+}): ReactElement | null {
   switch (page) {
     case 'shortlist': return <Shortlist api={api} go={go} />;
     case 'applications': return <Applications api={api} go={go} />;
+    case 'questions': return (
+      <Questions
+        api={api}
+        answering={route.id ? Number(route.id) : undefined}
+        // Opening a question pushes, so Back closes the form rather than leaving the app.
+        // Closing walks history back where we put an entry there, and falls through to a plain
+        // navigation where somebody arrived on the link directly - the same pairing the postings
+        // panel uses, and the one the page's own "no longer in the queue" notice assumes.
+        onOpen={(questionId) => (questionId === undefined
+          ? back(() => go('questions'))
+          : go('questions', String(questionId)))}
+        go={go}
+      />
+    );
     case 'profile': return <Profile api={api} />;
     case 'briefing': return <Briefing api={api} searchTerm={searchTerm} go={go} />;
     case 'postings': return searchTerm ? (

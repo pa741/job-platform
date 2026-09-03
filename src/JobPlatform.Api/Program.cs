@@ -1,4 +1,4 @@
-using Azure.Identity;
+﻿using Azure.Identity;
 using Azure.Storage.Blobs;
 using JobPlatform.Ai;
 using JobPlatform.Ai.Applications;
@@ -6,10 +6,10 @@ using JobPlatform.Api.Configuration;
 using JobPlatform.Core.Ai;
 using JobPlatform.Core.Submissions;
 using JobPlatform.Api.Endpoints;
-using JobPlatform.Api.Features.Applications;
 using JobPlatform.Api.Features.Mcp;
 using JobPlatform.Api.Features.Searches;
 using JobPlatform.Api.Infrastructure;
+using JobPlatform.Data.Applications;
 using JobPlatform.Data.Cosmos;
 using JobPlatform.Data.Realtime;
 using JobPlatform.Data.Sql;
@@ -92,8 +92,24 @@ builder.Services.AddDbContext<JobsDbContext>(options =>
         sql.CommandTimeout(60);
     });
 
-    // The API never writes to SQL, so tracking would only cost memory and change detection.
-    options.UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking);
+    // Tracking is left at EF's default, and the comment that used to sit here - "the API never
+    // writes to SQL" - is why.
+    //
+    // <b>It stopped being true and nothing failed.</b> The apply loop gave this host four
+    // repositories that read a row, set a column and save: answering a question, superseding an
+    // answer, parking an application, and ending a park when the application is finally sent.
+    // Under a global NoTracking every one of those saved nothing and threw nothing - the write
+    // simply did not happen, and the only symptom was the *next* call tripping over a state the
+    // first was supposed to have left behind.
+    //
+    // <b>The two defaults fail in opposite directions, and only one of them is survivable.</b>
+    // Forgetting AsNoTracking on a read costs memory and change detection. Forgetting AsTracking
+    // on a write loses the write, silently, in a system whose whole job is recording what was
+    // sent on somebody's behalf. So the default is the safe one and the read paths opt out
+    // explicitly - which they already did, in seventy places, long before this line was removed.
+    //
+    // Little is given up: EF tracks entities, and almost every read here projects into a record
+    // or an anonymous type, which is never tracked whatever this is set to.
 });
 
 builder.Services.AddScoped<JobPostingQueryRepository>();
@@ -157,6 +173,10 @@ builder.Services.AddMcpFeature();
 // which is the record, and the pack says no file is available rather than the API refusing to
 // start over a container it does not need. The section is bound inside that call rather than
 // here, so a deployment with no storage carries no half-configured options either.
+//
+// The identical call is made by src/JobPlatform.Ingestion/Program.cs, which is why it lives in
+// JobPlatform.Data: the nightly generation pass renders the same two files this endpoint does,
+// and a registration only the API could reach left that pass permanently degraded.
 builder.Services.AddApplicationPacks(configuration);
 
 // ---------------------------------------------------------------------------

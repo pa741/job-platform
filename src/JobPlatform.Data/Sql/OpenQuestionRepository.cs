@@ -1,4 +1,4 @@
-using System.Linq.Expressions;
+﻿using System.Linq.Expressions;
 using System.Text.Json;
 using JobPlatform.Core.Submissions;
 using JobPlatform.Data.Sql.Entities;
@@ -164,6 +164,14 @@ public sealed class OpenQuestionRepository(JobsDbContext db)
     /// submission, which is where parking lives in this design. Reading the converged
     /// <c>Created: false</c> as "nothing to do" is the mistake to avoid - the caller still parks
     /// its posting, on the question it has just been handed.
+    ///
+    /// <b>What the convergence costs is paid by the queue predicate, and it is worth knowing
+    /// before somebody tidies either.</b> Nothing afterwards can say which advert waits on which
+    /// wording, so <c>JobMatchRepository.ListApplyableAsync</c> cannot hold a park on <i>its</i>
+    /// question and holds it while any answer is outstanding instead. Written the other way -
+    /// asking whether an unanswered question names this posting - the second advert to raise a
+    /// wording is offered again on every run and parks again on every run, which is the loop this
+    /// table exists to end.
     /// </remarks>
     /// <param name="profileId">The candidate whose queue this is, already resolved by the caller.</param>
     /// <param name="questionText">The question as the form asked it. Stored verbatim; folded only for the key.</param>
@@ -272,15 +280,28 @@ public sealed class OpenQuestionRepository(JobsDbContext db)
     /// What one advert is still waiting on.
     /// </summary>
     /// <remarks>
-    /// <b>The read behind a parked application's explanation</b>: a submission parked for
-    /// <see cref="ParkReason.MissingAnswer"/> is held while this returns anything, and
-    /// <see cref="ParkReasonPolicy.ReturnsToQueue"/> is the rule that says so. Unbounded on
-    /// purpose - one advert's form raises a handful of questions and the index on
-    /// <c>(ProfileId, QuestionHash)</c> caps it at one per wording, so there is no page here for
-    /// a limit to protect.
+    /// <b>The read behind a parked application's explanation, and it has to answer the same
+    /// question <c>JobMatchRepository.ListApplyableAsync</c> answers or it explains the wrong
+    /// thing.</b> That queue holds a posting parked for <see cref="ParkReason.MissingAnswer"/>
+    /// while <i>any</i> answer this candidate owes an advert is outstanding, because the
+    /// deduplication leaves no way to tell which of them the posting is waiting on: one
+    /// unanswered row per <c>(ProfileId, QuestionHash)</c> means the second advert to ask a
+    /// question gets the row that names the first. So this read cannot be "the questions this
+    /// advert raised" either - answering that for a posting parked on a converged question
+    /// returns nothing at all, and a park with no visible reason is the state somebody opens the
+    /// dashboard to escape.
     ///
-    /// Questions raised from the dashboard, which name no advert, are not returned by this. They
-    /// hold nothing back: a question nobody asked on behalf of an advert is not what any advert
+    /// <b>Two spellings of one rule, held together by tests rather than shared</b>, for the
+    /// reason the shortlist's channel filter and its projection are: the two queries are rooted
+    /// at different tables, and an expression serving both would be one nothing can read. The
+    /// drift they are watched for is invisible in the ordinary way - a question missing from an
+    /// explanation is not something anybody notices.
+    ///
+    /// Unbounded on purpose: the index caps a wording at one unanswered row, and a candidate with
+    /// a queue long enough to need a page here has a problem no limit would fix.
+    ///
+    /// Questions raised from the dashboard, which name no advert, are not returned by this and
+    /// hold nothing back. A question nobody asked on behalf of an advert is not what any advert
     /// is waiting for, and treating it as such would empty the queue of applications every time
     /// somebody wrote themselves a note.
     /// </remarks>
@@ -289,7 +310,18 @@ public sealed class OpenQuestionRepository(JobsDbContext db)
     {
         var rows = await db.OpenQuestions
             .AsNoTracking()
-            .Where(q => q.ProfileId == profileId && q.PostingId == postingId && q.AnsweredAtUtc == null)
+            .Where(q => q.ProfileId == profileId
+                && q.AnsweredAtUtc == null
+                && q.PostingId != null
+                && (q.PostingId == postingId
+                    // Parked for an answer, so everything outstanding is holding it: the queue
+                    // predicate cannot tell which question it was, and a read that claimed to
+                    // would be answering a question the table cannot answer.
+                    || db.Submissions.Any(s => s.ProfileId == profileId
+                        && s.PostingId == postingId
+                        && s.ParkedReason != null
+                        && s.UnparkedAtUtc == null
+                        && ParkReasonPolicy.AwaitingAnswer.Contains(s.ParkedReason.Value))))
             .OrderBy(q => q.AskedAtUtc)
             .ThenBy(q => q.Id)
             .Select(Projected)
@@ -341,7 +373,13 @@ public sealed class OpenQuestionRepository(JobsDbContext db)
         DateTimeOffset now,
         CancellationToken ct = default)
     {
+        // AsTracking, explicitly, because this row is about to be mutated. It reads as
+        // redundant against EF's default and is not: the API host set NoTracking globally on
+        // the argument that it never wrote to SQL, and under that a read-then-mutate saves
+        // nothing and throws nothing. The default has been corrected, and stating it here
+        // means this write no longer depends on which host it runs in.
         var question = await db.OpenQuestions
+            .AsTracking()
             .FirstOrDefaultAsync(q => q.Id == questionId && q.ProfileId == profileId, ct);
 
         if (question is null)

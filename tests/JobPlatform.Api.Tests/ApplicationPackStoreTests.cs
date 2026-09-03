@@ -1,6 +1,7 @@
 using Azure.Storage.Blobs;
-using JobPlatform.Api.Features.Applications;
 using JobPlatform.Core.Applications;
+using JobPlatform.Data.Applications;
+using JobPlatform.Data.Sql;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -21,6 +22,11 @@ namespace JobPlatform.Api.Tests;
 /// that into a startup failure would take the whole API down for a feature it does not have. That
 /// is the same shape <c>AddAiProvider</c> and the realtime feed both have, and it is what lets
 /// this suite run with no Azure account and no credentials.
+///
+/// <b>Two hosts register this store and only one of them is the API</b>, which is why a suite
+/// under <c>JobPlatform.Api.Tests</c> asserts where the registration ships as well as what it
+/// does. The Functions host renders the nightly pass's documents and cannot reference a web
+/// project; a store it could not reach was a pass that never produced a file and never said so.
 ///
 /// Nothing here reaches the network. The refusal paths answer before any client call is made,
 /// which is exactly what makes them worth pinning: a signature is never minted for a reference
@@ -170,6 +176,62 @@ public sealed class ApplicationPackStoreTests
         using var factory = new ApiFactory();
 
         Assert.Null(factory.Services.GetService<IApplicationPackStore>());
+    }
+
+    [Fact]
+    public void The_pack_store_is_registered_from_an_assembly_the_functions_host_can_reference()
+    {
+        // The failure this pins is the one nobody could see. The store used to live in
+        // JobPlatform.Api, and src/JobPlatform.Ingestion references Core, Data, Ai and Documents -
+        // a Functions worker cannot take a reference on a web project - so no arrangement of that
+        // host's Program could register it. GenerateApplicationsFunction resolves
+        // IApplicationPackStore as nullable, so the nightly pass took its "no pack store" path on
+        // every unattended run: markdown stored with null paths, a success reported, and never a
+        // PDF or a DOCX, which is the entire output that pass exists to produce.
+        //
+        // JobsDbContext stands for JobPlatform.Data rather than an assembly name in a string: the
+        // compiler checks a type reference, and it is Data the Functions host already references.
+        var store = Provider(Configuration(("ApplicationPacks:serviceUri", ServiceUri)))
+            .GetRequiredService<IApplicationPackStore>();
+
+        Assert.Equal(typeof(JobsDbContext).Assembly, store.GetType().Assembly);
+        Assert.Equal(typeof(JobsDbContext).Assembly, typeof(ApplicationPackSetup).Assembly);
+    }
+
+    [Fact]
+    public void The_functions_hosts_environment_variables_register_the_pack_store()
+    {
+        // The Functions worker gets its app settings as environment variables and nothing else,
+        // where '__' is the section separator - so this, not an appsettings section, is the shape
+        // the nightly pass's configuration actually arrives in. Read through a real environment
+        // variable source rather than an in-memory dictionary spelled the same way, because the
+        // mapping is the part that has to hold: infra sets one pair of names for both hosts, and
+        // a host that could not read them would be storage that is configured and never written.
+        var previousUri = Environment.GetEnvironmentVariable("ApplicationPacks__serviceUri");
+        var previousContainer = Environment.GetEnvironmentVariable("ApplicationPacks__ContainerName");
+
+        try
+        {
+            Environment.SetEnvironmentVariable("ApplicationPacks__serviceUri", ServiceUri);
+            Environment.SetEnvironmentVariable("ApplicationPacks__ContainerName", "application-packs");
+
+            var provider = Provider(new ConfigurationBuilder().AddEnvironmentVariables().Build());
+
+            Assert.NotNull(provider.GetService<IApplicationPackStore>());
+
+            var options = provider.GetRequiredService<IOptions<ApplicationPackOptions>>().Value;
+
+            Assert.Equal(ServiceUri, options.ServiceUri);
+            Assert.Equal("application-packs", options.ContainerName);
+            Assert.Equal(
+                "application-packs",
+                provider.GetRequiredService<ApplicationPackContainer>().Client.Name);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ApplicationPacks__serviceUri", previousUri);
+            Environment.SetEnvironmentVariable("ApplicationPacks__ContainerName", previousContainer);
+        }
     }
 
     private static ApplicationPackStore Store(ApplicationPackOptions? options = null)

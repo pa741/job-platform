@@ -1,4 +1,4 @@
-using System.Linq.Expressions;
+﻿using System.Linq.Expressions;
 using JobPlatform.Core.Submissions;
 using JobPlatform.Data.Sql.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -178,7 +178,13 @@ public sealed class FormAnswerRepository(JobsDbContext db)
 
         // Tracked deliberately: these rows are about to be stamped, and the stamp has to travel
         // in the same SaveChanges as the insert below.
-        var live = await db.FormAnswers
+                // AsTracking, explicitly, because these rows are about to be superseded. It reads as
+        // redundant against EF's default and is not: the API host set NoTracking globally on the
+        // argument that it never wrote to SQL, and under that this loop stamps a column on
+        // objects nobody is watching - saving nothing, throwing nothing, and leaving last year's
+        // salary expectation live to be submitted again.
+var live = await db.FormAnswers
+            .AsTracking()
             .Where(a => a.ProfileId == profileId
                 && a.QuestionHash == answer.QuestionHash
                 && a.SupersededAtUtc == null

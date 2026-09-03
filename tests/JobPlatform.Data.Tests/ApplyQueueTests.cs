@@ -20,7 +20,15 @@ namespace JobPlatform.Data.Tests;
 /// merely existing is what made parking impossible: a park has to write a row to park against, so
 /// "come back to this once the captcha is gone" and "never show me this again" were the same
 /// operation. A live application and a permanent park exclude; every other park comes back, and
-/// the one that waits on an answer comes back when the answer arrives.
+/// the one that waits on an answer comes back when the answers this candidate owes have arrived.
+///
+/// <b>That last clause is per candidate and not per posting, and the tests here are what stop it
+/// being narrowed back.</b> One unanswered question per wording is the whole point of
+/// <c>OpenQuestions</c>, so the row a second advert converges on names the first advert - and a
+/// clause asking whether an unanswered question names <i>this</i> posting therefore holds the
+/// first advert and offers every other one, on every run, forever. What it costs to ask the
+/// looser question is that a posting whose own answer has arrived waits for the rest of the queue
+/// to drain, which is a delay rather than a loop.
 ///
 /// <b>Every filter agrees with the projection, and every filter runs before the bound.</b> The
 /// channel filter and its projection are written out twice because EF translates one and
@@ -200,7 +208,19 @@ public sealed class ApplyQueueTests : IDisposable
         await db.SaveChangesAsync();
     }
 
-    private async Task AskAsync(long postingId, DateTimeOffset? answeredAtUtc = null)
+    /// <summary>
+    /// Queues a question the way a run's convergence leaves it: one row, naming one advert.
+    /// </summary>
+    /// <remarks>
+    /// Keyed by <c>QuestionKey.Hash</c> over the wording rather than by a made-up constant, so
+    /// two wordings are two rows and one wording is one - which is the deduplication the queue
+    /// predicate has to survive, and a fixed hash would make the second ask an index violation
+    /// instead.
+    /// </remarks>
+    private async Task AskAsync(
+        long? postingId,
+        DateTimeOffset? answeredAtUtc = null,
+        string question = "How many years of Kubernetes do you have?")
     {
         await using var db = CreateContext();
 
@@ -208,8 +228,8 @@ public sealed class ApplyQueueTests : IDisposable
         {
             ProfileId = ProfileId,
             PostingId = postingId,
-            QuestionText = "How many years of Kubernetes do you have?",
-            QuestionHash = new string('9', 64),
+            QuestionText = question,
+            QuestionHash = QuestionKey.Hash(question),
             AskedAtUtc = Now,
             AnsweredAtUtc = answeredAtUtc,
         });
@@ -319,15 +339,119 @@ public sealed class ApplyQueueTests : IDisposable
         Assert.Contains(1L, Ids(await QueueAsync(new ApplyableQuery { Limit = 50 })));
     }
 
+    /// <summary>The second advert to raise a question waits on it too.</summary>
+    /// <remarks>
+    /// <b>The loop the fourth clause exists to prevent, arriving through the deduplication
+    /// instead of through the clause.</b> <c>OpenQuestions</c> keeps one unanswered row per
+    /// wording, so when a second advert asks what a first already asked there is one row and it
+    /// names the first. A clause keyed on <c>q.PostingId == m.PostingId</c> therefore finds
+    /// nothing for the second posting, offers it, and is handed the same park back on the next
+    /// run - and the run after that, for as long as the question goes unanswered.
+    /// </remarks>
     [Fact]
-    public async Task A_question_left_open_on_another_posting_does_not_hold_this_one_back()
+    public async Task A_second_posting_parked_on_the_same_question_is_held_with_the_first()
     {
         await RecordAsync(1, ParkReason.MissingAnswer);
+        await AskAsync(1);
+
+        // Posting 2 meets the same wording. OpenAsync converges on the row above rather than
+        // queueing it twice, so nothing anywhere records that posting 2 is the one waiting.
+        await RecordAsync(2, ParkReason.MissingAnswer);
+
+        var ids = Ids(await QueueAsync(new ApplyableQuery { Limit = 50 }));
+
+        Assert.DoesNotContain(1L, ids);
+        Assert.DoesNotContain(2L, ids);
+    }
+
+    /// <summary>One answer releases every advert that was waiting on it.</summary>
+    /// <remarks>
+    /// The other half of the same property: holding the second posting is worth nothing unless
+    /// the answer that arrives lets it out again. Both halves were broken by the same clause -
+    /// the second advert was never held, so it was never released either, it was simply offered
+    /// and parked on every run.
+    /// </remarks>
+    [Fact]
+    public async Task Answering_a_shared_question_returns_every_posting_parked_on_it()
+    {
+        await RecordAsync(1, ParkReason.MissingAnswer);
+        await RecordAsync(2, ParkReason.MissingAnswer);
+        await AskAsync(1);
+
+        var held = Ids(await QueueAsync(new ApplyableQuery { Limit = 50 }));
+
+        Assert.DoesNotContain(1L, held);
+        Assert.DoesNotContain(2L, held);
+
+        await using (var db = CreateContext())
+        {
+            var question = await db.OpenQuestions.SingleAsync();
+            question.AnsweredAtUtc = Now.AddHours(1);
+            await db.SaveChangesAsync();
+        }
+
+        var released = Ids(await QueueAsync(new ApplyableQuery { Limit = 50 }));
+
+        Assert.Contains(1L, released);
+        Assert.Contains(2L, released);
+    }
+
+    /// <summary>A second park on a question raised since the first one still holds.</summary>
+    /// <remarks>
+    /// <b>Why the clause cannot be bounded by when the posting was parked</b>, which is the
+    /// tempting way to make it name the question it is waiting on. <c>ParkAsync</c> is idempotent
+    /// by state, deliberately - re-parking for the same reason leaves <c>ParkedAtUtc</c> where it
+    /// was, so "blocked since Tuesday" does not become "blocked a minute ago" every night. A
+    /// posting released by its first answer and stopped by a second question therefore carries a
+    /// park older than the question it is now waiting for, and any rule reading that timestamp as
+    /// a bound offers it again on every run.
+    /// </remarks>
+    [Fact]
+    public async Task A_posting_parked_again_on_a_question_raised_since_is_still_held()
+    {
+        await using var db = CreateContext();
+
+        var repository = new SubmissionRepository(db);
+
+        // Run one stops on a question, which is then answered.
+        await repository.ParkAsync(ProfileId, 1, ParkReason.MissingAnswer, Now);
+        await AskAsync(1, answeredAtUtc: Now.AddHours(1));
+
+        Assert.Contains(1L, Ids(await QueueAsync(new ApplyableQuery { Limit = 50 })));
+
+        // Run two gets further and stops on a second question - one another advert had already
+        // raised, so it is queued against that advert. The re-park writes nothing, because the
+        // reason has not changed.
+        await AskAsync(2, question: "What is your notice period?");
+        await repository.ParkAsync(ProfileId, 1, ParkReason.MissingAnswer, Now.AddHours(2));
+
+        Assert.DoesNotContain(1L, Ids(await QueueAsync(new ApplyableQuery { Limit = 50 })));
+    }
+
+    [Fact]
+    public async Task An_open_question_holds_back_only_the_postings_parked_for_an_answer()
+    {
+        await RecordAsync(1, ParkReason.Captcha);
         await AskAsync(2);
 
-        // The join is per posting. Keyed on the profile alone, one unanswered question anywhere
-        // would strand every posting parked for a missing answer - and the questions this raises
-        // are per form.
+        var ids = Ids(await QueueAsync(new ApplyableQuery { Limit = 50 }));
+
+        // The clause is scoped by what the park says and never by the queue of questions alone.
+        // A captcha is a fact about the attempt that no answer changes, and a posting nobody
+        // parked is waiting on nothing at all - so an unanswered question must not empty the
+        // queue, only hold back what was put down for want of an answer.
+        Assert.Contains(1L, ids);
+        Assert.Contains(3L, ids);
+    }
+
+    [Fact]
+    public async Task A_question_raised_from_the_dashboard_holds_no_posting_back()
+    {
+        await RecordAsync(1, ParkReason.MissingAnswer);
+        await AskAsync(postingId: null, question: "Should I ask for more than 85k?");
+
+        // A note somebody wrote themselves is not what any application is waiting for. Counting
+        // it would strand every posting parked for an answer the moment the dashboard was used.
         Assert.Contains(1L, Ids(await QueueAsync(new ApplyableQuery { Limit = 50 })));
     }
 

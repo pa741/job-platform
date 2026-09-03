@@ -281,6 +281,93 @@ public sealed class FormFieldResolverTests
     }
 
     [Fact]
+    public async Task A_superseded_answer_is_not_reachable_through_the_cache()
+    {
+        // The answer store supersedes rather than overwrites so that last year's answer is not
+        // submitted this year, and the cache is written once and read for as long as the question
+        // keeps being asked - so a remembered decision that outlived the retraction undoes the
+        // whole mechanism in one lookup. Confirmed, because a person agreed with a decision about
+        // an answer the candidate has since taken back, and that agreement did not survive it
+        // either.
+        var retracted = Answer(NoticeQuestion, "3 months") with { SupersededAtUtc = Given.AddDays(30) };
+
+        var (resolver, model) = WithModel(Chose(0, 0.99));
+
+        var result = await resolver.ResolveAsync(
+            Ask(RewordedNotice,
+                cached: new PriorResolution(
+                    retracted, "notice_period", 0.95, "Matched to the candidate's notice period.",
+                    Given.AddDays(1), Confirmed: true)));
+
+        Assert.True(result.NeedsUser);
+        Assert.Null(result.Value);
+        Assert.Equal(FormFieldStage.Cache, result.Stage);
+        Assert.Contains("superseded", result.Rationale, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, model.Calls);
+    }
+
+    [Fact]
+    public async Task A_cached_answer_written_for_one_posting_is_not_served_to_another()
+    {
+        // The cache row is keyed on the question and its options, which says nothing about who is
+        // asking - so the scope column that keeps a per-posting paragraph where it was written has
+        // to be re-read here or it stops meaning anything on the second form.
+        var written = FormAnswer.Create(
+            "Why do you want to work here?",
+            "Because I have followed the compiler team's work for years.",
+            AnswerScope.Posting, FormAnswerSource.Candidate, Given, postingId: 42) with { Id = 5 };
+
+        var cached = new PriorResolution(
+            written, null, 1, "The candidate's own words for this advert.", Given.AddDays(1),
+            Confirmed: true);
+
+        var (resolver, model) = WithModel(Chose(0, 0.99));
+
+        var elsewhere = await resolver.ResolveAsync(
+            Ask("Why do you want to work here?", cached: cached) with { PostingId = 99 });
+
+        var here = await resolver.ResolveAsync(
+            Ask("Why do you want to work here?", cached: cached) with { PostingId = 42 });
+
+        Assert.True(elsewhere.NeedsUser);
+        Assert.Null(elsewhere.Value);
+        Assert.Equal(FormFieldStage.Cache, elsewhere.Stage);
+        Assert.Equal(0, model.Calls);
+
+        // And the posting it was written for still resolves, or the scope would be a way of
+        // storing an answer nobody can use.
+        Assert.Equal(written.Value, here.Value);
+    }
+
+    [Fact]
+    public async Task A_cached_answer_written_for_one_employer_is_not_served_to_another()
+    {
+        var written = FormAnswer.Create(
+            "Why do you want to work here?",
+            "Because I have followed the compiler team's work for years.",
+            AnswerScope.Company, FormAnswerSource.Candidate, Given, companyId: 1) with { Id = 6 };
+
+        var cached = new PriorResolution(
+            written, null, 1, "The candidate's own words for this employer.", Given.AddDays(1),
+            Confirmed: false);
+
+        var (resolver, model) = WithModel(Chose(0, 0.99));
+
+        var elsewhere = await resolver.ResolveAsync(
+            Ask("Why do you want to work here?", cached: cached) with { CompanyId = 2 });
+
+        var here = await resolver.ResolveAsync(
+            Ask("Why do you want to work here?", cached: cached) with { CompanyId = 1 });
+
+        Assert.True(elsewhere.NeedsUser);
+        Assert.Null(elsewhere.Value);
+        Assert.Equal(FormFieldStage.Cache, elsewhere.Stage);
+        Assert.Equal(0, model.Calls);
+
+        Assert.Equal(written.Value, here.Value);
+    }
+
+    [Fact]
     public async Task The_model_is_asked_only_where_the_first_three_stages_miss()
     {
         var (resolver, model) = WithModel(Chose(0, 0.95));
@@ -425,6 +512,57 @@ public sealed class FormFieldResolverTests
         Assert.Equal("No", result.Value);
         Assert.True(result.Sensitive);
         Assert.Equal(FormFieldStage.DeclaredAnswer, result.Stage);
+    }
+
+    [Fact]
+    public async Task A_sensitive_question_is_not_answered_from_an_answer_filed_under_the_same_name()
+    {
+        // The inversion the design names, reached through the name rather than through the model.
+        // `right_to_work` is exactly what a model fills a sponsorship field's name in with, two
+        // questions can share one name where they cannot share a question hash, and these two are
+        // opposites: "sponsorship: Yes" says the candidate has no right to work, which is the
+        // reverse of what they actually wrote. No model is involved and none would have been.
+        var (resolver, model) = WithModel(Chose(0, 0.99));
+
+        var result = await resolver.ResolveAsync(
+            Ask("Do you require sponsorship to work in the UK?", ["Yes", "No"], name: "right_to_work",
+                answers: Answer("Do you have the right to work in the UK?", "Yes", name: "right_to_work")));
+
+        Assert.True(result.NeedsUser);
+        Assert.Null(result.Value);
+        Assert.Equal(FormFieldStage.DeclaredAnswer, result.Stage);
+        Assert.Equal(0, model.Calls);
+    }
+
+    [Fact]
+    public async Task An_answer_only_a_person_may_assert_is_not_reached_by_name_for_any_question()
+    {
+        // The other direction, and the failure the class remarks call unreachable: the licence
+        // question is not sensitive, so nothing about it stops the walk - what has to stop it is
+        // the stored answer's own question. A right-to-work answer typed into a licence field is
+        // the same false statement whichever end the name came from.
+        var result = await WithoutModel().ResolveAsync(
+            Ask("Do you hold a full UK driving licence?", ["Yes", "No"], name: "right_to_work",
+                answers: Answer("Do you have the right to work in the UK?", "Yes", name: "right_to_work")));
+
+        Assert.True(result.NeedsUser);
+        Assert.Null(result.Value);
+    }
+
+    [Fact]
+    public async Task An_ordinary_question_is_still_answered_from_the_name_it_was_filed_under()
+    {
+        // The paired half, and the reason the rule above is about sensitivity rather than about
+        // the name: a name is the escape from phrasing, and two employers wording a notice-period
+        // question differently is what it is for. Refusing it everywhere would cost an
+        // interruption on every form for a guarantee only sensitive fields need.
+        var result = await WithoutModel().ResolveAsync(
+            Ask(RewordedNotice, NoticeOptions, name: "notice_period",
+                answers: Answer(NoticeQuestion, "1 month", name: "notice_period")));
+
+        Assert.Equal(FormFieldStage.DeclaredAnswer, result.Stage);
+        Assert.Equal("1 month", result.Value);
+        Assert.False(result.NeedsUser);
     }
 
     [Fact]

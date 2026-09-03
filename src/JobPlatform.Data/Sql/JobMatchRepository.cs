@@ -776,9 +776,9 @@ public sealed class JobMatchRepository(JobsDbContext db)
     /// replace it and each holds a posting back for a different reason: a <i>live</i> application
     /// - one never parked, or parked and since let back in - on this posting, and one on any other
     /// listing of the same job; a <i>permanent</i> park, the reasons <c>ParkReasonPolicy</c>
-    /// classifies as never returning; and a park awaiting an answer whose question is still
-    /// unanswered. Everything else - a captcha, a login wall, a spent daily quota - comes back on
-    /// the next run, which is what parking was for.
+    /// classifies as never returning; and a park awaiting an answer, held while an answer this
+    /// candidate owes an advert is still outstanding. Everything else - a captcha, a login wall,
+    /// a spent daily quota - comes back on the next run, which is what parking was for.
     ///
     /// <b>Only a live application suppresses the other listings of the same job.</b> Applying
     /// twice to one vacancy is worse than not applying at all and the recruiter sees both, so an
@@ -795,6 +795,47 @@ public sealed class JobMatchRepository(JobsDbContext db)
     /// city is unknown would be one enormous cluster, and a single application would suppress all
     /// of them - which is exactly the collision <c>JobFingerprint.CrossBoardKey</c> answers null
     /// to prevent, arriving through the query instead.
+    ///
+    /// <b>The awaiting-an-answer clause asks whether an answer is outstanding, never whether the
+    /// outstanding question names this posting, and narrowing it back to the posting is the loop
+    /// it exists to prevent.</b> It was written as <c>q.PostingId == m.PostingId</c> and the
+    /// deduplication defeats it: <c>OpenQuestions</c> holds one unanswered row per
+    /// <c>(ProfileId, QuestionHash)</c>, so when a second advert asks what a first already asked,
+    /// one row exists and it names the first. The second posting was parked
+    /// <see cref="ParkReason.MissingAnswer"/>, its clause found no row naming it, and it was
+    /// offered again on the very next run - which parked it again, for the same missing answer,
+    /// every run, forever. That is both halves of the promise broken at once: the loop this
+    /// clause is for, and "a parked posting is re-served once its question is answered" holding
+    /// for the first advert to ask and no other.
+    ///
+    /// <b>Neither side carries the link, and that is a limit of the schema rather than a
+    /// preference.</b> The park is the side that should carry it if either did: it is already the
+    /// row per posting, and the caller writing it is holding the question row it has just opened
+    /// or converged onto, so one nullable <c>AwaitingQuestionId</c> would state exactly what this
+    /// clause infers. The question side cannot hold it in a column at all - one question serves
+    /// many adverts, so it would take a child table to say which. Both are DDL, the apply-loop
+    /// migration is already applied to the live database, and a schema change here is a
+    /// two-step deploy in which every read of this table answers 500 in between. The predicate is
+    /// reachable without one, so it is written without one.
+    ///
+    /// <b>Every finer rule the existing columns allow loops, and the two obvious ones loop in
+    /// opposite directions.</b> "Held while something that was already waiting when it was parked
+    /// is unanswered" fails because <c>SubmissionRepository.ParkAsync</c> is idempotent by state:
+    /// re-parking for the same reason does not move <c>ParkedAtUtc</c>, so a posting released by
+    /// its first answer and parked again on a question raised since is bounded by a timestamp
+    /// older than the question it is now waiting for, and loops exactly as before. "Held while
+    /// something raised since it was parked is unanswered" fails the case above, where the
+    /// question predates the park. Their union is "held while anything is unanswered", which is
+    /// this rule, and it is the only one of the three that cannot loop under any interleaving.
+    ///
+    /// <b>What it costs is a delay and never a duplicate, which is the right way round.</b> A
+    /// posting whose own answer has arrived waits for the rest of the candidate's queue to drain,
+    /// because nothing here can tell which of the outstanding questions was its. The queue is
+    /// meant to be drained - it is what <c>list_open_questions</c> is for, a dismissal closes a
+    /// question as surely as an answer does, and <c>list_applyable</c> reports its depth so a run
+    /// can see why a park has not come back. The alternative error is an agent meeting the same
+    /// form and parking on the same missing answer on every run for the rest of time, having
+    /// spent a page load each time to learn nothing.
     ///
     /// <b><c>ParkReasonPolicy</c> is read as lists here rather than called.</b> <c>Permanent</c>
     /// and <c>AwaitingAnswer</c> exist so that <c>Contains</c> becomes an <c>IN</c>;
@@ -866,15 +907,21 @@ public sealed class JobMatchRepository(JobsDbContext db)
                     && s.ParkedReason != null
                     && s.UnparkedAtUtc == null
                     && ParkReasonPolicy.Permanent.Contains(s.ParkedReason.Value))
-                // A park waiting on an answer, while the answer is still missing. Offering it
-                // before then produces the same park every run, which is a loop and not a retry.
-                && !db.Submissions.Any(s => s.ProfileId == profileId
-                    && s.PostingId == m.PostingId
-                    && s.ParkedReason != null
-                    && s.UnparkedAtUtc == null
-                    && ParkReasonPolicy.AwaitingAnswer.Contains(s.ParkedReason.Value)
+                // A park waiting on an answer, while this candidate still owes one. The two
+                // EXISTS are deliberately not nested: what holds the posting is that it is
+                // parked for an answer and that an answer is outstanding somewhere, never that
+                // the outstanding question names this posting. Nesting them again is the loop -
+                // see the remarks.
+                && !(db.Submissions.Any(s => s.ProfileId == profileId
+                        && s.PostingId == m.PostingId
+                        && s.ParkedReason != null
+                        && s.UnparkedAtUtc == null
+                        && ParkReasonPolicy.AwaitingAnswer.Contains(s.ParkedReason.Value))
+                    // Raised by an advert, never from the dashboard. A note somebody wrote
+                    // themselves is not what any application is waiting for, and reading it as
+                    // one would empty this queue every time the dashboard was used.
                     && db.OpenQuestions.Any(q => q.ProfileId == profileId
-                        && q.PostingId == m.PostingId
+                        && q.PostingId != null
                         && q.AnsweredAtUtc == null)));
 
         if (query.Since is { } since)

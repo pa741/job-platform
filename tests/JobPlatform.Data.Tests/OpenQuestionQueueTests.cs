@@ -25,7 +25,10 @@ namespace JobPlatform.Data.Tests;
 ///
 /// <b>An answered question stops suppressing its posting.</b> That is what makes a
 /// <see cref="ParkReason.MissingAnswer"/> park retryable rather than a loop: the queue predicate
-/// reads the unanswered set, so a question that leaves it has to let its advert back in.
+/// reads the unanswered set, so a question that leaves it has to let its advert back in - and
+/// <i>every</i> advert parked on it, not only the one whose name is on the row. One live question
+/// per wording is what makes those two different sets, and it is why the read behind a parked
+/// application's explanation is scoped by the park rather than by which advert did the asking.
 /// </remarks>
 public sealed class OpenQuestionQueueTests : IDisposable
 {
@@ -111,6 +114,31 @@ public sealed class OpenQuestionQueueTests : IDisposable
     public void Dispose() => _connection.Dispose();
 
     private JobsDbContext CreateContext() => new(_options);
+
+    /// <summary>
+    /// Puts an advert down, writing the columns the queue predicate reads.
+    /// </summary>
+    /// <remarks>
+    /// Round <c>SubmissionRepository</c> deliberately, the way the queue's own tests are: what is
+    /// being asserted is what these columns mean to a read, not what a writer believes about
+    /// them.
+    /// </remarks>
+    private async Task ParkAsync(long postingId, ParkReason reason)
+    {
+        await using var db = CreateContext();
+
+        db.Submissions.Add(new SubmissionEntity
+        {
+            ProfileId = ProfileId,
+            PostingId = postingId,
+            Channel = SubmissionChannel.Unknown,
+            CreatedAtUtc = Now,
+            ParkedReason = reason,
+            ParkedAtUtc = Now,
+        });
+
+        await db.SaveChangesAsync();
+    }
 
     // -----------------------------------------------------------------------
     // One live question per wording
@@ -272,6 +300,57 @@ public sealed class OpenQuestionQueueTests : IDisposable
         await repository.AnswerAsync(ProfileId, question.Id, AnswerId, Now.AddHours(2));
 
         Assert.Empty(await repository.ListUnansweredForPostingAsync(ProfileId, 1));
+    }
+
+    /// <summary>An advert parked on a question another advert raised can still say what it waits on.</summary>
+    /// <remarks>
+    /// <b>The read has to answer the same question the queue predicate answers.</b> One
+    /// unanswered row per wording means the second advert to ask gets the row naming the first,
+    /// so <c>ListApplyableAsync</c> cannot hold a park on <i>its</i> question and holds it while
+    /// any answer is outstanding. A read still scoped to the questions this advert raised would
+    /// answer nothing for exactly the postings the queue is holding - a park with no visible
+    /// reason, which is the state somebody opens the dashboard to escape.
+    /// </remarks>
+    [Fact]
+    public async Task A_second_advert_parked_on_a_shared_question_is_told_what_it_is_waiting_for()
+    {
+        await using var db = CreateContext();
+        var repository = new OpenQuestionRepository(db);
+
+        var (question, _) = await repository.OpenAsync(ProfileId, Question, null, false, 1, null, Now);
+        var (converged, created) = await repository.OpenAsync(
+            ProfileId, Question, null, false, 2, null, Now.AddMinutes(1));
+
+        Assert.False(created);
+        Assert.Equal(question.Id, converged.Id);
+
+        await ParkAsync(2, ParkReason.MissingAnswer);
+
+        var waiting = Assert.Single(await repository.ListUnansweredForPostingAsync(ProfileId, 2));
+
+        // The row still names the advert that raised it, which is right - that is the context a
+        // person needs to answer it - and posting 2 is waiting on it all the same.
+        Assert.Equal(question.Id, waiting.Id);
+        Assert.Equal(1, waiting.PostingId);
+
+        await repository.AnswerAsync(ProfileId, question.Id, AnswerId, Now.AddHours(2));
+
+        Assert.Empty(await repository.ListUnansweredForPostingAsync(ProfileId, 2));
+    }
+
+    [Fact]
+    public async Task An_advert_nobody_parked_sees_only_the_questions_it_raised()
+    {
+        await using var db = CreateContext();
+        var repository = new OpenQuestionRepository(db);
+
+        await repository.OpenAsync(ProfileId, Question, null, false, 1, null, Now);
+
+        // The widening is bounded by the park, not by the queue being non-empty. An advert
+        // nothing has stopped is waiting on nothing, and saying otherwise would put somebody
+        // else's question on every posting in the pipeline.
+        Assert.Empty(await repository.ListUnansweredForPostingAsync(ProfileId, 2));
+        Assert.Single(await repository.ListUnansweredForPostingAsync(ProfileId, 1));
     }
 
     [Fact]

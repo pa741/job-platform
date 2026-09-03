@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using JobPlatform.Core.Submissions;
 using JobPlatform.Data.Sql.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -136,7 +136,13 @@ public sealed class RunRepository(JobsDbContext db)
         DateTimeOffset now,
         CancellationToken ct = default)
     {
+        // AsTracking, explicitly, because this row is about to be mutated. It reads as
+        // redundant against EF's default and is not: the API host set NoTracking globally on
+        // the argument that it never wrote to SQL, and under that a read-then-mutate saves
+        // nothing and throws nothing. The default has been corrected, and stating it here
+        // means this write no longer depends on which host it runs in.
         var entity = await db.Runs
+            .AsTracking()
             .FirstOrDefaultAsync(r => r.Id == runId && r.ProfileId == profileId, ct);
 
         if (entity is null)

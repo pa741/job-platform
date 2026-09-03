@@ -250,11 +250,23 @@ public sealed class FormFieldResolver(
     /// </summary>
     /// <remarks>
     /// <b>The strongest evidence there is, and the only stage that may return a sensitive value.</b>
-    /// The question hash folds typography and nothing else, so a hit here means the candidate
-    /// answered <i>this</i> question - not one that resembles it - and handing back what they wrote
-    /// is not an inference at all. That is why "verbatim or abstain" is satisfiable: for a
-    /// sensitive answer, <see cref="FormFieldPolicy.ForForm"/> is given the flag and will accept
+    /// The question hash folds typography and nothing else, so a hit <i>on the hash</i> means the
+    /// candidate answered <i>this</i> question - not one that resembles it - and handing back what
+    /// they wrote is not an inference at all. That is why "verbatim or abstain" is satisfiable: for
+    /// a sensitive answer, <see cref="FormFieldPolicy.ForForm"/> is given the flag and will accept
     /// only a choice that differs from what they typed by case and whitespace.
+    ///
+    /// <b>The name is a second key for an ordinary question and never for a guarded one.</b> A hash
+    /// is taken over the question and a name is written beside it, so two questions cannot share a
+    /// hash and can easily share a name - and <see cref="FormFieldRequest.Name"/> is frequently
+    /// filled in by a model, which will put <c>right_to_work</c> on a sponsorship field without
+    /// hesitating. Those two questions invert: the candidate's "yes, I have the right to work"
+    /// returned against "do you require sponsorship" is a false statement made under their name, on
+    /// a form they will never see again, and the name match is the one path by which it could be
+    /// reached without a model call. So a name hit whose answer is guarded - by the question in
+    /// front of it or by the answer's own question - abstains, and a sensitive value can only ever
+    /// come from the hash. The cost of that is one interruption on the first form to word a
+    /// sensitive question differently; the cost of the alternative is not recoverable.
     ///
     /// <b>An exact match that cannot be rendered ends the walk.</b> The candidate answered "1 month"
     /// and the form offers "Less than a month" and "1-3 months": there is no more evidence to be
@@ -276,6 +288,7 @@ public sealed class FormFieldResolver(
             request.CompanyId,
             request.PostingId);
 
+        var exact = best is not null;
         var matchedOn = "this exact question";
 
         if (best is null)
@@ -295,6 +308,22 @@ public sealed class FormFieldResolver(
         }
 
         var guarded = sensitive || SensitiveQuestions.Guards(best);
+
+        // Not made redundant by stage four refusing every sensitive question: this stage answers
+        // rather than asks, so an answer reached by name is typed long before anything downstream
+        // could decline it. The other question is deliberately not named, following the cache's own
+        // guarded refusal - an agent told which question the candidate answered instead has been
+        // told something about an answer it may not have.
+        if (guarded && !exact)
+        {
+            return FormFieldResolution.Ask(
+                FormFieldStage.DeclaredAnswer,
+                "The candidate has answered a question filed under the name this one was asked by, "
+                + "but not this question, and one of the two asks for something only they may "
+                + "state. A name is a weaker key than a question - two questions filed under one "
+                + "name can be opposites of each other - so it is not reused here. Ask them, and "
+                + "the answer will serve every form that asks it this way.");
+        }
 
         if (!best.IsLive)
         {
@@ -337,9 +366,10 @@ public sealed class FormFieldResolver(
     /// <b>A hit here never reaches a model, whatever it says, and that is the acceptance criterion
     /// rather than an optimisation.</b> "The second occurrence of a question resolves without a
     /// model call" is what the cache exists for, so every outcome it can hold ends the walk: an
-    /// answer, a refusal it recorded, a confidence that no longer clears the floor, or an option
-    /// set the remembered answer will not fit. Falling through on any of those would make the
-    /// criterion true only of the cases nobody was worried about.
+    /// answer, a refusal it recorded, an answer the candidate has since retracted or wrote for
+    /// somebody else, a confidence that no longer clears the floor, or an option set the remembered
+    /// answer will not fit. Falling through on any of those would make the criterion true only of
+    /// the cases nobody was worried about.
     ///
     /// <b>An abstention is cached like any other outcome</b>, which is the half that saves the most
     /// money: a question this system has already declined is declined again for the price of an
@@ -350,6 +380,27 @@ public sealed class FormFieldResolver(
     /// question - but the row is data, and data can be edited by something that is not this code.
     /// Checking the hash again costs a comparison and means a hand-written row cannot turn a
     /// sensitive answer into a general-purpose one.
+    ///
+    /// <b>The row remembers a decision and never the answer's own state, so both facts about the
+    /// answer are read from the answer.</b> A resolution is written once and read for as long as
+    /// the question keeps being asked, while what it names goes on moving underneath it. The
+    /// candidate supersedes an answer rather than overwriting it - which is what the answer store
+    /// does precisely so that last year's salary expectation is not submitted this year - and a
+    /// cache hit that outlived the supersession would undo that in one index seek, silently, on the
+    /// form after the one they corrected. So <see cref="FormAnswer.IsLive"/> is asked here exactly
+    /// as stage two asks it, and a person's <see cref="PriorResolution.Confirmed"/> does not
+    /// survive the retraction either: they agreed with a decision about an answer that no longer
+    /// stands.
+    ///
+    /// <b>And the key says which question, never who is asking.</b>
+    /// <c>FormAnswerResolutions</c> is keyed on the question and its options - correctly, because a
+    /// decision is about a question - so one row answers every employer that asks it, while the
+    /// answer under it may be written for one company or one advert. Re-reading
+    /// <see cref="AnswerPrecedence.Applies"/> here is what keeps <see cref="AnswerScope"/> meaning
+    /// something past the first form: "why do you want to work here", answered for one company and
+    /// served to a second, is the most legible way an application can announce that nobody read it.
+    /// Both checks run before the confidence floor, because they are facts about the answer as it
+    /// stands and the floor is an opinion about a match.
     /// </remarks>
     private static FormFieldResolution? FromCache(FormFieldRequest request, bool sensitive)
     {
@@ -366,6 +417,30 @@ public sealed class FormFieldResolver(
         if (cached.Answer is not { } answer)
         {
             return FormFieldResolution.Ask(FormFieldStage.Cache, reused, cached.Confidence);
+        }
+
+        if (!answer.IsLive)
+        {
+            return FormFieldResolution.Ask(
+                FormFieldStage.Cache,
+                $"This question resolved once before, on {Day(cached.ResolvedAtUtc)}, to an answer "
+                + $"the candidate gave on {Day(answer.AnsweredAtUtc)} and superseded on "
+                + $"{Day(answer.SupersededAtUtc!.Value)}. They retracted it on purpose and the "
+                + "remembered decision does not outlive it, so it is not typed on their behalf - "
+                + "ask them for the answer that stands now.",
+                cached.Confidence);
+        }
+
+        if (!AnswerPrecedence.Applies(answer, request.CompanyId, request.PostingId))
+        {
+            return FormFieldResolution.Ask(
+                FormFieldStage.Cache,
+                $"This question resolved once before, on {Day(cached.ResolvedAtUtc)}, to an answer "
+                + "the candidate wrote for one particular employer or advert, and this form is not "
+                + "that one. An answer stored against a company or a posting is offered back only "
+                + "there, so it is not reused here. Ask them, or record an answer that is true "
+                + "wherever this question is asked.",
+                cached.Confidence);
         }
 
         if (!FormFieldPolicy.Meets(cached.Confidence, cached.Confirmed))

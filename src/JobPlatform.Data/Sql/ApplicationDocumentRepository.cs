@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using JobPlatform.Core.Applications;
 using JobPlatform.Core.Submissions;
 using JobPlatform.Data.Sql.Entities;
@@ -260,10 +260,13 @@ public sealed class ApplicationDocumentRepository(JobsDbContext db)
         var letter = Reference(rendered.CoverLetterBlobPath, nameof(RenderedDocuments.CoverLetterBlobPath));
         var hash = Hash(rendered.CvSha256);
 
-        // Tracked deliberately - the one query in this repository that means to write back what it
-        // reads - and resolved through the caller's profile id, so a document id from a route or
-        // from a model's argument cannot attach a file to a stranger's draft.
+        // Tracked deliberately - the one query in this repository that means to write back what
+        // it reads - and said out loud rather than left to the default, because the API host once
+        // set NoTracking globally and a read-then-mutate under that saves nothing and throws
+        // nothing. Resolved through the caller's profile id, so a document id from a route or from
+        // a model's argument cannot attach a file to a stranger's draft.
         var entity = await db.ApplicationDocuments
+            .AsTracking()
             .Where(d => d.Id == documentId && d.ProfileId == profileId)
             .FirstOrDefaultAsync(ct);
 

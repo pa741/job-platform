@@ -3,20 +3,28 @@ using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using Azure.Storage.Sas;
 using JobPlatform.Core.Applications;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace JobPlatform.Api.Features.Applications;
+namespace JobPlatform.Data.Applications;
 
 /// <summary>
 /// Where rendered application documents are kept.
 /// </summary>
 /// <remarks>
-/// <b>Bound to the <c>ApplicationPacks</c> section, whose keys are set by the container app.</b>
+/// <b>Bound to the <c>ApplicationPacks</c> section, whose keys are set by the hosting template.</b>
 /// <c>ApplicationPacks__serviceUri</c> and <c>ApplicationPacks__ContainerName</c> are written by
 /// <c>infra/modules/containerapp.bicep</c>, and the names here match those exactly - the section
 /// is bound case-insensitively, which is why the lower-case <c>serviceUri</c> in the template
 /// still reaches <see cref="ServiceUri"/>. A rename on either side is a deployment that silently
 /// loses its storage, so neither side renames without the other.
+///
+/// <b>The Functions host takes the same two names, and that is why there is only one pair.</b>
+/// Its app settings arrive as environment variables, where <c>__</c> is the section separator, so
+/// the container app's spelling binds there unchanged. A second spelling for the second host
+/// would be a second thing to keep in step with two templates, and the half that fell behind
+/// would be a deployment holding storage it is configured for and never writes to - which is
+/// precisely the state the nightly pass was already in for want of a registration.
 /// </remarks>
 public sealed class ApplicationPackOptions
 {
@@ -113,8 +121,9 @@ public sealed record ApplicationPackContainer(BlobServiceClient Service, BlobCon
 /// out of the path, and what was handed over expires.
 ///
 /// <b>No account key, and there is nowhere to put one.</b> The signature is made with a user
-/// delegation key, which is itself obtained with the container app's managed identity: the
-/// account-wide Blob Data Reader assignment already carries <c>generateUserDelegationKey</c>, so
+/// delegation key, which is itself obtained with the user-assigned managed identity both hosts
+/// run under: the account-wide Blob Data Reader assignment already carries
+/// <c>generateUserDelegationKey</c>, so
 /// there is no second role and no secret. That is what keeps the repository's "a fresh clone
 /// deploys with nothing to leak" property true of the one container that is reachable from
 /// outside. A key-based SAS would also be unrevokable and would outlive any role change; a

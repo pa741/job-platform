@@ -3,6 +3,10 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Azure.SignalR.Management" />
     <PackageReference Include="Azure.Identity" />
+    <!-- The rendered application packs, in a container of their own. Here rather than in the two
+         hosts that register the store, because the Functions worker cannot reference the API and
+         both of them write these files - see Applications/ApplicationPackSetup.cs. -->
+    <PackageReference Include="Azure.Storage.Blobs" />
     <PackageReference Include="Microsoft.Azure.Cosmos" />
     <PackageReference Include="Newtonsoft.Json" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" />

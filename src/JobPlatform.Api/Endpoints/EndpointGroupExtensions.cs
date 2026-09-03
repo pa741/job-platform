@@ -6,6 +6,7 @@ using JobPlatform.Api.Features.Meta;
 using JobPlatform.Api.Features.Metrics;
 using JobPlatform.Api.Features.Postings;
 using JobPlatform.Api.Features.Profiles;
+using JobPlatform.Api.Features.Questions;
 using JobPlatform.Api.Features.Runs;
 using JobPlatform.Api.Features.Mcp;
 using JobPlatform.Api.Features.Searches;
@@ -27,6 +28,7 @@ public static class EndpointGroupExtensions
         new MatchEndpoints(),
         new ApplicationEndpoints(),
         new SubmissionEndpoints(),
+        new QuestionEndpoints(),
         new McpEndpoints(),
         new AiCallEndpoints(),
         new Features.Realtime.RealtimeEndpoints(),

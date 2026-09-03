@@ -502,7 +502,13 @@ public sealed class SubmissionRepository(JobsDbContext db)
         long? runId = null,
         CancellationToken ct = default)
     {
+        // AsTracking, explicitly, because this row is about to be mutated. It reads as
+        // redundant against EF's default and is not: the API host set NoTracking globally on
+        // the argument that it never wrote to SQL, and under that a read-then-mutate saves
+        // nothing and throws nothing. The default has been corrected, and stating it here
+        // means this write no longer depends on which host it runs in.
         var entity = await db.Submissions
+            .AsTracking()
             .FirstOrDefaultAsync(s => s.ProfileId == profileId && s.PostingId == postingId, ct);
 
         var created = entity is null;
@@ -563,7 +569,13 @@ public sealed class SubmissionRepository(JobsDbContext db)
     public async Task<SubmissionRow?> UnparkAsync(
         long profileId, long postingId, DateTimeOffset now, CancellationToken ct = default)
     {
+        // AsTracking, explicitly, because this row is about to be mutated. It reads as
+        // redundant against EF's default and is not: the API host set NoTracking globally on
+        // the argument that it never wrote to SQL, and under that a read-then-mutate saves
+        // nothing and throws nothing. The default has been corrected, and stating it here
+        // means this write no longer depends on which host it runs in.
         var entity = await db.Submissions
+            .AsTracking()
             .FirstOrDefaultAsync(s => s.ProfileId == profileId && s.PostingId == postingId, ct);
 
         if (entity is null)
@@ -621,8 +633,14 @@ public sealed class SubmissionRepository(JobsDbContext db)
         ArgumentNullException.ThrowIfNull(submissionEvent);
         ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
 
+        // AsTracking, explicitly, because this row is about to be mutated. It reads as
+        // redundant against EF's default and is not: the API host set NoTracking globally on
+        // the argument that it never wrote to SQL, and under that a read-then-mutate saves
+        // nothing and throws nothing. The default has been corrected, and stating it here
+        // means this write no longer depends on which host it runs in.
         // Tracked rather than AsNoTracking, because a recorded event ends a park - see below.
         var submission = await db.Submissions
+            .AsTracking()
             .FirstOrDefaultAsync(s => s.Id == submissionId && s.ProfileId == profileId, ct);
 
         if (submission is null)
