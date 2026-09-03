@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Globalization;
 using System.Security.Claims;
 using JobPlatform.Api.Configuration;
@@ -1118,6 +1118,19 @@ public sealed class SubmissionTools(
                 + "application or two. Inside a run, use '<runId>:<postingId>:Submitted'.");
         }
 
+        // Refused here rather than shortened in the repository, which is what it used to do. A
+        // key is compared and never read, so trimming it to fit makes two distinct events one -
+        // and the run-scoped key this surface recommends puts the part that differs at the end.
+        if (idempotencyKey is { } key && key.Trim().Length > SubmissionLimits.MaxIdempotencyKeyLength)
+        {
+            return Refused(
+                $"An idempotencyKey may be at most {SubmissionLimits.MaxIdempotencyKeyLength} "
+                + "characters, and this one is longer. It is compared rather than stored for "
+                + "reading, so shortening it here would make two different events look like one "
+                + "retry. Use a shorter run id.");
+        }
+
+
         var target = await matches.ResolveApplyTargetAsync(profileId!.Value, postingId, ct);
 
         // The same rule the application writer follows. It is what stops an arbitrary posting id
@@ -1262,6 +1275,19 @@ public sealed class SubmissionTools(
                 "idempotencyKey is required. It is what makes a retry record the same event once, "
                 + "and only the caller knows whether two requests are one event or two.");
         }
+
+        // Refused here rather than shortened in the repository, which is what it used to do. A
+        // key is compared and never read, so trimming it to fit makes two distinct events one -
+        // and the run-scoped key this surface recommends puts the part that differs at the end.
+        if (idempotencyKey is { } key && key.Trim().Length > SubmissionLimits.MaxIdempotencyKeyLength)
+        {
+            return Refused(
+                $"An idempotencyKey may be at most {SubmissionLimits.MaxIdempotencyKeyLength} "
+                + "characters, and this one is longer. It is compared rather than stored for "
+                + "reading, so shortening it here would make two different events look like one "
+                + "retry. Use a shorter run id.");
+        }
+
 
         if (!Enum.TryParse<SubmissionEventType>(type, ignoreCase: true, out var parsed)
             || !Enum.IsDefined(parsed))

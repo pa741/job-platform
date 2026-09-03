@@ -1,4 +1,4 @@
-using JobPlatform.Core.Applications;
+﻿using JobPlatform.Core.Applications;
 using JobPlatform.Core.Dedup;
 using JobPlatform.Core.Matching;
 using JobPlatform.Core.Submissions;
@@ -534,4 +534,77 @@ public sealed class ApplyQueueTests : IDisposable
         Assert.Equal(AtsVendor.Aggregator, vendors[3]);
         Assert.False(vendors[3].IsEmployerAts());
     }
+
+    /// <summary>
+    /// A parked posting that is then actually applied to does not come back a third time.
+    /// </summary>
+    /// <remarks>
+    /// <b>The sequence the loop runs, and the one place a duplicate application could come
+    /// from.</b> Run one meets a captcha and parks; the queue deliberately offers the posting
+    /// again, which is the whole point of a retryable reason. Run two gets through and records
+    /// that it did. Nothing in the queue's four clauses reads the event log, so unless recording
+    /// the event also ends the park, run three sees a row that is not a live application, not
+    /// permanently parked and not awaiting an answer - and offers a vacancy that has already been
+    /// applied to.
+    ///
+    /// That failure is not recoverable by anything in this system: the application exists in the
+    /// world, and it is the outcome <see cref="ParkReason.Duplicate"/> is documented as calling
+    /// worse than not applying at all. It would also spend a second slot of the daily cap, since
+    /// event idempotency is per key rather than per type.
+    /// </remarks>
+    [Fact]
+    public async Task A_posting_applied_to_after_a_park_does_not_return_to_the_queue()
+    {
+        await using var db = CreateContext();
+
+        var repository = new SubmissionRepository(db);
+
+        // Run one: the captcha.
+        var (parked, _) = await repository.ParkAsync(ProfileId, 1, ParkReason.Captcha, Now);
+
+        Assert.Contains(1L, Ids(await QueueAsync(new ApplyableQuery { Limit = 50 })));
+
+        // Run two: through the wall, and recorded.
+        var recorded = await repository.AddEventAsync(
+            ProfileId,
+            parked.Id,
+            new SubmissionEvent(Now.AddDays(1), SubmissionEventType.Submitted, null, SubmissionEventSource.Client, null),
+            "run-2:1:Submitted");
+
+        Assert.Equal(SubmissionEventResult.Recorded, recorded);
+
+        // Run three: gone, because the row now reads as the application it is.
+        Assert.DoesNotContain(1L, Ids(await QueueAsync(new ApplyableQuery { Limit = 50 })));
+    }
+
+    /// <summary>The park's own history survives the application that ended it.</summary>
+    /// <remarks>
+    /// "Was never parked" and "was parked for a captcha in March and applied to in April" are
+    /// different histories, and only the second explains why an application is a day late. So the
+    /// reason and the date it was put down stay, and the end of the park is one further column.
+    /// </remarks>
+    [Fact]
+    public async Task Applying_ends_a_park_without_erasing_why_it_was_parked()
+    {
+        await using var db = CreateContext();
+
+        var repository = new SubmissionRepository(db);
+
+        var (parked, _) = await repository.ParkAsync(ProfileId, 1, ParkReason.Captcha, Now);
+
+        await repository.AddEventAsync(
+            ProfileId,
+            parked.Id,
+            new SubmissionEvent(Now.AddDays(1), SubmissionEventType.Submitted, null, SubmissionEventSource.Client, null),
+            "k");
+
+        await using var read = CreateContext();
+
+        var row = await read.Submissions.SingleAsync(x => x.PostingId == 1);
+
+        Assert.Equal(ParkReason.Captcha, row.ParkedReason);
+        Assert.Equal(Now, row.ParkedAtUtc);
+        Assert.Equal(Now.AddDays(1), row.UnparkedAtUtc);
+    }
+
 }

@@ -1,4 +1,4 @@
-using JobPlatform.Core.Submissions;
+﻿using JobPlatform.Core.Submissions;
 using JobPlatform.Data.Sql;
 using JobPlatform.Data.Sql.Entities;
 using Microsoft.Data.Sqlite;
@@ -569,4 +569,71 @@ public sealed class SubmissionWritePathTests : IDisposable
         Assert.Equal(SubmissionLimits.MaxSubmittedFieldCount, recorded.Evidence.SubmittedFields!.Count);
         Assert.Equal("field0", recorded.Evidence.SubmittedFields[0]);
     }
+
+    /// <summary>
+    /// A key too long to store is refused, because shortening it would make two events one.
+    /// </summary>
+    /// <remarks>
+    /// <b>The one string here that is compared rather than read.</b> Everything else bounded on the
+    /// way in - a note, a stage, a confirmation reference - is trimmed to fit, and that is right for
+    /// text somebody reads: the first hundred characters of a note are still a note. An idempotency
+    /// key is only ever compared for equality, so trimming it merges two distinct keys that share a
+    /// prefix, and the merge is silent and in the dangerous direction: the second event answers
+    /// AlreadyRecorded for something that was never recorded.
+    ///
+    /// The shape this surface recommends is what makes it reachable rather than theoretical.
+    /// "&lt;runId&gt;:&lt;postingId&gt;:Submitted" puts everything that distinguishes one event from
+    /// the next at the END of the string, so a long run id would collapse an entire run's events
+    /// into its first one.
+    /// </remarks>
+    [Fact]
+    public async Task An_idempotency_key_too_long_to_store_is_refused_rather_than_shortened()
+    {
+        await using var db = CreateContext();
+
+        var repository = new SubmissionRepository(db);
+
+        var (submission, _) = await repository.CreateAsync(
+            ProfileId, 1, SubmissionChannel.Ats, null, Now);
+
+        var tooLong = new string('k', SubmissionLimits.MaxIdempotencyKeyLength + 1);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => repository.AddEventAsync(
+            ProfileId,
+            submission.Id,
+            new SubmissionEvent(Now, SubmissionEventType.Submitted, null, SubmissionEventSource.Client, null),
+            tooLong));
+
+        // Nothing was written, so the refusal is not a partial success a caller has to unpick.
+        Assert.Empty(await repository.ListEventsAsync(ProfileId, submission.Id));
+    }
+
+    /// <summary>Two keys differing only past the bound stay two events.</summary>
+    /// <remarks>
+    /// The regression in its own words: at the bound, these are the same string. This asserts the
+    /// pair is refused rather than silently converging, which is what makes the rule above worth
+    /// having - a key exactly at the limit still works, and one past it is a caller error rather
+    /// than a lost event.
+    /// </remarks>
+    [Fact]
+    public async Task A_key_exactly_at_the_bound_is_accepted()
+    {
+        await using var db = CreateContext();
+
+        var repository = new SubmissionRepository(db);
+
+        var (submission, _) = await repository.CreateAsync(
+            ProfileId, 1, SubmissionChannel.Ats, null, Now);
+
+        var atBound = new string('k', SubmissionLimits.MaxIdempotencyKeyLength);
+
+        var result = await repository.AddEventAsync(
+            ProfileId,
+            submission.Id,
+            new SubmissionEvent(Now, SubmissionEventType.Submitted, null, SubmissionEventSource.Client, null),
+            atBound);
+
+        Assert.Equal(SubmissionEventResult.Recorded, result);
+    }
+
 }

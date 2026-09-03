@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using JobPlatform.Core.Submissions;
 using JobPlatform.Data.Sql.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -621,16 +621,31 @@ public sealed class SubmissionRepository(JobsDbContext db)
         ArgumentNullException.ThrowIfNull(submissionEvent);
         ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
 
-        var owned = await db.Submissions
-            .AsNoTracking()
-            .AnyAsync(s => s.Id == submissionId && s.ProfileId == profileId, ct);
+        // Tracked rather than AsNoTracking, because a recorded event ends a park - see below.
+        var submission = await db.Submissions
+            .FirstOrDefaultAsync(s => s.Id == submissionId && s.ProfileId == profileId, ct);
 
-        if (!owned)
+        if (submission is null)
         {
             return SubmissionEventResult.NotFound;
         }
 
-        var key = Bound(idempotencyKey, SubmissionLimits.MaxIdempotencyKeyLength)!;
+        // Refused, never shortened. Bound() trims to fit everywhere else here, which is right for
+        // a note nobody compares; an idempotency key is compared, and truncation makes two
+        // distinct keys sharing a prefix into one. The run-scoped key the tools recommend -
+        // "<runId>:<postingId>:Submitted" - is exactly the shape whose difference lives at the
+        // end, so a long runId would silently collapse every event of a run into the first, each
+        // later one answering AlreadyRecorded for something that was never recorded.
+        if (idempotencyKey.Trim().Length > SubmissionLimits.MaxIdempotencyKeyLength)
+        {
+            throw new ArgumentException(
+                $"An idempotency key may be at most {SubmissionLimits.MaxIdempotencyKeyLength} "
+                + "characters. It is compared rather than stored for reading, so shortening it "
+                + "would make two distinct events one.",
+                nameof(idempotencyKey));
+        }
+
+        var key = idempotencyKey.Trim();
 
         // Checked before the cap, so a retry of an event that is already recorded answers
         // AlreadyRecorded rather than being refused for a quota it has already spent.
@@ -652,6 +667,34 @@ public sealed class SubmissionRepository(JobsDbContext db)
         entity.SubmissionId = submissionId;
 
         db.SubmissionEvents.Add(entity);
+
+        // Recording anything about an application ends the park, in the same SaveChanges as the
+        // event.
+        //
+        // <b>Without this the loop applies twice, and the second application is unrecoverable.</b>
+        // A park is written by the run that could not get through - a captcha, a login wall - and
+        // the queue deliberately offers that posting again tomorrow. When tomorrow's run does get
+        // through, this is the only code that hears about it: the park columns are what the queue
+        // reads, and none of its four clauses reads the log. So a row left parked while carrying a
+        // Submitted event is not a live application by clause one, not a permanent park by clause
+        // three, and not awaiting an answer by clause four - it is offered a third time, to a
+        // vacancy already applied to, which is the outcome ParkReason.Duplicate exists to call
+        // worse than not applying at all. It also spends a second slot of the daily cap, because
+        // event idempotency is per key rather than per type.
+        //
+        // <b>The reason and its date stay.</b> "Was never parked" and "was parked for a captcha in
+        // March and applied to in April" are different histories, and only the second one explains
+        // why the application is a day late. UnparkedAtUtc is what clause one reads, so ending the
+        // park is one column rather than an erasure - the same shape as UnparkAsync, which is the
+        // manual version of this.
+        //
+        // Every event type ends it, not only Submitted. A Rejected or a Withdrawn arriving against
+        // a parked row says the application reached somebody, so the park was already over and
+        // this is the first the record has heard of it.
+        if (submission.ParkedReason is not null && submission.UnparkedAtUtc is null)
+        {
+            submission.UnparkedAtUtc = submissionEvent.AtUtc;
+        }
 
         await db.SaveChangesAsync(ct);
 
