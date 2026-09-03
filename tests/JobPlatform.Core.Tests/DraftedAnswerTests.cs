@@ -1,4 +1,4 @@
-using JobPlatform.Core.Applications;
+﻿using JobPlatform.Core.Applications;
 using Xunit;
 
 namespace JobPlatform.Core.Tests;
@@ -246,4 +246,49 @@ public sealed class DraftedAnswerTests
         Assert.Equal("[]", DraftedAnswerCatalog.Serialise(null));
         Assert.Empty(DraftedAnswerCatalog.Deserialise("[]"));
     }
+
+    /// <summary>
+    /// An answer that talks about itself is not the candidate's, and is dropped.
+    /// </summary>
+    /// <remarks>
+    /// From the first real generation run against Cloudflare: asked whether there was anything
+    /// else the employer should know, the model gave the candidate's citizenship - correctly, out
+    /// of their own summary - and then added "I am an AI and they should have seen this". It was
+    /// stored, served through the pack, and would have been typed into the form under somebody's
+    /// name. A recruiter reading that does not conclude a tool misbehaved.
+    /// </remarks>
+    [Theory]
+    [InlineData("I am an AI and they should have seen this.")]
+    [InlineData("I am a dual UK citizen. I am an AI and they should have seen this.")]
+    [InlineData("I'm an AI assistant, so I cannot say.")]
+    [InlineData("I’m an AI, but I would enjoy this role.")]
+    [InlineData("As an AI language model, I have no preference.")]
+    [InlineData("I am a large language model trained by somebody.")]
+    public void An_answer_that_refers_to_itself_is_not_the_candidates_voice(string answer)
+        => Assert.False(DraftedAnswerCatalog.IsCandidateVoice(answer));
+
+    /// <summary>
+    /// The guard does not touch a candidate who genuinely works on AI, which is most of them here.
+    /// </summary>
+    /// <remarks>
+    /// The reason it matches first-person self-reference rather than the word: this candidate's
+    /// own summary is about building AI systems and half the corpus advertises AI roles, so a rule
+    /// striking "AI" would delete the strongest answers on the page to prevent a sentence nobody
+    /// has written.
+    /// </remarks>
+    [Theory]
+    [InlineData("I built an AI-native generative web framework for my dissertation.")]
+    [InlineData("I am an experienced engineer who has shipped AI features.")]
+    [InlineData("My interest is in AI infrastructure and developer tooling.")]
+    [InlineData("I am a dual UK and Spanish citizen with the right to work in both.")]
+    public void An_answer_about_working_on_ai_is_kept(string answer)
+        => Assert.True(DraftedAnswerCatalog.IsCandidateVoice(answer));
+
+    [Fact]
+    public void Nothing_is_not_an_answer()
+    {
+        Assert.False(DraftedAnswerCatalog.IsCandidateVoice(null));
+        Assert.False(DraftedAnswerCatalog.IsCandidateVoice("   "));
+    }
+
 }

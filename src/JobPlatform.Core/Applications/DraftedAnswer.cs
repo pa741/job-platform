@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 using JobPlatform.Core.Searches;
 
@@ -210,6 +210,76 @@ public static class DraftedAnswerCatalog
     /// Empty in, <c>"[]"</c> out. A caller may store that or leave the column null; both read back
     /// as no answers, so there is no third state to get wrong.
     /// </remarks>
+    /// <summary>
+    /// Whether a drafted answer is safe to keep, which here means: does it talk about itself.
+    /// </summary>
+    /// <remarks>
+    /// <b>Written against something that actually happened, on the first real generation run.</b>
+    /// Asked whether there was anything else the employer should know, the model answered with the
+    /// candidate's citizenship - correctly, from their own summary - and then added "I am an AI and
+    /// they should have seen this." That sentence was stored, served through the pack, and would
+    /// have been typed into Cloudflare's form under somebody's name.
+    ///
+    /// <b>The asymmetry is the whole argument.</b> Every other guard in this system protects
+    /// against a wrong answer; this protects against an answer that is not the candidate's voice at
+    /// all. A recruiter reading it does not conclude that a tool misbehaved, they conclude the
+    /// applicant sent it - and unlike a bad match or a clumsy sentence, there is no reading of it
+    /// that is merely weak. The gap list bounds what may be <i>claimed</i> and cannot see this,
+    /// because it is not a claim about the candidate's experience.
+    ///
+    /// <b>Narrow on purpose, and it does not pretend to be a content filter.</b> It catches
+    /// first-person self-reference to being a model, an AI, an assistant or a language model, which
+    /// is the specific failure mode observed and a well-known one. It cannot catch prose that is
+    /// merely bad, and nothing here should suggest it can: the honest bound on this feature is that
+    /// a drafted answer is a draft, and <c>park_application</c> plus the question queue exist so
+    /// that an unattended run can decline to answer rather than improvise.
+    ///
+    /// Dropping rather than editing, because a sentence removed from a paragraph leaves prose that
+    /// reads as though something is missing - and an omitted answer is a box a person fills in,
+    /// which is the state every application was in before any of this existed.
+    /// </remarks>
+    public static bool IsCandidateVoice(string? answer)
+    {
+        if (string.IsNullOrWhiteSpace(answer))
+        {
+            return false;
+        }
+
+        var folded = answer.ToLowerInvariant();
+
+        foreach (var subject in SelfReference)
+        {
+            if (folded.Contains(subject, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// First-person self-reference, in the spellings a model actually reaches for.
+    /// </summary>
+    /// <remarks>
+    /// Matched as substrings against the folded answer rather than as words, so "I'm an AI" and
+    /// "I am an AI assistant" both go. The apostrophe is spelled both ways because a model emits
+    /// the typographic one as often as the ASCII one, and only one of those is on a keyboard.
+    ///
+    /// It deliberately does not match "AI" alone: this candidate's own summary says they build AI
+    /// systems, half the adverts in the corpus are for AI roles, and a rule that struck those would
+    /// delete the best answers on the page to prevent a sentence nobody has written yet.
+    /// </remarks>
+    private static readonly string[] SelfReference =
+    [
+        "i am an ai", "i'm an ai", "i’m an ai",
+        "i am an artificial", "i'm an artificial", "i’m an artificial",
+        "i am a language model", "i'm a language model", "i’m a language model",
+        "i am an ai language", "as an ai", "as a language model",
+        "i am a large language", "i'm a large language", "i’m a large language",
+        "i am an assistant", "i am a chatbot", "i am a bot",
+    ];
+
     public static string Serialise(IEnumerable<DraftedAnswer>? answers)
         => JsonSerializer.Serialize(Clean(answers), Json);
 

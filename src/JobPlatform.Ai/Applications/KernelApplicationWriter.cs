@@ -520,6 +520,16 @@ public sealed class KernelApplicationWriter(
                 continue;
             }
 
+            // Dropped here rather than stored and filtered on the way out, so the sentence never
+            // reaches the database at all. On the first real run the model answered the
+            // "anything else" box with the candidate's citizenship and then "I am an AI and they
+            // should have seen this" - which was stored, served through the pack, and would have
+            // been typed into an employer's form under somebody's name.
+            if (!DraftedAnswerCatalog.IsCandidateVoice(answer))
+            {
+                continue;
+            }
+
             var known = DraftedAnswerCatalog.PerPosting.FirstOrDefault(prompt => string.Equals(
                 prompt.QuestionText, question.Trim(), StringComparison.OrdinalIgnoreCase));
 
