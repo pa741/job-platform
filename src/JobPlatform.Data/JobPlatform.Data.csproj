@@ -21,6 +21,14 @@
 
   <ItemGroup>
     <ProjectReference Include="..\JobPlatform.Core\JobPlatform.Core.csproj" />
+    <!-- A CV variant is rendered once and its bytes stored, unlike a per-posting document which
+         is rendered per request - so the render happens beside the upload rather than in a host.
+         Here rather than in the two hosts that own it for the reason the pack store is here: the
+         Functions worker cannot reference the API, both of them will render, and a service one of
+         them could not resolve is a pass that produces no file and reports success. Documents
+         references nothing, so this adds no cycle and no third-party dependency Data did not
+         already ship with a host. -->
+    <ProjectReference Include="..\JobPlatform.Documents\JobPlatform.Documents.csproj" />
   </ItemGroup>
 
 </Project>

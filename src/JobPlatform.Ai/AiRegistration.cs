@@ -95,6 +95,17 @@ public static class AiRegistration
         services.AddSingleton<IApplicationWriter, KernelApplicationWriter>();
         services.AddSingleton<ITextEmbedder, KernelTextEmbedder>();
 
+        // The CV library's own reading pass, registered here rather than folded into the
+        // extractor above it. The two look interchangeable and are not: this one returns a type
+        // that cannot be handed to the profile writer, which is what keeps a CV's concepts out
+        // of ProfileConcepts and out of every match score. See ICvVariantExtractor.
+        //
+        // Absent a provider it registers nothing like the rest of this block, and the degraded
+        // behaviour is the correct one rather than merely a survivable one: a variant with no
+        // concepts cannot clear CvVariantSelector's floor, so the pass abstains and the
+        // candidate is told no CV fits - instead of being sent a document nobody scored.
+        services.AddSingleton<ICvVariantExtractor, KernelCvVariantExtractor>();
+
         return services;
     }
 

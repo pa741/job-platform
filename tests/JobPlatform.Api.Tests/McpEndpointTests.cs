@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using JobPlatform.Api.Features.Mcp;
@@ -20,7 +20,7 @@ namespace JobPlatform.Api.Tests;
 /// mint from a test host, so it is exercised against the tool class directly in
 /// <c>McpToolPayloadTests</c>, <c>McpToolRefusalTests</c> and <c>McpAnswerSourceTests</c>. What is
 /// tested here is the part that is specific to this surface and would be catastrophic to get
-/// wrong: the route is closed, the surface is exactly the fourteen tools somebody reviewed, and no
+/// wrong: the route is closed, the surface is exactly the fifteen tools somebody reviewed, and no
 /// tool's <i>signature</i> offers a caller a way to name whose data it is asking about.
 ///
 /// <b>Names and shapes only.</b> This file reads the registered tools' protocol descriptions - the
@@ -48,6 +48,12 @@ public sealed class McpEndpointTests
         "start_run",
         "finish_run",
         "match_email_to_submission",
+
+        // The fifteenth, and the diff that added it is the point of this list. It reports which
+        // CVs the candidate has not written yet, ranked by how many applyable postings each one
+        // is blocking, so an unattended run can say why it applied to less than it considered
+        // instead of leaving a queue of individual refusals nobody reads.
+        "list_cv_gaps",
     ];
 
     /// <summary>
@@ -91,16 +97,17 @@ public sealed class McpEndpointTests
     /// helpful.
     ///
     /// <b>The number is not the property; the equality is.</b> This list went from six to fourteen
-    /// with the apply loop, and it will move again - what must not move is that moving it is a
-    /// diff somebody signs off. A test asserting "at least the six" would have accepted the eight
-    /// new tools silently, and would accept a fifteenth just as silently.
+    /// with the apply loop and to fifteen with the CV library, and it will move again - what must
+    /// not move is that moving it is a diff somebody signs off. A test asserting "at least the six"
+    /// would have accepted the eight new tools silently, and would accept a sixteenth just as
+    /// silently.
     ///
     /// It also pins the registration style. <c>WithTools&lt;T&gt;</c> is explicit; had it been
     /// <c>WithToolsFromAssembly</c>, a class gaining an attribute would become a public tool with
     /// nothing failing, and this test is what turns that into a red build.
     /// </remarks>
     [Fact]
-    public void The_tool_surface_is_exactly_the_fourteen_intended_tools()
+    public void The_tool_surface_is_exactly_the_fifteen_intended_tools()
     {
         using var factory = new ApiFactory();
         using var client = factory.CreateClient();
@@ -137,21 +144,21 @@ public sealed class McpEndpointTests
     }
 
     /// <summary>
-    /// The container can actually build the class those fourteen tools live on.
+    /// The container can actually build the class those fifteen tools live on.
     /// </summary>
     /// <remarks>
     /// <b>Registering a tool and being able to invoke it are two facts, and only the first is
     /// checked by everything above.</b> <c>WithTools&lt;T&gt;</c> reads the attributes off the type
     /// at startup and builds the instance from the request's services at call time, so a
     /// repository nobody registered in <c>Program.cs</c> costs nothing until a client calls a tool
-    /// - and then costs every tool at once, on a surface whose other tests are all green. Eight
+    /// - and then costs every tool at once, on a surface whose other tests are all green. Eleven
     /// services go into that constructor and one of them, <c>IFormFieldResolver</c>, is registered
     /// outside <c>AddAiProvider</c>'s provider check on purpose, which is exactly the sort of call
     /// that gets folded back inside it by somebody tidying up.
     ///
     /// <c>ActivatorUtilities</c> rather than <c>GetRequiredService</c>, because that is what the
     /// SDK does: the type is not a registered service, it is constructed per call from whatever
-    /// the container can supply, with the two optional parameters left null where it cannot.
+    /// the container can supply, with the three optional parameters left null where it cannot.
     /// </remarks>
     [Fact]
     public void The_class_the_tools_live_on_can_be_built_from_the_containers_own_registrations()

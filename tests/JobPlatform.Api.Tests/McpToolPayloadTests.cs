@@ -50,6 +50,11 @@ public sealed class McpToolPayloadTests
         "company",
         "coverLetterMarkdown",
         "curriculumVitaeMarkdown",
+
+        // The block that made the CV a choice rather than a generation. It carries scores, the
+        // posting's own unanswered requirements and prose - and deliberately not one concept any
+        // variant asserted, which is the spec's selection-only guard read off the wire.
+        "cvSelection",
         "documentUrls",
         "draftedAnswers",
         "note",
@@ -57,6 +62,21 @@ public sealed class McpToolPayloadTests
         "profileFields",
         "revision",
         "title",
+    ];
+
+    /// <summary>The selection block's shape, reviewed once and pinned here for the same reason.</summary>
+    private static readonly string[] SelectionKeys =
+    [
+        "cvVariantId",
+        "decidedBy",
+        "label",
+        "missingConcepts",
+        "outcome",
+        "parked",
+        "rationale",
+        "score",
+        "tied",
+        "version",
     ];
 
     [Fact]
@@ -75,9 +95,83 @@ public sealed class McpToolPayloadTests
             ["coverLetterPdf", "curriculumVitaeDocx", "curriculumVitaePdf", "cvSha256", "expiresInMinutes"],
             McpToolHarness.Keys(pack.GetProperty("documentUrls")));
 
+        Assert.Equal(SelectionKeys, McpToolHarness.Keys(pack.GetProperty("cvSelection")));
+
         Assert.All(
             pack.GetProperty("draftedAnswers").EnumerateArray(),
             answer => Assert.Equal(["answer", "category", "questionText"], McpToolHarness.Keys(answer)));
+    }
+
+    /// <summary>
+    /// The selection block carries posting concepts and never a variant's own.
+    /// </summary>
+    /// <remarks>
+    /// <b>The one guard in this feature that a key-set assertion cannot make on its own.</b> The
+    /// spec's section 1 says a variant's concepts feed selection and nothing else: they must never
+    /// reach <c>ProfileConcepts</c>, never move a score, never widen what the candidate is judged
+    /// to have. The structural half of that is in Core - <c>CvSelection</c> has no field to put one
+    /// in - and this is the half that watches the wire, because the way that rule gets broken is
+    /// somebody adding "what this CV says about you" to a response that already talks about CVs.
+    ///
+    /// It is asserted over a posting that scores <i>differently</i> against the two variants, so
+    /// the selection actually ran: a tie or an empty library would produce a block with nothing in
+    /// it, and this test would pass by having nothing to find.
+    /// </remarks>
+    [Fact]
+    public async Task The_selection_block_names_posting_requirements_and_no_variant_concepts()
+    {
+        using var harness = await McpToolHarness.CreateAsync();
+
+        var pack = McpToolHarness.Read(await harness.Tools().GetSubmissionPackAsync(
+            McpToolHarness.AsCandidate(), McpToolHarness.WithDocuments));
+
+        var selection = pack.GetProperty("cvSelection");
+
+        Assert.Equal("Chosen", selection.GetProperty("outcome").GetString());
+        Assert.Equal(harness.BackendVariant, selection.GetProperty("cvVariantId").GetInt64());
+
+        // Every concept named is one the POSTING asked for and nothing covers. The backend CV
+        // answers this advert outright, so the honest answer is an empty list - and an empty list
+        // is what proves the block is not quietly echoing the chosen document's own vocabulary,
+        // which is exactly what it would carry if somebody had wired the wrong collection in.
+        Assert.Empty(selection.GetProperty("missingConcepts").EnumerateArray());
+
+        // The variant's own concepts, none of which may appear anywhere in the response.
+        foreach (var key in new[] { "skill.csharp", "skill.docker" })
+        {
+            Assert.DoesNotContain(key, pack.ToString(), StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// Two postings of different kinds pull two different CVs, which is the whole feature.
+    /// </summary>
+    /// <remarks>
+    /// The spec's own "done when" for selection, and the assertion that separates a working
+    /// scorer from one returning the first row: a library where every posting pulled the same
+    /// variant would satisfy every other test in this file.
+    /// </remarks>
+    [Fact]
+    public async Task A_backend_posting_and_a_data_posting_pull_different_variants()
+    {
+        using var harness = await McpToolHarness.CreateAsync();
+
+        var backend = McpToolHarness.Read(await harness.Tools().GetSubmissionPackAsync(
+            McpToolHarness.AsCandidate(), McpToolHarness.WithDocuments));
+
+        var data = McpToolHarness.Read(await harness.Tools().GetSubmissionPackAsync(
+            McpToolHarness.AsCandidate(), McpToolHarness.WithoutDocuments));
+
+        Assert.Equal(
+            harness.BackendVariant, backend.GetProperty("cvSelection").GetProperty("cvVariantId").GetInt64());
+
+        Assert.Equal(
+            harness.DataVariant, data.GetProperty("cvSelection").GetProperty("cvVariantId").GetInt64());
+
+        // The markdown comes off the chosen variant rather than off the draft, so a pack with no
+        // generated documents at all still hands over a CV - which is the point of a library.
+        Assert.Contains("Data platforms", data.GetProperty("curriculumVitaeMarkdown").GetString()!);
+        Assert.Equal("arithmetic", data.GetProperty("cvSelection").GetProperty("decidedBy").GetString());
     }
 
     /// <summary>
@@ -120,15 +214,19 @@ public sealed class McpToolPayloadTests
     }
 
     /// <summary>
-    /// A posting with nothing generated for it answers with an explanation, not an error.
+    /// A posting with no cover letter generated for it answers with an explanation, not an error.
     /// </summary>
     /// <remarks>
-    /// The same key set as a pack that has documents, so a client parses one shape. Absence is
-    /// reported in <c>note</c> and as nulls, because a missing key and a null are different things
-    /// to a caller and only one of them is the truth here.
+    /// The same key set as a pack that has one, so a client parses one shape. Absence is reported
+    /// in <c>note</c> and as nulls, because a missing key and a null are different things to a
+    /// caller and only one of them is the truth here.
+    ///
+    /// <b>The CV is unaffected by that absence, which is the change.</b> Generation used to
+    /// produce both documents, so no draft meant no CV; now the CV comes out of the library and a
+    /// posting nothing has been written for still has one to send.
     /// </remarks>
     [Fact]
-    public async Task A_pack_with_no_documents_keeps_its_shape_and_says_so_in_a_note()
+    public async Task A_pack_with_no_cover_letter_keeps_its_shape_and_says_so_in_a_note()
     {
         using var harness = await McpToolHarness.CreateAsync();
 
@@ -136,8 +234,11 @@ public sealed class McpToolPayloadTests
             McpToolHarness.AsCandidate(), McpToolHarness.WithoutDocuments));
 
         Assert.Equal(PackKeys, McpToolHarness.Keys(pack));
-        Assert.Equal(JsonValueKind.Null, pack.GetProperty("curriculumVitaeMarkdown").ValueKind);
-        Assert.Contains("No documents have been generated", pack.GetProperty("note").GetString());
+        Assert.Equal(JsonValueKind.Null, pack.GetProperty("coverLetterMarkdown").ValueKind);
+        Assert.Equal(JsonValueKind.Null, pack.GetProperty("revision").ValueKind);
+        Assert.Contains("No cover letter has been generated", pack.GetProperty("note").GetString());
+
+        Assert.NotEqual(JsonValueKind.Null, pack.GetProperty("curriculumVitaeMarkdown").ValueKind);
     }
 
     /// <summary>

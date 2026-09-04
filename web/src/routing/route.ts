@@ -1,12 +1,12 @@
 /**
- * The nine pages, and what each one is called in a URL.
+ * The ten pages, and what each one is called in a URL.
  *
  * A page id is unique across sections, so a path needs only the page and not the section it
  * sits in - `/shortlist`, not `/you/shortlist`. The section is derived, which also means
  * moving a page between sections does not break a link somebody saved.
  */
 export type PageId =
-  | 'shortlist' | 'applications' | 'questions' | 'profile'
+  | 'shortlist' | 'applications' | 'questions' | 'profile' | 'cvs'
   | 'briefing' | 'postings' | 'vocabulary'
   | 'searches' | 'calls';
 
@@ -34,6 +34,10 @@ export const SECTIONS: readonly Section[] = [
       { id: 'applications', label: 'Applications' },
       { id: 'questions', label: 'Questions' },
       { id: 'profile', label: 'Profile' },
+      // Immediately after Profile, because that adjacency is the whole of the staleness
+      // rule: a CV is measured against the profile's last change, so the page that makes
+      // six documents go out of date is the one next to the page that says they have.
+      { id: 'cvs', label: 'CVs' },
     ],
   },
   {
@@ -63,6 +67,9 @@ const PATHS: Record<PageId, string> = {
   applications: '/applications',
   questions: '/questions',
   profile: '/profile',
+  // `/cvs` rather than `/cv-library`: the tail segment is a variant id or the word `new`, and
+  // `/cvs/new` reads as an act where `/cv-library/new` reads as a section of a site.
+  cvs: '/cvs',
   briefing: '/market',
   postings: '/market/postings',
   vocabulary: '/market/vocabulary',

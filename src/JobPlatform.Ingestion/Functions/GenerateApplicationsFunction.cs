@@ -87,8 +87,16 @@ public sealed class ApplicationGenerationOptions
 /// <b>It is a timer for the same reason the sweep is.</b> A document costs tens of seconds and a
 /// call on the writing deployment, so it cannot happen when a page is opened or when a tool is
 /// called; and it wants the night's verdicts, which the sweep writes at 03:30. By the time a run
-/// starts, the drafts, the drafted free text and - where a pack store is configured - the rendered
-/// PDF and DOCX are already there, and the run's first action is a query rather than a wait.
+/// starts, the letters, the drafted free text and - where a pack store is configured - the
+/// rendered letter are already there, and the run's first action is a query rather than a wait.
+///
+/// <b>What it writes has shrunk, and the cap it was written against is now the wrong shape.</b>
+/// The CV is no longer generated per posting - it is chosen from a library the candidate authored,
+/// which costs arithmetic rather than a model call - so this pass buys a cover letter and a
+/// handful of short answers where it used to buy a whole CV as well. The bound stays where it is
+/// deliberately: the ceiling is still <c>SubmissionLimits.MaxSubmittedPerDay</c>, because a night
+/// that writes more letters than a day can send is buying prose for adverts nobody will reach,
+/// whatever each one now costs.
 ///
 /// <b>The set it writes for is <c>ApplyableQuery</c>'s and never its own.</b> Reusing the queue
 /// repository is the single most important decision in this file: a second definition of "worth
@@ -628,25 +636,31 @@ public sealed class GenerateApplicationsFunction(
     }
 
     /// <summary>
-    /// Renders this draft, stores what rendered, and records where it went. False where nothing
-    /// was stored.
+    /// Renders this draft's cover letter, stores it, and records where it went. False where
+    /// nothing was stored.
     /// </summary>
     /// <remarks>
-    /// <b>The same three steps <c>ApplicationEndpoints.RenderAsync</c> takes, written out a second
-    /// time, and that is a known duplication rather than an oversight.</b> The shared halves are
-    /// already shared and they are the halves that would actually hurt if they drifted:
+    /// <b>The same steps <c>ApplicationEndpoints.RenderAsync</c> takes, written out a second time,
+    /// and that is a known duplication rather than an oversight.</b> The shared halves are already
+    /// shared and they are the halves that would actually hurt if they drifted:
     /// <c>ApplicationPackFile</c> owns the filename and the stored path on both sides, and
-    /// <c>IApplicationPackStore</c> owns the upload. What is repeated is the glue - pick the
-    /// markdown, render it, hand it over, write the references back - and the API's copy is a
-    /// private method on an endpoint group, so sharing it means moving code in a file this pass
-    /// does not own. Worth doing; not worth doing from here.
+    /// <c>IApplicationPackStore</c> owns the upload. What is repeated is the glue - render it,
+    /// hand it over, write the reference back - and the API's copy is a private method on an
+    /// endpoint group, so sharing it means moving code in a file this pass does not own. Worth
+    /// doing; not worth doing from here.
     ///
-    /// <b>Every step fails on its own and none of them fails the pass.</b> The draft is stored
-    /// before any of this runs, so a renderer that throws on a construct the AST maps onto
-    /// nothing, or a role assignment that has not finished propagating, costs a re-render rather
-    /// than a regeneration - the expensive half is already safe. <c>RenderedDocuments</c> reads a
-    /// null member as "nothing to say about this file" and never as "clear the one on the row",
-    /// which is what makes recording a partial result safe to repeat.
+    /// <b>This pass no longer renders a CV, because it no longer writes one.</b> The CV that goes
+    /// with an application is chosen from the candidate's library and was rendered once when they
+    /// wrote it; a second CV rendered here would carry the same stable filename as that one, and
+    /// nothing afterwards could say which of the two an employer received. What is left is the
+    /// letter - the document this pass does still write, and the one nothing else renders.
+    ///
+    /// <b>The render fails on its own and does not fail the pass.</b> The draft is stored before
+    /// any of this runs, so a renderer that throws on a construct the AST maps onto nothing, or a
+    /// role assignment that has not finished propagating, costs a re-render rather than a
+    /// regeneration - the expensive half is already safe. <c>RenderedDocuments</c> reads a null
+    /// member as "nothing to say about this file" and never as "clear the one on the row", which
+    /// is what keeps a re-render of a draft old enough to have CV paths from erasing them.
     ///
     /// <b>No pack store means no files and null paths, which is a capability this deployment does
     /// not have rather than a dependency it is missing.</b> The Functions host registers none
@@ -661,21 +675,11 @@ public sealed class GenerateApplicationsFunction(
             return false;
         }
 
-        var cvPdf = await StoreAsync(profileId, candidateName, stored, PackDocument.CurriculumVitae, PackFormat.Pdf, ct);
-        var cvDocx = await StoreAsync(profileId, candidateName, stored, PackDocument.CurriculumVitae, PackFormat.Docx, ct);
-        var letterPdf = await StoreAsync(profileId, candidateName, stored, PackDocument.CoverLetter, PackFormat.Pdf, ct);
+        var letterPdf = await StoreCoverLetterAsync(profileId, candidateName, stored, ct);
 
         var rendered = new RenderedDocuments
         {
-            CvBlobPath = cvPdf?.BlobPath,
-            CvDocxBlobPath = cvDocx?.BlobPath,
             CoverLetterBlobPath = letterPdf?.BlobPath,
-
-            // Paired with the PDF and with nothing else. The hash sits beside CvBlobPath and
-            // describes the bytes at it; carrying the DOCX's hash there when the PDF had failed
-            // would leave a row asserting that the file at a path it does not have hashes to
-            // something.
-            CvSha256 = cvPdf?.Sha256,
         };
 
         if (rendered.IsEmpty)
@@ -703,54 +707,50 @@ public sealed class GenerateApplicationsFunction(
         }
     }
 
-    /// <summary>Renders one document in one format and uploads it. Null where either half did not happen.</summary>
+    /// <summary>Renders the cover letter and uploads it. Null where either half did not happen.</summary>
     /// <remarks>
     /// Only the render is wrapped, because only the render can throw:
     /// <c>IApplicationPackStore</c> answers null for every storage failure by contract. The
-    /// failures a renderer has - a markdown construct the AST maps onto nothing, an OOXML part the
-    /// SDK refused - are exactly the ones model output is most likely to produce and least likely
-    /// to have been tested against, and one of them must not lose the other two files.
+    /// failures a renderer has - a markdown construct the AST maps onto nothing, a font resolver
+    /// that did not install - are exactly the ones model output is most likely to produce and
+    /// least likely to have been tested against.
+    ///
+    /// <b>PDF and no DOCX, unlike a CV variant.</b> A CV is parsed by an ATS and several vendors
+    /// read DOCX more reliably, which is why a variant is rendered twice; a covering letter is
+    /// read by a person or pasted into a box, and nothing parses it into fields.
     ///
     /// The title is the document's own metadata rather than its filename: it is what a PDF reader
     /// puts in a window title. The filename is <c>ApplicationPackFile</c>'s, built from the
     /// candidate's name, because that is what a recruiter reads in a list of forty.
     /// </remarks>
-    private async Task<StoredPackFile?> StoreAsync(
+    private async Task<StoredPackFile?> StoreCoverLetterAsync(
         long profileId,
         string? candidateName,
         StoredApplication stored,
-        PackDocument document,
-        PackFormat format,
         CancellationToken ct)
     {
-        var markdown = document == PackDocument.CoverLetter
-            ? stored.CoverLetterMarkdown
-            : stored.CurriculumVitaeMarkdown;
-
-        if (string.IsNullOrWhiteSpace(markdown))
+        if (string.IsNullOrWhiteSpace(stored.CoverLetterMarkdown))
         {
             return null;
         }
 
-        var kind = document == PackDocument.CoverLetter ? "Cover letter" : "CV";
         byte[] content;
 
         try
         {
-            content = format == PackFormat.Docx
-                ? MarkdownDocxRenderer.Render(markdown, $"{kind} - {stored.PostingTitle}")
-                : MarkdownPdfRenderer.Render(markdown, $"{kind} - {stored.PostingTitle}");
+            content = MarkdownPdfRenderer.Render(
+                stored.CoverLetterMarkdown, $"Cover letter - {stored.PostingTitle}");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // The draft id rather than the markdown. This line is read by somebody deciding
-            // whether a renderer has a bug, and the markdown is a tailored CV that does not
-            // belong in a log at all.
+            // whether a renderer has a bug, and the markdown names this candidate and this
+            // employer, so it does not belong in a log at all.
             logger.LogWarning(
                 ex,
-                "Could not render the {Kind} of draft {DocumentId} as {Format}. The draft is "
-                + "saved and the markdown is the record.",
-                kind, stored.Id, format);
+                "Could not render the cover letter of draft {DocumentId}. The draft is saved and "
+                + "the markdown is the record.",
+                stored.Id);
 
             return null;
         }
@@ -760,8 +760,8 @@ public sealed class GenerateApplicationsFunction(
             {
                 ProfileId = profileId,
                 DocumentId = stored.Id,
-                Document = document,
-                Format = format,
+                Document = PackDocument.CoverLetter,
+                Format = PackFormat.Pdf,
                 Content = content,
                 CandidateName = candidateName,
             },

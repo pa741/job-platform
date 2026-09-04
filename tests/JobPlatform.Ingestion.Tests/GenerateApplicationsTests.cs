@@ -438,7 +438,35 @@ public sealed class GenerateApplicationsTests : IDisposable
         // Degraded, never broken: the markdown is the record and the pack already answers "no
         // file is available" for exactly this state.
         Assert.True(stored.Rendered.IsEmpty);
-        Assert.Equal("# Test Candidate", stored.CurriculumVitaeMarkdown);
+        Assert.Equal("I would like to apply.", stored.CoverLetterMarkdown);
+    }
+
+    /// <summary>
+    /// The pass writes a letter and no CV, and the CV columns stay empty.
+    /// </summary>
+    /// <remarks>
+    /// <b>The assertion that would have caught this change going in half-way.</b> The writer no
+    /// longer produces a CV, and if it somehow did - a prompt edit, a stub left behind, a model
+    /// answering with a "cv" key the parser had learned to read - this pass would render it,
+    /// upload it under the one stable CV filename every application sends, and there would be two
+    /// files with that name for one candidate and nothing able to say which an employer received.
+    /// So the emptiness is asserted rather than assumed.
+    /// </remarks>
+    [Fact]
+    public async Task No_curriculum_vitae_is_written_or_rendered_by_the_nightly_pass()
+    {
+        var packs = new StubPackStore();
+
+        await RunAsync(new StubWriter(), packs, documentsPerNight: 1);
+
+        var stored = await LatestAsync(Best);
+
+        Assert.True(string.IsNullOrEmpty(stored.CurriculumVitaeMarkdown));
+        Assert.Null(stored.Rendered.CvBlobPath);
+        Assert.Null(stored.Rendered.CvDocxBlobPath);
+        Assert.Null(stored.Rendered.CvSha256);
+
+        Assert.DoesNotContain(packs.Files, file => file.Document == PackDocument.CurriculumVitae);
     }
 
     [Fact]
@@ -451,22 +479,15 @@ public sealed class GenerateApplicationsTests : IDisposable
         var stored = await LatestAsync(Best);
 
         Assert.Equal(1, summary.Rendered);
-        Assert.NotNull(stored.Rendered.CvBlobPath);
-        Assert.NotNull(stored.Rendered.CvDocxBlobPath);
         Assert.NotNull(stored.Rendered.CoverLetterBlobPath);
 
-        // Paired with the PDF and with nothing else - a checksum describing a different file is
-        // worse than no checksum.
-        Assert.Equal(64, stored.Rendered.CvSha256!.Length);
-
-        // Three files: the CV twice, because several large ATS vendors parse a DOCX more
-        // reliably than a PDF, and the covering letter once.
+        // One file, where there were three. The CV is chosen from the candidate's library and was
+        // rendered once when they wrote it; a second CV rendered here would carry the same stable
+        // filename and nothing afterwards could say which of the two an employer received. And
+        // PDF only, because a covering letter is read by a person - a DOCX exists for a CV because
+        // several large ATS vendors parse one more reliably, which is not a claim about letters.
         Assert.Equal(
-            [
-                (PackDocument.CurriculumVitae, PackFormat.Pdf),
-                (PackDocument.CurriculumVitae, PackFormat.Docx),
-                (PackDocument.CoverLetter, PackFormat.Pdf),
-            ],
+            [(PackDocument.CoverLetter, PackFormat.Pdf)],
             packs.Files.Select(file => (file.Document, file.Format)));
     }
 
@@ -651,7 +672,10 @@ public sealed class GenerateApplicationsTests : IDisposable
     {
         private static readonly ApplicationDraft Written = new()
         {
-            CurriculumVitaeMarkdown = "# Test Candidate",
+            // No CV. The writer stopped producing one when the library replaced generation, and a
+            // stub that still returned one would let this pass keep rendering a document the real
+            // writer cannot supply - which is exactly the shape of test that goes on passing after
+            // the thing it describes has gone.
             CoverLetterMarkdown = "I would like to apply.",
             Emphasised = ["Kubernetes in production."],
             Model = "writing",
@@ -676,6 +700,22 @@ public sealed class GenerateApplicationsTests : IDisposable
 
             return Task.FromResult(FailFor == request.Posting.PostingId ? null : Draft);
         }
+
+        /// <summary>
+        /// The tie-break, which this pass never reaches.
+        /// </summary>
+        /// <remarks>
+        /// Selection happens in <c>get_submission_pack</c>, at apply time, over the library as it
+        /// stands then - not here, hours earlier, against a posting that may never be applied to.
+        /// Throwing rather than returning null is the point: a nightly pass that started choosing
+        /// CVs would be recording a decision nothing acts on and paying for it, and a stub that
+        /// answered politely would let that land green.
+        /// </remarks>
+        public Task<long?> ChooseCurriculumVitaeAsync(
+            CvChoiceRequest request, CancellationToken ct = default)
+            => throw new InvalidOperationException(
+                "The generation pass must not choose a CV. Selection runs in the pack, at apply "
+                + "time, against the library as it stands then.");
     }
 
     /// <summary>

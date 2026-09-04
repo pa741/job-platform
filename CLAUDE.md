@@ -11,8 +11,10 @@ Azure SQL, metrics into Cosmos DB, triggered by Event Grid on blob creation.
 
 `../model.md` holds the target architecture for the whole system, and it is binding: amend it
 before building something it does not name, not after. Every row is built - Ingestion, Data, the
-API, the Frontend, the candidate profile, matching, generated applications, Realtime, Submissions
-and the agent surface - the last of which now writes as well as reads. What stays open there is the
+API, the Frontend, the candidate profile, matching, applications, Realtime, Submissions and the
+agent surface - the last of which now writes as well as reads. The Applications and Candidate
+profile rows were amended for the CV library *before* it was built, which is the order that
+document is binding in. What stays open there is the
 questions *channel*: `list_open_questions` is a poll, and pushing a question to the person who can
 answer it needs a per-candidate send the broadcast feed does not have. See
 [`mcp_handoff.md`](mcp_handoff.md) section 1.4.
@@ -141,8 +143,21 @@ worked around.
 - `src/JobPlatform.Api/Features/Mcp/SubmissionTools.cs` — the whole agent surface, reads and
   writes both, and nothing on it applies to anything. The `[Description]` on each tool is the
   interface a model reads, so it is documentation that changes behaviour.
-- `src/JobPlatform.Documents/MarkdownPdfRenderer.cs` — model output to PDF, through a parsed
-  AST and a fixed node mapping. No HTML step exists.
+- `src/JobPlatform.Documents/MarkdownPdfRenderer.cs` — markdown to PDF, through a parsed AST and
+  a fixed node mapping. No HTML step exists. It renders a cover letter the model wrote and a CV
+  the candidate wrote, and it cannot tell them apart, which is the point.
+- `src/JobPlatform.Core/Applications/CvVariant.cs` — what a CV variant is, its bounds, and the
+  library rules as pure functions. It has no concepts field, and that absence is the guard rather
+  than an omission; read the remarks before adding one.
+- `src/JobPlatform.Core/Applications/CvVariantSelector.cs` — which CV is sent, or why none is. The
+  floor and the margin are argued from the credit table rather than measured, and it says so.
+- `src/JobPlatform.Core/Applications/CvGapBrief.cs` — what to write next, ranked by how many
+  postings each missing CV blocks. Aggregate by construction: there is no per-posting overload.
+- `src/JobPlatform.Core/Applications/ApplicationPackFile.cs` — what a rendered file is called and
+  where it is kept. Neither `FileName` nor `VariantBlobPath` has a parameter a variant's label
+  could be passed in, which is what keeps one name on every CV.
+- `src/JobPlatform.Data/Sql/CvVariantRepository.cs` — every variant read and write. Takes a
+  profile id the caller resolved, like the submission and answer stores.
 
 ## Conventions and constraints
 
@@ -552,9 +567,11 @@ mechanism, and it is derived from the corpus rather than guessed at.
   clause is what made parking impossible.** `ListApplyableAsync` used to ask only whether any
   submission existed for the pair - so the instant a park wrote the row it needs to park against,
   the posting left the queue forever, and "come back to this once the captcha is gone" and "never
-  show me this again" were the same operation. Four clauses replace it and each holds a posting
+  show me this again" were the same operation. Five clauses replace it and each holds a posting
   back for a different reason: a live application on this posting, a live application on any other
-  listing of the same job, a permanent park, and a park waiting on an answer that has not arrived.
+  listing of the same job, a permanent park, a park waiting on an answer that has not arrived, and
+  a park waiting on a CV, held while nothing in the library covers what that park recorded as
+  missing - see **The CV library** below for why that fifth one cannot be simplified.
   Everything else - a captcha, a login wall, a spent day's quota - comes back on the next run,
   which is the entire point. **Only a live application suppresses the rest of a cross-board
   cluster**: a permanent park is about one listing, so suppressing a cluster on the strength of
@@ -572,8 +589,12 @@ mechanism, and it is derived from the corpus rather than guessed at.
   `ApplicationDocuments` holds **one row for the entire system**, so `documentsReady=true` with
   `applyUrlSource=Posting` and `minAssessmentScore=80` yields **zero** postings. That is a correct
   predicate over an empty input and must not be "fixed" by loosening it: **document generation is
-  what the loop is blocked on**, it is user-initiated, there is no scheduled pass, and adding one
-  is a `model.md` amendment rather than a tweak.
+  what the loop is blocked on.** `GenerateApplicationsFunction` is the nightly pass that answers
+  it - 04:30 UTC, an hour after the sweep, bounded per night and to one document per HTTP nudge -
+  and the CV library takes the expensive half of that work away entirely, since a chosen CV costs
+  no model call at all. What is left to generate is the covering letter and the drafted answers,
+  which is where the cap now binds. Re-measure before quoting the zero: it was true of a corpus
+  with one draft in it and a writer that was still writing CVs.
 - **The MCP surface gets its own rate-limit policy**, not `RateLimitSetup.ReadPolicy`. A client
   polls differently from a browser and must not exhaust the budget the dashboard shares — and
   these tools read SQL, which is billed on wall-clock time against a monthly grant.
@@ -752,6 +773,14 @@ Each of these cost a red CI run; none of them fail locally.
 - **EF cannot project a `GroupBy` straight into a positional record's constructor.** It
   compiles and then fails at runtime with "could not be translated". Project into an
   anonymous type and map afterwards — see `CountByAsync` and the daily-rollup aggregates.
+- **Every read that is then mutated says `AsTracking()` explicitly, and it is not redundant.** It
+  reads as a restatement of EF's own default, which is why it was left off: the API host once set
+  `NoTracking` globally on the argument that this side only ever read from SQL, and under that a
+  read-then-mutate **saves nothing and throws nothing**. Four write paths had been doing exactly
+  that before anybody noticed, because the failure is a `SaveChangesAsync` returning zero on a page
+  that reported success. Stating it at the query means a write does not depend on a line in a
+  composition root a long way away, which is also the only version of this rule that survives
+  somebody adding a second host.
 - **SQLite cannot `ORDER BY` a `DateTimeOffset`.** `JobsDbContext.ConfigureConventions`
   converts to ticks under SQLite only, so the tests can exercise the real orderings; SQL
   Server keeps native `datetimeoffset`.
@@ -1116,9 +1145,16 @@ Each of these cost a red CI run; none of them fail locally.
 
 ### Profiles and generated documents
 
-- **A form, not an uploaded CV.** Parsing a PDF back into structure is a lossy guess at what the
-  person already knows. The generated CV is an *output* of the profile, not a rewrite of an
-  input.
+- **A form, not an uploaded CV. The CV library does not reverse this, and it will be read as
+  though it does.** Parsing a PDF back into structure is a lossy guess at what the person already
+  knows, so **the profile remains the only source of truth for matching and nothing parses a CV
+  back into it** - not the form, not `ProfileConcepts`, not a score. What changed is only which
+  document the candidate's CV is: it used to be an *output* of the profile written by a model, and
+  it is now one of a handful of markdown variants the candidate wrote themselves. A variant is a
+  *sendable artefact*, never an input, and it is read for concepts that go somewhere else
+  entirely. Stated here rather than left to be re-derived, because the next reader who finds the
+  library and this rule on the same page will otherwise conclude one of them is stale and remove
+  it. The genuinely new guard is in **The CV library** below.
 - **`CandidateProfileRepository` takes a subject id and never a profile id.** That is the
   authorisation boundary expressed as a type: there is no overload an endpoint could hand a
   route parameter to, so a stranger's employment history cannot be read by mistake.
@@ -1153,10 +1189,16 @@ Each of these cost a red CI run; none of them fail locally.
 - **Generation requires an existing match.** The writer is handed the gap list as the set of
   claims it must not make; a document written without one has nothing stopping it from inventing
   the skills the candidate lacks. Refusing to generate for an unscored posting is what keeps that
-  guarantee real.
+  guarantee real. It now covers the covering letter and the drafted answers rather than a CV,
+  which narrows what a bad generation can cost without weakening the rule - a letter that invents
+  a year of Kubernetes still falls apart in the interview.
 - **The markdown is the record; the PDF is rendered per request.** Storing the PDF would mean a
   layout change could not reach documents already generated, and would put megabytes into a
-  database billed by the second.
+  database billed by the second. **A CV variant is the deliberate exception and the reasons
+  invert**: its bytes were uploaded into somebody else's system, so "what exactly did we send
+  them" is a question about a file that has to still exist and still hash the same. It is rendered
+  once to blob storage and hashed; a template fix reaches it by re-rendering, which is free and
+  deterministic, rather than by silently changing what a stored hash describes.
 - **`MarkdownPdfRenderer` walks a parsed AST and emits from a fixed set of node types.** There is
   no HTML step and nothing the model returns is ever interpreted as markup. An unmapped node
   renders as its plain text rather than being dropped - silently losing a node would take content
@@ -1167,6 +1209,156 @@ Each of these cost a red CI run; none of them fail locally.
   whatever the document says. Installing fonts in the container was rejected: it renders
   differently on a developer's machine and turns a missing apt package into a 500 on somebody's
   CV download.
+
+### The CV library
+
+The CV stopped being written per posting and became a library of markdown variants the candidate
+authors; a pass chooses one, and where none fits the candidate is told what is missing rather than
+sent the nearest. What follows is what that change established, each rule with the failure it
+prevents. It exists because of a sentence: asked what else an employer should know, the writer gave
+the candidate's citizenship - correctly, out of their own summary - and added *"I am an AI and they
+should have seen this."* A guard now drops that class of sentence, and a guard is a net under a
+trapeze. **A curated CV takes the model out of the document that matters most**, because a model
+that is not writing the CV cannot invent a claim in it.
+
+- **A variant's concepts feed selection only.** They *are* extracted - that is how selection works
+  at all - and they must never reach `ProfileConcepts`, never move a match score, and never widen
+  what the candidate is judged to have. A CV is written *from* the profile, so letting its reading
+  back in would let a document inflate the record it came from, and the loop would then apply to
+  jobs on the strength of its own prose. **The guard is four structural refusals rather than a rule
+  anybody has to remember**, and each is worth knowing before it is "simplified".
+  `CvVariantConcepts` is its own table, so which rows are the candidate's qualifications is
+  answered by which table you are reading; `CvVariantExtraction` is a type that
+  `CandidateProfileRepository.ApplyExtractionAsync` cannot be handed, where a third `DocumentKind`
+  would have produced the exact object it accepts; `CvVariantFacts` carries concept keys
+  **without their polarity**, so a document that describes itself emphatically cannot outscore one
+  that mentions the same work plainly; and no field on
+  `CvSelection` carries a concept a *variant* asserted - the missing set is what the **posting**
+  asked for. A convenience returning a `DocumentExtraction` from the variant path undoes all four
+  at once, and nothing would fail.
+- **No route, tool or scheduled pass may rewrite a variant's markdown with a model.** The prose in
+  `CvVariants.Markdown` is the candidate's, and that is the whole of what this feature buys.
+  Staleness is the pressure that will come for this rule - a variant is a file that ages while the
+  profile moves, and "regenerate the ones that fell behind" is exactly the shape of a helpful
+  automation. So `CvVariant.PredatesProfileUpdate` *reports* and nothing acts on it, and
+  `CvVariantStaleness` has no field for a suggested action, deliberately: a summary carrying a verb
+  is how a scheduled pass acquires one six months later. The correct response to a stale CV is a
+  sentence on the page the variants live on - the same answer the apply loop's answer TTL gets.
+  Tell the person, and let them decide whether the change was one their CV needed to mention.
+- **The library caps at six, counted over unarchived rows only.** Six rather than the spec's eight
+  because the number that matters is how many CVs a person will keep *current*, not how many they
+  will happily create: one profile edit puts every variant behind the profile on the same
+  afternoon, and at eight what happens is that two get updated and six quietly rot - where a stale
+  variant looks exactly like a current one in the picker, and the system will send it. The counting
+  rule is the load-bearing half. **Archived variants do not occupy the cap**, because archiving is
+  not deletion here - `Submissions.CvVariantId` names the row and an application made last year has
+  to stay explicable - so a cap counting them would make the seventh rewrite of a CV impossible
+  until somebody erased a file an employer was actually sent. That trades an auditable history for
+  a row count, and the history is the more expensive of the two.
+  `CvVariantLibrary.HasRoomForAnother` is where that reading lives so no caller has to remember it,
+  and a library already over the cap answers "no room" rather than throwing - lowering the constant
+  leaves every library above it above it, which is nobody's mistake.
+- **One filename for every variant, and the path carries the rule rather than the header.** Every
+  application uploads `Firstname_Surname_Curriculum_Vitae.pdf` - and `.docx` - whichever variant
+  was chosen. The reason is not tidiness: `Pablo_De_Groot_AI_Engineer_CV.pdf` tells an employer
+  that a different CV is kept for other roles, which is a true fact they have no business being
+  handed, and it arrives in the file list before anybody opens the document. Nothing in the loop is
+  choosing to disclose it, so nothing in the loop would notice it being disclosed. The stable name
+  goes at the **end of the blob path** and not only in `Content-Disposition`, because the loop
+  fetches a signed URL and hands a local path to a browser's file input: a client that saves the
+  URL by its path and ignores the header uploads the last segment verbatim. The header is a
+  request; the path is the guarantee. Neither `ApplicationPackFile.FileName` nor `VariantBlobPath`
+  has an argument a label could be passed in, which is what makes this a property of the code
+  rather than a rule. The variant id is a *directory* in that path and never part of the name, so
+  re-rendering still overwrites the file it replaces and the stored hash still describes the bytes
+  at that path.
+- **Variants get their own blob container, and that is a constraint rather than a preference.** A
+  document id and a variant id are independent identity spaces that both start at one, so document
+  34 and variant 34 belonging to one profile address the same directory - and now that a chosen CV
+  and a generated one spell the filename the same way, the same file. Nothing in
+  `ApplicationPackFile` can detect it, because the container is a string it is handed: the caller
+  passes `profile-cvs` for variants and `application-packs` for per-posting documents.
+- **`ParkReason.NoCvVariant` is a third retry class, and getting that wrong reintroduces a bug this
+  repository has already paid for once.** `ParkReasonPolicy` sorts reasons into permanent,
+  retryable and - since `MissingAnswer` - conditional, and this is the second conditional kind.
+  Not retryable: the gap is a pure function of what the advert asks for and what the library holds,
+  and a run changes neither, so the next pass meets the same posting, scores the same variants,
+  computes the same gap and parks it again, having spent a page load to learn what the last run
+  already knew. Because one library serves the whole queue, a single missing CV does that to
+  *every* posting that wanted it, on every run, for ever. Not permanent either: the two permanent
+  reasons are statements about a vacancy, and this is a statement about a library the candidate can
+  change on a Saturday afternoon, so permanence would turn the report of what is missing into a
+  list of postings that cannot come back - and acting on the report would buy nothing. **And it did
+  not join `AwaitingAnswer`, though a list called "the conditional ones" would have taken it and
+  every caller would have gone on compiling**: that clause holds a posting while a question is
+  outstanding, and its fallback for a park naming no question holds it only while *some other*
+  advert's question is unanswered. Filed there, a CV park would be released the moment an unrelated
+  question queue drained - with no variant written and nothing about it changed. The same loop,
+  arriving through an answer given to a different advert, which is harder to see than the original.
+- **Its condition is coverage, not authorship.** `ParkRequeue.WhenCovered` waits on a variant that
+  covers *this* posting's recorded gap, never on the library having grown. Releasing on any
+  authoring event means writing an eighth backend CV releases a posting parked for Kubernetes: the
+  same loop at a longer period, with the bill handed to the person who has just done the work. So
+  the queue clause joins `SubmissionParkGaps` - the concepts *this* park recorded as missing, dated
+  at or after `ParkedAtUtc`, so a superseded park's rows leave the predicate by arithmetic rather
+  than by a delete - and coverage is a walk through `ConceptClosure` in the direction `MatchScorer`
+  credits, the gap the ancestor and the variant's concept the descendant, so a CV naming EKS covers
+  a gap asking for Kubernetes. It is deliberately narrower than Core's own reading, which also
+  entails through the curated `implies` edges: a variant covering a gap only by implication holds
+  the posting rather than releasing it.
+- **The release covers ANY recorded gap and never all of them, because releasing sends nothing.**
+  Requiring one variant to cover every recorded gap was written first and is wrong. The argument
+  for it - a library holding Kubernetes in one CV and Terraform in another would get a posting
+  needing both released, and be sent a document answering half the advert - does not survive the
+  mechanics: a released posting returns to the *queue*, where `CvVariantSelector` runs again and
+  applies the floor and the margin, so a library that still does not fit produces `NoFit` and parks
+  it once more. Selection decides what goes out; this clause decides only whether the question is
+  worth re-asking. The universal therefore buys no protection at all, while it silently strands the
+  posting whose park recorded five missing concepts and whose candidate then wrote a CV covering
+  four of them - and since the floor is half the stated requirements rather than all of them, that
+  CV would have been chosen. **A wrong release costs one re-park, in arithmetic, bounded by how
+  often a person writes a CV. A wrong hold costs the application, and nothing reports it.**
+- **A park with no standing gaps is held rather than released, and the explicit `Any()` is why.** A
+  universal over an empty set is vacuously true, so without it a park whose gap rows failed to be
+  written - a bug, an older row, a client that stopped half way - would be released the moment the
+  candidate had any CV at all. That is the loop again, arriving through an oversight rather than
+  through a decision.
+- **There is no default variant: abstaining is the product rather than the failure.** Sending the
+  nearest CV to a job it does not fit is exactly what this replaces, and it is invisible - the
+  application simply never comes back, and nothing in the system ever learns why. An abstention is
+  visible and leaves behind the one thing anybody can act on. So `CvSelectionOutcome` has three
+  members rather than a nullable variant - `Ambiguous` is a question worth putting to a model with
+  the advert in front of it, `NoFit` is not a question at all but a brief for a CV nobody has
+  written - and `CvSelection.Chosen` is null on both of the others rather than holding the leader
+  anyway, because a field holding the best of a bad set is a field somebody eventually sends.
+- **The gap report is aggregate by construction, not by discipline.** Fifty individual "could not
+  apply" notices is a queue nobody reads; one ranked list of three gaps is a Saturday afternoon
+  with an obvious payoff. `CvGapBrief` therefore has no per-posting overload and no posting id in
+  its answer, and its `MinimumPostings` floor of two makes the per-posting version *unbuildable*:
+  hand `Compute` a single posting and every concept in it blocks exactly one, which is below the
+  floor, so the answer is a brief with no gaps in it. `MaxGaps` is a constant rather than a
+  parameter for the same reason - a caller free to ask for fifty rebuilds the queue the aggregation
+  exists to prevent. A brief reporting blocked postings and *no* gaps is a real signal rather than
+  an empty answer: it says postings are being parked over requirements that are all tags, all
+  domains or all unknown keys, which is a selection or vocabulary fault rather than a CV anybody
+  can write.
+- **`get_submission_pack` chooses the CV, and the one write that read can make is a park.** The
+  decision belongs in the pack rather than in the browser loop - the apply loop's own opening
+  principle - so the pack returns the chosen variant's links, reports *why* in the same breath as
+  the numbers, and the choice is recorded on the submission, which is what finally gives outcome
+  feedback something real to correlate. It takes an optional `runId` **only** so that a
+  `NoCvVariant` park made inside a run belongs to it: without it the commonest kind of park would
+  be the one kind a run's summary could not be checked against, and `RunSummary.Parked` would read
+  as an overstatement on every unattended pass.
+- **The selection floor and margin are their own constants and must not be merged with the
+  matcher's.** `MatchRanker.FusionFloor` and `MatchSweepFunction.AssessmentThreshold` were briefly
+  collapsed into one and that was already a mistake; `CvVariantSelector.SelectionFloor` answers a
+  fourth question - how much of an advert a document has to actually answer before it is worth
+  sending - and it is **reasoned rather than measured**, from the credit table: every partial-credit
+  relation is worth less than half, so a variant answering every requirement by transferable ground
+  alone tops out at 45 and fails, while one answering half of them outright passes. **A CV cannot
+  be sent on resemblance.** Say that it is reasoned when quoting the number: there is no library to
+  fit it against yet, which is itself the finding that motivated the feature.
 
 ## Common tasks
 

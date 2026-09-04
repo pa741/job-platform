@@ -5,6 +5,8 @@ using JobPlatform.Api.Configuration;
 using JobPlatform.Api.Infrastructure;
 using JobPlatform.Core.Applications;
 using JobPlatform.Core.Dedup;
+using JobPlatform.Core.Enrichment;
+using JobPlatform.Core.Matching;
 using JobPlatform.Core.Submissions;
 using JobPlatform.Data.Sql;
 using Microsoft.Extensions.Options;
@@ -17,19 +19,39 @@ namespace JobPlatform.Api.Features.Mcp;
 /// The agent surface over the submission pipeline.
 /// </summary>
 /// <remarks>
-/// <b>Fourteen tools, and not one of them applies to anything.</b> <c>submit_application</c> will
+/// <b>Fifteen tools, and not one of them applies to anything.</b> <c>submit_application</c> will
 /// never exist: applying is irreversible and outward-facing, so it stays outside this system
 /// entirely and no bug here can reach an employer. A person, or an agent driving a browser
 /// somewhere else, does the applying; these tools decide what to apply to, hand over what is
 /// needed to fill the form in, and write down what happened. <c>McpEndpointTests</c> asserts the
-/// surface is exactly these fourteen, an equality rather than a superset, so a fifteenth turns
+/// surface is exactly these fifteen, an equality rather than a superset, so a sixteenth turns
 /// the build red.
 ///
-/// <b>Seven reads, six writes, and one that decides without writing.</b> The reads are the queue,
-/// the pack, the two allowlist reads, the resolver, the pipeline and the question queue. The
-/// writes record an answer, a submission, an event, a park, and a run's start and end.
-/// <see cref="MatchEmailToSubmissionAsync"/> sits with the writes because it is the step before
-/// one and its failure mode is a write's, but it stores nothing itself.
+/// <b>Eight reads, six writes, and one that decides without writing.</b> The reads are the queue,
+/// the pack, the two allowlist reads, the resolver, the pipeline, the question queue and the CV
+/// gap brief. The writes record an answer, a submission, an event, a park, and a run's start and
+/// end. <see cref="MatchEmailToSubmissionAsync"/> sits with the writes because it is the step
+/// before one and its failure mode is a write's, but it stores nothing itself.
+///
+/// <b>The pack chooses the CV, which is the largest thing this surface has taken on since it was
+/// written, and it is here rather than in the client for the apply loop's own reason.</b>
+/// Decisions live in the generation pass and the browser loop is pure lookup. A CV is no longer
+/// written per posting by a model - the candidate keeps a small library and
+/// <c>CvVariantSelector</c> scores every variant against what the advert asks for - so
+/// <see cref="GetSubmissionPackAsync"/> runs that selection, hands over the winner's links, and
+/// says why. A client choosing for itself would be a second spelling of the floor and the margin,
+/// in software this repository does not ship, over a library it would have to be given in full.
+///
+/// <b>That makes one read a writer, in exactly one direction, and it is the direction that ends a
+/// loop rather than starting one.</b> Where nothing fits, the pack parks the posting as
+/// <c>NoCvVariant</c> and records what it asked for that no CV covers - which is why
+/// <see cref="ParkApplicationAsync"/> refuses that reason outright. A park written without those
+/// concepts is held for ever, because the queue's release clause reads an empty standing set as
+/// "nothing has been covered yet"; only a pass that has run a selection knows them, and the pack
+/// is the only pass that does. <see cref="ListCvGapsAsync"/> is the other half: it ranks what the
+/// candidate should write next by how many applications each missing CV is blocking, so a run can
+/// report why it applied to less than it considered instead of leaving fifty individual refusals
+/// nobody reads.
 ///
 /// <b>What the writes may do is narrower than what a pipeline usually allows.</b> They append to
 /// the event log, set the park columns on a submission, store an answer by superseding the one it
@@ -99,10 +121,19 @@ namespace JobPlatform.Api.Features.Mcp;
 /// <see cref="GetFormFieldsAsync"/> answers several named ones in a round trip.
 /// <b>The batch is a saving in round trips and not in audit</b>: it writes one disclosure per
 /// field, exactly as the singular tool does, so a review of what left this system does not have
-/// to know which shape the caller happened to use. <see cref="GetSubmissionPackAsync"/> returns
-/// the tailored CV, which is the profile rewritten in prose, and the allowlist entries beside it;
-/// <see cref="ResolveFormFieldAsync"/> returns whatever it decided to type. All are recorded on
-/// the same terms, and a record names what was asked for and never what came back.
+/// to know which shape the caller happened to use. <see cref="GetSubmissionPackAsync"/> returns a
+/// CV - now the candidate's own words rather than a model's, which does not make it less of a
+/// disclosure - and the allowlist entries beside it; <see cref="ResolveFormFieldAsync"/> returns
+/// whatever it decided to type. All are recorded on the same terms, and a record names what was
+/// asked for and never what came back: the pack's record names the variant id, which is the
+/// identity of what left and is not the document.
+///
+/// <b><see cref="ListCvGapsAsync"/> is deliberately not among them, and the line is worth
+/// drawing.</b> It returns a count of public postings and concepts the candidate's CVs do
+/// <i>not</i> mention - no profile field, no history, no document text - so it is the same class
+/// of read as <see cref="ListSubmissionsAsync"/>, which names their whole pipeline and is likewise
+/// unlogged. What the four logged reads have in common is that each hands over something a form
+/// would be filled in with.
 ///
 /// <b>The pack carries named entries and never a profile object, and that is what keeps the
 /// paragraph above true.</b> An employment history handed over as a structure would put the shape
@@ -122,6 +153,7 @@ public sealed class SubmissionTools(
     JobMatchRepository matches,
     SubmissionRepository submissions,
     ApplicationDocumentRepository documents,
+    CvVariantRepository variants,
     FormAnswerRepository answers,
     OpenQuestionRepository questions,
     RunRepository runs,
@@ -129,8 +161,27 @@ public sealed class SubmissionTools(
     TimeProvider time,
     IOptions<McpOptions> mcp,
     IApplicationPackStore? packs = null,
-    IDisclosureLog? disclosures = null)
+    IDisclosureLog? disclosures = null,
+    IApplicationWriter? writer = null)
 {
+    /// <summary>
+    /// How many variants a tie may be handed to a model as.
+    /// </summary>
+    /// <remarks>
+    /// <b>Three, and the bound is the caller's job because <c>CvSelection.Tied</c> can be the whole
+    /// library.</b> A posting that states nothing discriminating ties everything, and a ballot of
+    /// six names is not a tie-break - it is a preference, asked of something that has no way to
+    /// tell six documents apart from their titles.
+    ///
+    /// <b>Cutting the list at three settles part of the question on score-then-id, which is the
+    /// thing <c>CvSelectionOutcome.Ambiguous</c> exists to refuse</b>, and the selector says so
+    /// plainly when it declines to do the bounding itself. It is accepted here because the two
+    /// mistakes are different sizes: a fourth contender dropped from a ballot loses a document that
+    /// was already inside the margin of the leader, where an unbounded ballot loses the meaning of
+    /// the question. What must not happen is the cut going unmentioned, so the pack reports the
+    /// ballot it actually sent.
+    /// </remarks>
+    private const int MaxTieBreakBallot = 3;
     /// <summary>Hard ceiling regardless of what a caller asks for. Mirrors the matches endpoint.</summary>
     private const int MaxLimit = 100;
 
@@ -319,15 +370,29 @@ public sealed class SubmissionTools(
     [McpServerTool(Name = "get_submission_pack")]
     [Description(
         "Everything needed to fill in one application: the advert's own text, where to apply, the "
-        + "tailored CV and cover letter as markdown, short-lived download links to the rendered "
-        + "PDF and DOCX where they exist, the free-text answers drafted for this posting, and the "
-        + "allowlisted profile answers a form asks for by name. Returns an explanation rather "
-        + "than an error where no documents have been generated yet - they are written on request "
-        + "from the dashboard and this surface does not generate them. The document links are "
-        + "minted per request and expire; fetch the pack again rather than storing one.")]
+        + "CV chosen for this posting out of the candidate's own library with short-lived links "
+        + "to its PDF and DOCX, the cover letter, the free-text answers drafted for this posting, "
+        + "and the allowlisted profile answers a form asks for by name. THE CV IS CHOSEN, NOT "
+        + "WRITTEN: the candidate keeps a handful of CVs and this scores each against what the "
+        + "advert asks for. Read 'cvSelection.outcome'. 'Chosen' means send that CV and nothing "
+        + "else. 'NoFit' means NO CV IS AVAILABLE for this posting and the posting has already "
+        + "been parked with what it asked for that no CV covers - do not apply, do not attach the "
+        + "nearest CV, and move on; the candidate has been told what to write. 'Ambiguous' means "
+        + "two CVs fit equally and nothing could separate them, so no CV is offered and a person "
+        + "decides. Use list_cv_gaps to report how many postings a run left for want of a CV. "
+        + "Returns an explanation rather than an error where no cover letter has been generated "
+        + "yet - letters are written on request from the dashboard and by the nightly pass, and "
+        + "this surface does not generate them. The document links are minted per request and "
+        + "expire; fetch the pack again rather than storing one.")]
     public async Task<object> GetSubmissionPackAsync(
         RequestContext<CallToolRequestParams> context,
         [Description("The posting to assemble a pack for. Must already be matched to this candidate.")] long postingId,
+
+        // The one write this read can make is a park, and a park made inside a run belongs to it.
+        // Without this the NoCvVariant parks - which are now the commonest kind - would be the only
+        // ones a run's summary could not be checked against, and RunSummary.Parked would read as
+        // an overstatement on every unattended pass.
+        [Description("The run doing this, from start_run. Omit outside a run. Only used if the posting has to be parked for want of a CV.")] long? runId = null,
         CancellationToken ct = default)
     {
         var (profileId, failure) = await ResolveAsync(context, ct);
@@ -346,7 +411,7 @@ public sealed class SubmissionTools(
                 + "there is no pack for it. Use list_applyable to see what is ready to send.");
         }
 
-        var (_, _, posting) = pair.Value;
+        var (match, _, posting) = pair.Value;
 
         // The defect this fixes: the description has always promised "where to apply" and the
         // response has never carried it, so a client that had dropped its queue row had to go
@@ -378,39 +443,63 @@ public sealed class SubmissionTools(
         // documents were never written has no drafted answers rather than a missing list.
         IReadOnlyList<DraftedAnswer> drafted = draft?.DraftedAnswers ?? [];
 
+        var decision = await ChooseCurriculumVitaeAsync(
+            profileId.Value, postingId, match, posting, target, runId, ct);
+
         // Minted per request and never stored: the URL is the authority, so a stored one extends
         // that authority to whoever reads the store, and an expired one is a dead pointer that
         // still looks live. LinkAsync answers null for a null path and for any storage failure,
         // so a deployment with no pack store simply has no links to offer.
-        var cvPdf = packs is null ? null : await packs.LinkAsync(rendered?.CvBlobPath, ct);
-        var cvDocx = packs is null ? null : await packs.LinkAsync(rendered?.CvDocxBlobPath, ct);
+        //
+        // The CV's paths come off the chosen variant and the letter's off the draft, which is the
+        // whole shape of this change in three lines: one document is chosen from a library and
+        // rendered once when it was written, the other is written per posting. A draft old enough
+        // to carry its own CV paths is deliberately not read for them - it would hand over a
+        // model-written CV under the same key, which is the artefact this feature removed.
+        var cvPdf = packs is null ? null : await packs.LinkAsync(decision.Variant?.PdfBlobPath, ct);
+        var cvDocx = packs is null ? null : await packs.LinkAsync(decision.Variant?.DocxBlobPath, ct);
         var coverLetter = packs is null ? null : await packs.LinkAsync(rendered?.CoverLetterBlobPath, ct);
 
         // Logged whether or not anything came back, and it names what was asked for rather than
-        // what was returned. This is the read that hands over the CV - the profile rewritten in
-        // prose - alongside the allowlist entries, so it is recorded on the same terms as
-        // get_form_field rather than treated as a public-text read.
+        // what was returned. This is the read that hands over a CV - somebody's whole employment
+        // history in their own words - alongside the allowlist entries, so it is recorded on the
+        // same terms as get_form_field rather than treated as a public-text read. The variant id
+        // is named because it is the identity of what left, and it is not the document.
         await RecordAsync(
             context,
             "get_submission_pack",
-            $"posting {postingId}; {fields.Count} profile field(s)",
-            draft is not null || fields.Count > 0,
+            decision.Variant is { } sent
+                ? $"posting {postingId}; cv variant {sent.Id}; {fields.Count} profile field(s)"
+                : $"posting {postingId}; no cv; {fields.Count} profile field(s)",
+            draft is not null || decision.Variant is not null || fields.Count > 0,
             ct);
 
-        var notes = new List<string>();
+        // The selection leads, always, because it is the sentence that decides whether anything is
+        // sent at all. A client skimming a note for the first thing that looks actionable must not
+        // find "no cover letter yet" ahead of "no CV is available and this posting is parked".
+        var notes = new List<string> { decision.Note };
 
         if (draft is null)
         {
             notes.Add(
-                "No documents have been generated for this posting yet. They are written on "
-                + "request from the dashboard; this surface does not generate them.");
+                "No cover letter has been generated for this posting yet. Letters are written on "
+                + "request from the dashboard and by the nightly pass; this surface does not "
+                + "generate them.");
         }
-        else if (cvPdf is null && cvDocx is null && coverLetter is null)
+        else if (coverLetter is null)
         {
             notes.Add(
-                "The documents exist as markdown but no rendered file is available to link to - "
-                + "either they were written before rendering was stored, or this deployment has "
+                "The cover letter exists as markdown but no rendered file is available to link "
+                + "to - either it was written before rendering was stored, or this deployment has "
                 + "no document storage configured. The markdown is the record and is complete.");
+        }
+
+        if (decision.Variant is not null && cvPdf is null && cvDocx is null)
+        {
+            notes.Add(
+                "The chosen CV has no rendered file to link to, so it can be pasted but not "
+                + "uploaded. Either this deployment has no document storage configured, or that "
+                + "variant was never rendered.");
         }
 
         if (target?.Channel is SubmissionChannel.Ats)
@@ -443,7 +532,49 @@ public sealed class SubmissionTools(
                 : ApplyUrlSource.BoardPosting.ToString(),
             atsVendor = AtsVendorDetector.Detect(target?.ApplyUrl).ToString(),
 
-            curriculumVitaeMarkdown = draft?.CurriculumVitaeMarkdown,
+            // The chosen variant's own markdown, in the candidate's words. Null on every outcome
+            // but Chosen, and null is the answer rather than the nearest CV: sending a document
+            // that does not fit is the failure this library replaces, and it is invisible - the
+            // application simply never comes back and nothing learns why.
+            curriculumVitaeMarkdown = decision.Variant?.Markdown,
+
+            // Which CV was chosen and why, in enough detail to answer "why did you send them
+            // that one" months later without the constants to hand. Pass cvVariantId back to
+            // create_submission: it is what finally lets replies be correlated against the
+            // document that earned them.
+            cvSelection = new
+            {
+                outcome = decision.Selection.Outcome.ToString(),
+                cvVariantId = decision.Variant?.Id,
+                label = decision.Variant?.Label,
+                score = decision.Score,
+
+                // 'arithmetic' where the floor and the margin settled it, 'model' where they
+                // could not and a tie-break did, null where nothing chose. Returned because they
+                // are not the same claim: one is reproducible from stored rows, the other is a
+                // judgement that will not necessarily repeat.
+                decidedBy = decision.DecidedBy,
+                rationale = decision.Selection.Rationale,
+
+                // The posting's requirements no CV covers, as keys and labels. Never a variant's
+                // concepts: those feed selection only and must not widen what this candidate is
+                // judged to have.
+                missingConcepts = decision.Selection.Missing
+                    .Select(gap => new { key = gap.RequiredKey, label = Label(gap.RequiredKey) })
+                    .ToList(),
+
+                // The ballot as it was actually put, so a cut list is visible rather than
+                // implied. Empty unless the arithmetic tied.
+                tied = decision.Ballot
+                    .Select(entry => new { cvVariantId = entry.VariantId, label = entry.Label, score = entry.Score })
+                    .ToList(),
+
+                // Whether this call put the posting down. True only for NoFit, and it means the
+                // posting is out of list_applyable until a covering variant is written.
+                parked = decision.Parked,
+                version = decision.Selection.Version,
+            },
+
             coverLetterMarkdown = draft?.CoverLetterMarkdown,
             revision = draft?.Revision,
             documentUrls = new
@@ -457,9 +588,11 @@ public sealed class SubmissionTools(
                 // a missing document.
                 expiresInMinutes = packs is null ? null : (int?)packs.LinkLifetime.TotalMinutes,
 
-                // Over the rendered bytes, so a file can be checked against this row afterwards -
-                // a path alone cannot say whether what is at the end of it is still what was sent.
-                cvSha256 = rendered?.CvSha256,
+                // The variant's hash and no longer the draft's, because the variant is the file.
+                // It is taken over the rendered bytes, so what was uploaded can be checked
+                // against this row afterwards - a path alone cannot say whether what is at the
+                // end of it is still what was sent.
+                cvSha256 = decision.Variant?.Sha256,
             },
 
             // Written when the documents were, from the advert and the match: prose about this
@@ -476,6 +609,386 @@ public sealed class SubmissionTools(
             note = notes.Count == 0 ? null : string.Join(" ", notes),
         };
     }
+
+    [McpServerTool(Name = "list_cv_gaps")]
+    [Description(
+        "The CVs this candidate has not written yet, ranked by how many applyable postings each "
+        + "one would unblock. This is what a run reports when it applied to fewer postings than "
+        + "it considered: 'blockedPostings' is how many are waiting on a CV that does not exist, "
+        + "and each gap names the concepts one new CV would have to cover. Aggregate by design - "
+        + "there is no per-posting version and no limit to raise, because fifty 'could not apply' "
+        + "notices is a queue nobody reads and one ranked list of three is an afternoon's work "
+        + "with an obvious payoff. A brief with blocked postings and no gaps is worth reporting "
+        + "as it stands: it means postings are being parked over requirements that are all tags "
+        + "or all unknown, which is a fault in this system rather than a CV anybody can write. "
+        + "Read-only; it decides nothing and parks nothing.")]
+    public async Task<object> ListCvGapsAsync(
+        RequestContext<CallToolRequestParams> context,
+        CancellationToken ct = default)
+    {
+        var (profileId, failure) = await ResolveAsync(context, ct);
+
+        if (failure is not null)
+        {
+            return failure;
+        }
+
+        // Already differenced by the pass that parked each posting, and deliberately not
+        // re-differenced here. Coverage is a walk over the graph rather than a set subtraction, so
+        // a second definition of it would put a concept selection already treats as answered at
+        // the top of somebody's afternoon.
+        var blocked = await matches.ListCvBlockedPostingsAsync(profileId!.Value, ct);
+
+        var brief = CvGapBrief.Compute(blocked, ConceptGraph.Default);
+
+        // Not a disclosure, and the line is worth drawing rather than assuming. What leaves here is
+        // a count of public postings and a list of concepts the candidate's CVs do NOT mention -
+        // no profile field, no employment history, no document text. It is the same class of read
+        // as list_submissions, which names the candidate's own pipeline and is likewise not logged;
+        // the four logged reads are the four that hand over something a form would be filled in
+        // with.
+        return new
+        {
+            blockedPostings = brief.BlockedPostings,
+            gaps = brief.Gaps.Select(gap => new
+            {
+                postings = gap.Postings,
+
+                // Heaviest first, the seed leading, so a sentence that reads them in order names
+                // the biggest gap first.
+                concepts = gap.Concepts
+                    .Select(concept => new { key = concept.Key, label = concept.Label, postings = concept.Postings })
+                    .ToList(),
+            }).ToList(),
+
+            // The floor and the ceiling stated, because a client that does not know them reads
+            // "three gaps" as "three problems" rather than as "the three worth acting on", and
+            // reads a gap that blocks one posting being absent as a bug.
+            minimumPostingsPerGap = CvGapBrief.MinimumPostings,
+            maxGaps = CvGapBrief.MaxGaps,
+            note = Brief(brief),
+        };
+    }
+
+    /// <summary>
+    /// What the brief means, for a run that has to say something about it.
+    /// </summary>
+    /// <remarks>
+    /// <b>The sentence is built here rather than in Core, and Core says why.</b> The dashboard is
+    /// TypeScript and this surface is JSON, so a formatted string in <c>CvGapBrief</c> would be
+    /// dead the moment either wanted a different one - every part of what is written here is a
+    /// field on <c>CvGap</c>.
+    ///
+    /// <b>The three cases are different findings, not three phrasings of one.</b> Nothing blocked
+    /// is the healthy state; blocked postings with gaps is a work item with its business case
+    /// attached; blocked postings with no gaps is the fault <c>CvGapBrief</c> documents as worth
+    /// noticing, and a note that reported it as "no gaps" would be reporting the opposite of what
+    /// it means.
+    /// </remarks>
+    private static string Brief(CvGapBrief brief)
+    {
+        if (brief.BlockedPostings == 0)
+        {
+            return "No applyable posting is waiting on a CV that has not been written.";
+        }
+
+        if (brief.Gaps.Count == 0)
+        {
+            return $"{brief.BlockedPostings} applyable posting(s) are parked for want of a CV, and "
+                + "none of them names a concept a CV could be written about - the requirements "
+                + "blocking them are generic tags, or keys this system's vocabulary does not "
+                + "carry. That is a selection or vocabulary fault rather than a CV anybody can "
+                + "write, and it is worth reporting exactly as it stands.";
+        }
+
+        var top = brief.Gaps[0];
+
+        return $"{brief.BlockedPostings} applyable posting(s) are waiting on a CV that has not "
+            + $"been written. The biggest single gap blocks {top.Postings} of them and would need "
+            + $"to cover {string.Join(", ", top.Concepts.Select(concept => concept.Label))}. "
+            + "The total is larger than the gaps add up to by design: it also counts gaps under "
+            + "the floor, gaps past the third, and postings whose requirements cannot be named.";
+    }
+
+    /// <summary>
+    /// What one selection concluded, and everything a pack has to say about it.
+    /// </summary>
+    /// <remarks>
+    /// <b>One record because the four things travel together or not at all.</b> The variant, the
+    /// ballot, the park and the sentence are each derived from the same run of
+    /// <c>CvVariantSelector</c>, and a caller assembling them separately would eventually report a
+    /// rationale from one outcome beside a document from another - which is the failure this whole
+    /// feature is trying to make impossible, arriving through the response instead of through the
+    /// prompt.
+    /// </remarks>
+    /// <param name="Selection">The arithmetic's own answer, unedited. Carries the rationale and the gaps.</param>
+    /// <param name="Variant">
+    /// The CV to send, or null. <b>Null on every outcome but a decided one</b>, and never the
+    /// leader of a losing field: a field holding the best of a bad set is a field somebody
+    /// eventually sends.
+    /// </param>
+    /// <param name="DecidedBy">
+    /// <c>arithmetic</c>, <c>model</c>, or null where nothing decided. Reported because the two are
+    /// different claims - one is reproducible from stored rows and the other is a judgement that
+    /// need not repeat - and C4 cannot tell them apart afterwards if this is not said now.
+    /// </param>
+    /// <param name="Ballot">What was actually put to the model, so a cut list is visible.</param>
+    /// <param name="Parked">Whether this call put the posting down.</param>
+    /// <param name="Score">What the chosen variant scored, where one was chosen.</param>
+    /// <param name="Note">The sentence the pack leads its note with.</param>
+    private sealed record CvDecision(
+        CvSelection Selection,
+        CvVariant? Variant,
+        string? DecidedBy,
+        IReadOnlyList<CvVariantScore> Ballot,
+        bool Parked,
+        int? Score,
+        string Note);
+
+    /// <summary>
+    /// Chooses which of the candidate's CVs goes with this application, or declines to.
+    /// </summary>
+    /// <remarks>
+    /// <b>Selection belongs here rather than in the client, and that is the apply loop's own
+    /// opening principle applied to a new decision.</b> Decisions live in the generation pass and
+    /// the browser loop is pure lookup: a client that chose its own CV would be a second place
+    /// where the floor and the margin are spelled out, in software this repository does not ship,
+    /// against a library it would have to be handed in full to score.
+    ///
+    /// <b>The arithmetic runs on everything and the model runs on what survives it</b>, which is
+    /// the house idiom and is unchanged here. <c>CvVariantSelector</c> scores every sendable
+    /// variant over the shared vocabulary and answers one of three things; only the middle one
+    /// costs a call, and that call is a closed question over a bounded ballot rather than a
+    /// request to write.
+    ///
+    /// <b>The demands are reconstructed from the stored match rather than re-read from
+    /// <c>PostingConcepts</c>, and the reason is agreement rather than a round trip saved.</b>
+    /// <c>MatchResult.Matched</c> and <c>MatchResult.Gaps</c> together are every requirement the
+    /// scorer weighed, already deduplicated, each carrying the polarity it was weighed at - so the
+    /// CV is chosen against exactly the requirement set the match breakdown on the same page was
+    /// computed from. A second read of the posting's rows could disagree with it after a
+    /// re-extraction, and the pack would then explain a choice with a list of demands that is not
+    /// the list the choice was made on.
+    ///
+    /// <b>Nothing a variant asserts leaves this method.</b> <c>CvSelection</c> carries scores,
+    /// posting concepts and prose, and the library reaches the selector as
+    /// <c>CvVariantFacts</c> - an id, a label and concept keys. There is no path by which a
+    /// document's own vocabulary could reach <c>ProfileConcepts</c>, move a match score, or widen
+    /// what this candidate is judged to have, because there is no parameter for it to travel
+    /// through.
+    ///
+    /// <b>A variant that vanishes between the two reads is treated as no CV, never as an
+    /// error.</b> The facts query and the fetch are separate round trips, so a variant archived in
+    /// between is an ordinary race; the honest answer is the one this method gives for every other
+    /// undecided case - no document, and a sentence saying so.
+    ///
+    /// <b>It costs one query always and three at most, which is worth stating against a database
+    /// billed on wall-clock time.</b> The facts read is one round trip over one candidate's CVs -
+    /// ids, labels and concept keys, no markdown - and it is the only one every call makes. The
+    /// document itself is fetched only where one was chosen, and the pipeline is read only where
+    /// nothing was, because that is the only branch that writes. The alternative shape - fetch the
+    /// whole library up front so the winner is in hand - drags every CV's markdown across on every
+    /// pack read to use one of them.
+    /// </remarks>
+    private async Task<CvDecision> ChooseCurriculumVitaeAsync(
+        long profileId,
+        long postingId,
+        MatchResult match,
+        PostingBrief posting,
+        ApplyTarget? target,
+        long? runId,
+        CancellationToken ct)
+    {
+        var library = await variants.ListSelectableFactsAsync(profileId, ct);
+        var selection = CvVariantSelector.Select(Demands(match), library);
+
+        if (selection.Outcome is CvSelectionOutcome.Chosen && selection.Chosen is { } winner)
+        {
+            var variant = await variants.GetAsync(profileId, winner.VariantId, ct);
+
+            if (variant is not null)
+            {
+                return new CvDecision(
+                    selection, variant, "arithmetic", [], Parked: false, winner.Score,
+                    $"The CV to send is \"{variant.Label}\", chosen from this candidate's own "
+                    + "library. Attach that one and no other - there is no fallback CV here, and "
+                    + "a document aimed at a different kind of role is a rejection nobody ever "
+                    + $"hears the reason for. {selection.Rationale}");
+            }
+
+            return new CvDecision(
+                selection, null, null, [], Parked: false, null,
+                "A CV was chosen and could not be read back - it was archived between the two "
+                + "reads. Nothing is offered rather than the next best; fetch the pack again.");
+        }
+
+        if (selection.Outcome is CvSelectionOutcome.Ambiguous)
+        {
+            var ballot = selection.Tied.Take(MaxTieBreakBallot).ToList();
+
+            // A ballot of one is the arithmetic's decision restated, and a ballot of none is a
+            // library with nothing in it. Neither is a question, so neither is worth a call.
+            if (writer is not null && ballot.Count > 1)
+            {
+                var picked = await writer.ChooseCurriculumVitaeAsync(
+                    new CvChoiceRequest(posting, ballot), ct);
+
+                // Re-checked against the ballot this call offered, even though the writer checks
+                // it too. The two checks guard different things: there, that the model answered
+                // the question it was asked; here, that whatever implementation is registered
+                // cannot hand back an id from some other candidate's library and have it written
+                // onto a submission as the document that was sent. The variant fetch is scoped to
+                // this profile, so it is also the third lock on the same door.
+                var entry = picked is { } variantId
+                    ? ballot.Where(score => score.VariantId == variantId).Select(score => (CvVariantScore?)score).FirstOrDefault()
+                    : null;
+
+                if (entry is { } tied && await variants.GetAsync(profileId, tied.VariantId, ct) is { } variant)
+                {
+                    return new CvDecision(
+                        selection, variant, "model", ballot, Parked: false, tied.Score,
+                        "Two CVs fit this posting equally well and the arithmetic declined to "
+                        + $"separate them, so the choice was put to a model over the {ballot.Count} "
+                        + $"closest and it chose \"{variant.Label}\". {selection.Rationale}");
+                }
+            }
+
+            // Not parked, and that is a decision rather than an omission. A NoCvVariant park is
+            // released when a variant covers what the park recorded as missing, and an ambiguous
+            // selection has recorded nothing - two CVs fit, so nothing is missing. A park with no
+            // standing gaps is held for ever by the queue, deliberately, which would turn "we
+            // could not pick between two good CVs" into "this posting is gone". Left alone it
+            // comes back on the next run, where either the library has moved or a person decides.
+            return new CvDecision(
+                selection, null, null, ballot, Parked: false, null,
+                "No CV is offered: two or more fit this posting equally well and nothing could "
+                + "separate them, so a person decides rather than an id order deciding. Do not "
+                + "apply with a guess. The posting stays in list_applyable and comes back on the "
+                + $"next run. {selection.Rationale}");
+        }
+
+        var parked = await ParkForNoCvAsync(profileId, postingId, selection, target, runId, ct);
+
+        return new CvDecision(
+            selection, null, null, [], parked, null,
+            "No CV is available for this posting and none should be attached: nothing in this "
+            + "candidate's library covers enough of what it asks for. "
+            + (parked
+                ? "The posting has been parked as 'NoCvVariant' with the concepts it wanted, so "
+                    + "the candidate has been told what to write and it comes back once they "
+                    + "have written it. Nothing further is needed here - move on to the next "
+                    + "posting."
+                : "It was not parked, because an application against it already carries events; "
+                    + "record what actually happened with record_event instead.")
+            + $" {selection.Rationale}");
+    }
+
+    /// <summary>
+    /// Puts a posting down for want of a CV, recording what would let it back.
+    /// </summary>
+    /// <remarks>
+    /// <b>The server establishes this reason or nobody does</b>, which is why
+    /// <c>park_application</c> refuses it outright. The release condition is coverage of the
+    /// concepts the park recorded, and only a pass that has run a selection knows them; a park
+    /// arriving from a client would carry none, and the queue reads an empty standing set as
+    /// "nothing has been covered yet" - so a posting parked helpfully would be held for ever.
+    ///
+    /// <b>Refused for a posting whose application already carries events, exactly as
+    /// <c>park_application</c> is.</b> Parking sets columns on whatever submission exists for the
+    /// pair, so a park landing on a sent application would make it read as a posting nobody
+    /// attempted and would put the vacancy back in the queue for a second application to the same
+    /// job. Applying twice is worse than not applying, and the recruiter sees both. The pack says
+    /// so in its note rather than silently doing nothing.
+    ///
+    /// <b>The keys are handed over already differenced.</b> <c>CvSelection.Missing</c> is what no
+    /// sendable variant answers outright, computed by a walk over the graph rather than by a set
+    /// subtraction - so a variant naming Bicep partly answers a posting asking for Terraform,
+    /// exactly as the match breakdown says it does. Re-deriving that anywhere downstream would be
+    /// a second definition of "covers", free to disagree with the one that parked the posting.
+    ///
+    /// <b>An empty gap set is passed through rather than suppressed.</b> It happens when a library
+    /// covers every requirement across several CVs and none of them in one document - and the
+    /// queue holds such a park rather than releasing it, deliberately, because a universal over an
+    /// empty set is vacuously true and any CV at all would then release it. The cost is visible
+    /// rather than hidden: the posting stays in <c>CvGapBrief.BlockedPostings</c> and contributes
+    /// to no gap, which is the difference that file documents as worth noticing.
+    ///
+    /// <b>It writes on a read, which is the one place this surface does.</b> That is not a
+    /// widening of what the pack may do - it may already park nothing else, and this reason no
+    /// client may ask for - it is where the decision happens to be made. The alternative is a
+    /// tool that answers "no CV" and leaves the posting in the queue to be asked the same question
+    /// on every run for ever, which is the loop <c>ParkReason.NoCvVariant</c> was given its own
+    /// retry class to end.
+    /// </remarks>
+    private async Task<bool> ParkForNoCvAsync(
+        long profileId,
+        long postingId,
+        CvSelection selection,
+        ApplyTarget? target,
+        long? runId,
+        CancellationToken ct)
+    {
+        var now = time.GetUtcNow();
+
+        var claimed = (await submissions.ListAsync(profileId, now, ct))
+            .FirstOrDefault(row => row.PostingId == postingId);
+
+        if (claimed is { Status.Phase: not null })
+        {
+            return false;
+        }
+
+        await submissions.ParkAsync(
+            profileId,
+            postingId,
+            ParkReason.NoCvVariant,
+            now,
+            target?.ApplyUrl,
+            runId,
+            awaitingQuestionId: null,
+            missingConceptKeys: [.. selection.Missing.Select(gap => gap.RequiredKey)],
+            ct);
+
+        return true;
+    }
+
+    /// <summary>
+    /// The posting's requirements, rebuilt from the match that was stored for this pair.
+    /// </summary>
+    /// <remarks>
+    /// <c>Matched</c> plus <c>Gaps</c> is every demand <c>MatchScorer</c> weighed: it deduplicates
+    /// the posting's rows on the way in - the posting side stores one per source, so a concept the
+    /// board tagged and the description also named arrives twice by design - and then puts each
+    /// demand in exactly one of the two lists. Reading them back gives one assertion per concept,
+    /// carrying the polarity it was scored at, which is what the selector wants.
+    ///
+    /// <b><c>AssertionSource</c> is a positional this type requires and the selector never
+    /// reads.</b> The stored match folded every source into one demand per concept, so there is no
+    /// true answer to give it; <c>Taxonomy</c> is written because it is the one value that claims
+    /// nothing about a model having run. Nothing may read it back off these.
+    ///
+    /// <b><c>YearsMin</c> survives on the gaps and not on the matches</b>, because
+    /// <c>ConceptMatch</c> does not carry it. It costs nothing that is read: the selector uses it
+    /// only to stamp a <c>ConceptGap</c> in <c>Missing</c>, and the park and the gap brief both
+    /// read the key alone.
+    /// </remarks>
+    private static IReadOnlyList<ConceptAssertion> Demands(MatchResult match)
+        =>
+        [
+            .. match.Matched.Select(matched =>
+                new ConceptAssertion(matched.RequiredKey, AssertionSource.Taxonomy, matched.Demand)),
+            .. match.Gaps.Select(gap =>
+                new ConceptAssertion(gap.RequiredKey, AssertionSource.Taxonomy, gap.Demand, gap.YearsMin)),
+        ];
+
+    /// <summary>The vocabulary's preferred name for a key, or the key where it knows none.</summary>
+    /// <remarks>
+    /// A raw key printed to a person is bad and a requirement silently dropped from a list of what
+    /// to write next is worse, so an unknown key prints as itself. It is the same fallback
+    /// <c>CvVariantSelector</c>'s rationale uses, for the same reason.
+    /// </remarks>
+    private static string Label(string key)
+        => ConceptGraph.Default.TryGet(key, out var concept) ? concept.Label : key;
 
     [McpServerTool(Name = "get_form_field")]
     [Description(
@@ -1076,9 +1589,12 @@ public sealed class SubmissionTools(
         + "this call made the submission, 'result' says what happened to the event - 'Recorded' "
         + "it went in, 'AlreadyRecorded' your retry converged and nothing needs doing, "
         + "'DailyLimitReached' NOTHING was written at all, not even the submission, and "
-        + "'NoEventRequested' you did not ask for one. Idempotent "
+        + "'NoEventRequested' you did not ask for one. Pass cvVariantId from the pack you actually "
+        + "uploaded from: it is the only record of which of the candidate's CVs earned which "
+        + "reply. Idempotent "
         + "per posting: calling it twice returns the submission that already exists rather than "
-        + "making a second, and never overwrites where the first said the application went.")]
+        + "making a second, and never overwrites where the first said the application went or "
+        + "which CV went with it.")]
     public async Task<object> CreateSubmissionAsync(
         RequestContext<CallToolRequestParams> context,
         [Description("The posting applied to. Must appear in list_applyable, or already be matched.")] long postingId,
@@ -1094,6 +1610,7 @@ public sealed class SubmissionTools(
         [Description("The NAMES of the fields that were filled in. Names only - never the answers given to them.")] string[]? submittedFields = null,
         [Description("Which revision of the generated documents was sent, from get_submission_pack.")] int? documentRevision = null,
         [Description("The run doing this, from start_run. Omit outside a run.")] long? runId = null,
+        [Description("Which CV was actually uploaded, from get_submission_pack's cvSelection.cvVariantId. Omit where no CV went with the application.")] long? cvVariantId = null,
         CancellationToken ct = default)
     {
         var (profileId, failure) = await ResolveAsync(context, ct);
@@ -1142,6 +1659,26 @@ public sealed class SubmissionTools(
                 + "there is nothing to record a submission against. Use list_applyable.");
         }
 
+        // Checked before anything is written, and checked through a read scoped to this candidate.
+        // The id is named by a model reading a pack, so the two things that can go wrong are a
+        // transposition and a hallucination - and both would put a row on the table claiming a
+        // document went to an employer that never did. That row is what C4 correlates replies
+        // against, so a plausible wrong answer is worse than none.
+        //
+        // Archived variants are accepted deliberately: this records what was sent, and a CV
+        // retired the day after an application still went. GetAsync is the read that ignores
+        // IsArchived for exactly that reason.
+        if (cvVariantId is { } claimedVariant
+            && await variants.GetAsync(profileId.Value, claimedVariant, ct) is null)
+        {
+            return Refused(
+                $"Variant {claimedVariant} is not one of this candidate's CVs, so it cannot be "
+                + "recorded as the document that was sent. Take cvVariantId from "
+                + "get_submission_pack's cvSelection rather than composing one, or omit it - a "
+                + "submission with no variant recorded is ordinary, and a wrong one is a lie in "
+                + "the only column that says which CV earns replies.");
+        }
+
         var now = time.GetUtcNow();
 
         if (!sent)
@@ -1152,6 +1689,7 @@ public sealed class SubmissionTools(
                 requested ?? target.Channel,
                 applyUrl ?? target.ApplyUrl,
                 now,
+                cvVariantId,
                 ct);
 
             return new
@@ -1193,6 +1731,12 @@ public sealed class SubmissionTools(
             now,
             documentRevision,
             runId,
+
+            // Recorded on the insert and never afterwards. The variant the client uploaded is the
+            // fact, exactly as documentRevision is: re-running selection here would record
+            // whichever CV fits now, and after a Saturday afternoon's writing that is a different
+            // document from the one an employer read.
+            cvVariantId,
             ct);
 
         // Counted on the event's own day, because that is the day the cap is enforced on: a
@@ -1563,8 +2107,12 @@ public sealed class SubmissionTools(
             // validates a key, so a client that gets the shape wrong loses convergence quietly -
             // which is exactly why the shape is stated here rather than left to be guessed.
             idempotencyKeyFormat = $"{run.Id}:<postingId>:<event type>",
-            note = "Pass runId to create_submission and park_application. Call finish_run with "
-                + "what the pass did when it ends, including the postings it parked and why.",
+            note = "Pass runId to create_submission, park_application and get_submission_pack - "
+                + "the pack takes one because it parks the postings no CV fits, which is a park "
+                + "this run made and should be counted with the rest. Call finish_run with what "
+                + "the pass did when it ends, including the postings it parked and why; "
+                + "'NoCvVariant' is a reason like any other there, and list_cv_gaps says what "
+                + "writing would unblock them.",
         };
     }
 

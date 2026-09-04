@@ -1019,3 +1019,251 @@ export interface AnswerQuestionResponse {
   /** An explanatory sentence where something is simply absent. Null where there is nothing to say. */
   note: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// The CV library: markdown variants the candidate wrote, and the CVs they have not.
+//
+// **Nothing in these shapes is written by a model, and there is no field through which one
+// could be.** The CV stopped being generated per posting because a writer, asked what else an
+// employer should know, answered with the candidate's citizenship and added "I am an AI and
+// they should have seen this" - stored, served through the pack, one form submission from a
+// real employer. So `markdown` arrives from a textarea and from nowhere else, and there is no
+// `source`, no `instructions` and no `regenerate` anywhere below. That absence is the feature.
+//
+// **A variant's concepts are not here either, and their absence is also load-bearing.** They
+// are extracted for selection and stored against the variant; they must never reach
+// `ProfileConcepts`, never move a match score, and never widen what the candidate is judged to
+// have. A client that could read them is a client that could show them beside the profile's
+// own, which is the first half of somebody deciding the two lists ought to be merged.
+// ---------------------------------------------------------------------------
+
+/**
+ * One CV in the library, as a row on the page it is kept on.
+ *
+ * No markdown: it is `nvarchar(max)`, archived variants are kept forever, and a library with
+ * thirty retired CVs would answer the list route with half a megabyte of documents nobody
+ * asked to read. `CvVariantDetail` is what the editor opens.
+ *
+ * The three booleans below are false for three different reasons, and only the server decides
+ * them - they are the stored variant's own reading, so the badge on a row and the sentence
+ * above the rows are one rule read twice rather than two spellings of it.
+ */
+export interface CvVariantSummary {
+  /** The row. What a submission records, and what a rename cannot change. */
+  variantId: number;
+
+  /** What the person calls it. Unique among the CVs in use, reusable once one is archived. */
+  label: string;
+
+  /** When the words last became what they are now. Untouched by a rename or an archive. */
+  authoredAtUtc: string;
+
+  /** When the stored files were produced, or null while this is still only text. */
+  renderedAtUtc: string | null;
+
+  /** Over the rendered PDF's bytes: the answer to "what exactly did we send them". */
+  sha256: string | null;
+
+  /** Retired from selection, and from nothing else. There is no delete. */
+  isArchived: boolean;
+
+  /** Whether the stored files are the current words rendered. False means "needs rendering". */
+  isRenderCurrent: boolean;
+
+  /**
+   * Whether a pass may choose this for an application being made now.
+   *
+   * Archived or not currently rendered, and deliberately *not* staleness: a CV written before
+   * this morning's profile edit is still a CV worth sending, and excluding it would leave
+   * somebody who added a job at lunchtime with every posting parked while holding six good
+   * documents.
+   */
+  isSendable: boolean;
+
+  /**
+   * Whether this row is one the staleness sentence counted.
+   *
+   * Never true for an archived variant, because the count skips those before it asks anything
+   * else. A page flagging rows the sentence above them had not counted would leave a reader
+   * deciding which of the two to believe, which is worse than saying nothing.
+   */
+  isStale: boolean;
+}
+
+/** One CV with the candidate's own words - the only thing this system will not rewrite. */
+export interface CvVariantDetail extends CvVariantSummary {
+  /**
+   * Their CV, as stored rather than as submitted.
+   *
+   * The server trims the ends, so an editor redisplaying its own request body instead would
+   * show a document differing from the one on disk by whitespace nobody can see.
+   */
+  markdown: string;
+}
+
+/**
+ * How much of the library has fallen behind the profile it was written from.
+ *
+ * Counts and no verb. There is deliberately no suggested action: a summary carrying an
+ * instruction is how "regenerate them for me" arrives six months later as a helpful
+ * automation, and the correct response to a stale CV is a person reading it.
+ */
+export interface CvLibraryStaleness {
+  /** How many were counted. Archived variants never reach it. */
+  considered: number;
+
+  /** How many predate the profile's last change. The number in the sentence. */
+  stale: number;
+
+  /** How many are still level with it. */
+  current: number;
+
+  /** Whether there is anything to say at all. */
+  anyStale: boolean;
+
+  /**
+   * What they were compared against, or null where the profile has never recorded a change.
+   *
+   * Carried so that "nothing is out of date" can be told apart from "there is nothing to be
+   * out of date against". Both count zero, for opposite reasons, and a page that cannot
+   * separate them says nothing on the day the feature ships and says nothing on the day it
+   * matters.
+   */
+  profileUpdatedUtc: string | null;
+}
+
+/**
+ * How much room is left, so a refusal at the cap is not the first time anybody hears of it.
+ *
+ * The numbers, not a permission: the server enforces the cap and is the only thing that does,
+ * so `hasRoomForAnother` was true when the page loaded and is not authority. What it is for is
+ * a button that explains itself before it is pressed.
+ */
+export interface CvLibraryCapacity {
+  /** How many variants are in use. Archived rows are not counted, because the cap does not. */
+  inUse: number;
+
+  /** The cap. Six, and the number is about how many documents one person keeps current. */
+  cap: number;
+
+  /** Whether another may be written, as the library stood when this was read. */
+  hasRoomForAnother: boolean;
+}
+
+/**
+ * The whole library page in one answer: the rows, the nudge and the room.
+ *
+ * One response rather than three, because they are one read - and because three answers from
+ * three moments is exactly how a summary sentence ends up disagreeing with the rows under it.
+ */
+export interface CvLibraryResponse {
+  /** Live variants first, then archived, each in authoring order. Never a ranking. */
+  items: CvVariantSummary[];
+  staleness: CvLibraryStaleness;
+  capacity: CvLibraryCapacity;
+}
+
+/** One concept a gap is made of, with the weight it carries inside that gap. */
+export interface CvGapConcept {
+  /** The concept key, as the vocabulary spells it: `skill.kubernetes`. Identity, not prose. */
+  key: string;
+
+  /** The preferred name from the same vocabulary. What a sentence says. */
+  label: string;
+
+  /** How many of the gap's own postings ask for this one. */
+  postings: number;
+}
+
+/**
+ * One CV worth writing, named by the concepts it would have to speak to.
+ *
+ * A cluster rather than a concept, because concepts do not arrive alone: Kubernetes and
+ * Terraform missing together across nine postings is one afternoon and one document, and
+ * reported as two rows it reads as two - the second worth nothing once the first is written.
+ */
+export interface CvGap {
+  /** What the CV has to cover, heaviest first - so reading them in order names the gap. */
+  concepts: CvGapConcept[];
+
+  /**
+   * Applyable postings this gap blocks, after the gaps ranked above it have taken theirs.
+   *
+   * The business case, and greedy on purpose: ranked independently, one set of nine postings
+   * wanting two things would report two gaps of nine and read as eighteen postings of payoff.
+   */
+  postings: number;
+}
+
+/**
+ * What to write next, and why - the whole of an abstention that says more than "no".
+ *
+ * Aggregate by construction. There is no per-posting version and no limit to raise, because
+ * fifty "could not apply" notices is a queue nobody reads and one ranked list of three is a
+ * Saturday afternoon with an obvious payoff.
+ */
+export interface CvGapBriefResponse {
+  /**
+   * Every applyable posting currently blocked for want of a CV, counted once each.
+   *
+   * Deliberately larger than the gaps add up to: the remainder is gaps under the floor, gaps
+   * past the third, and postings whose requirements the vocabulary cannot name. **Blocked
+   * postings with no gaps is worth reporting as it stands** - it means postings are being
+   * parked over requirements that are all generic tags or all unknown keys, which is a fault
+   * in this system rather than a document anybody can write.
+   */
+  blockedPostings: number;
+
+  /** The CVs to write, best first. */
+  gaps: CvGap[];
+
+  /**
+   * How many blocked postings a gap needs before it is listed.
+   *
+   * Stated rather than assumed, because a client that does not know it reads a gap blocking
+   * one posting being absent as a bug rather than as the floor doing its job.
+   */
+  minimumPostingsPerGap: number;
+
+  /** How many gaps a brief will name. Stated for the same reason as the floor. */
+  maxGaps: number;
+}
+
+/**
+ * A new CV, in the candidate's own words.
+ *
+ * No bounds are restated here: the server is the only thing that validates, and a second copy
+ * of a number that has already drifted from a column width once in this codebase is how a save
+ * turns into a 500 with somebody's document lost.
+ */
+export interface CreateCvVariantRequest {
+  label: string;
+  markdown: string;
+}
+
+/**
+ * A new name for a CV, and nothing else about it.
+ *
+ * Separate from the reauthor request because the two writes must not share a path: a rename
+ * has to leave `authoredAtUtc` alone, or a document nobody edited looks freshly written and
+ * last week's PDF is quietly marked current.
+ */
+export interface RenameCvVariantRequest {
+  label: string;
+}
+
+/**
+ * Replacement words, dated as of now.
+ *
+ * Saving without changing a word is still an edit, and that is the point rather than an
+ * accident: somebody who reads a CV this page flagged as stale, decides it is still accurate
+ * and presses save has answered the nudge.
+ */
+export interface ReauthorCvVariantRequest {
+  markdown: string;
+}
+
+/** Whether a CV is retired from selection. One request with a direction, and no delete. */
+export interface ArchiveCvVariantRequest {
+  archived: boolean;
+}

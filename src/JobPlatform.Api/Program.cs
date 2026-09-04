@@ -126,6 +126,14 @@ builder.Services.AddScoped<FormAnswerRepository>();
 builder.Services.AddScoped<OpenQuestionRepository>();
 builder.Services.AddScoped<RunRepository>();
 
+// The CV library, scoped beside them for the same reason: get_submission_pack runs a selection
+// over it inside the same tool call that reads the queue and the answers, so one DbContext per
+// request serves all of them. Deliberately not optional - a pack that could not reach the library
+// would report "no CV fits" for a candidate whose library fits perfectly, which is a silence
+// nothing distinguishes from the real answer. McpEndpointTests builds the tool class out of the
+// container precisely so a missing registration is a red build rather than that silence.
+builder.Services.AddScoped<CvVariantRepository>();
+
 // The realtime feed. Registers nothing when no endpoint is configured, so every consumer
 // resolves IRealtimeFeed as nullable and the dashboard falls back to polling.
 builder.Services.AddRealtimeFeed(builder.Configuration);

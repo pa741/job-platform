@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using JobPlatform.Core.Applications;
 using JobPlatform.Core.Submissions;
 using JobPlatform.Data.Sql.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -302,12 +303,18 @@ public sealed class SubmissionRepository(JobsDbContext db)
     /// it has just made, <see cref="CreateWithEventAsync"/> is the one to use: it puts the row
     /// and the claim in one write, so no failure can leave a sent application unrecorded.
     /// </remarks>
+    /// <param name="cvVariantId">
+    /// Which CV the pack chose for this posting, where one was chosen. See
+    /// <see cref="CreateWithEventAsync"/> on why it is the caller's fact rather than one read back
+    /// here, and on why nothing overwrites it afterwards.
+    /// </param>
     public async Task<(SubmissionRow Row, bool Created)> CreateAsync(
         long profileId,
         long postingId,
         SubmissionChannel channel,
         string? applyUrl,
         DateTimeOffset now,
+        long? cvVariantId = null,
         CancellationToken ct = default)
     {
         var existing = await db.Submissions
@@ -331,6 +338,8 @@ public sealed class SubmissionRepository(JobsDbContext db)
             Channel = channel,
             ApplyUrl = Bound(applyUrl, SubmissionLimits.MaxApplyUrlLength),
             CreatedAtUtc = now,
+            CvVariantId = cvVariantId,
+            CvSelectionVersion = cvVariantId is null ? null : CvSelection.CurrentVersion,
         };
 
         db.Submissions.Add(entity);
@@ -396,6 +405,21 @@ public sealed class SubmissionRepository(JobsDbContext db)
     /// itself checkable - <c>RunSummary.Submitted</c> can be counted against these rows, where
     /// <c>Considered</c> can be counted against nothing at all.
     /// </param>
+    /// <param name="cvVariantId">
+    /// Which CV out of the candidate's library went with this application, where one did.
+    /// <b>The caller's fact and never one read back here</b>, for the reason
+    /// <paramref name="documentRevision"/> is: the client uploaded a file the pack handed it, and a
+    /// repository re-running selection would record whichever variant fits <i>now</i> - which after
+    /// a Saturday afternoon's writing is a different document from the one an employer read. This
+    /// is the column C4 correlates replies against, so a plausible answer is worse than none.
+    ///
+    /// <c>CvSelectionVersion</c> is stamped from <c>CvSelection.CurrentVersion</c> alongside it
+    /// rather than passed, because the two are only ever true together: the id names a document and
+    /// the version names the rule that picked it, and a caller free to supply one without the other
+    /// could record a choice attributed to arithmetic that never ran. Null propagates - a CV
+    /// attached by hand was chosen by a person, and stamping a version on it would claim an
+    /// experiment that did not happen.
+    /// </param>
     public async Task<SubmissionWriteResult> CreateWithEventAsync(
         long profileId,
         long postingId,
@@ -406,6 +430,7 @@ public sealed class SubmissionRepository(JobsDbContext db)
         DateTimeOffset now,
         int? documentRevision = null,
         long? runId = null,
+        long? cvVariantId = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(submissionEvent);
@@ -440,6 +465,14 @@ public sealed class SubmissionRepository(JobsDbContext db)
             CreatedAtUtc = now,
             DocumentRevision = documentRevision,
             RunId = runId,
+
+            // Written only on the insert. A submission that already existed takes the retry path
+            // above and keeps whatever CV it recorded the first time - the same rule the apply URL
+            // follows, and for a sharper reason: a second call naming a different variant is a
+            // client that has re-fetched the pack after the library moved, and the document an
+            // employer actually received is the one the first call named.
+            CvVariantId = cvVariantId,
+            CvSelectionVersion = cvVariantId is null ? null : CvSelection.CurrentVersion,
         };
 
         // Through the navigation rather than the DbSet, which is what makes this one write: the

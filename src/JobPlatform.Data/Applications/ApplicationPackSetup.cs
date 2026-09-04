@@ -7,7 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace JobPlatform.Data.Applications;
 
 /// <summary>
-/// Registers the pack store, or registers nothing at all.
+/// Registers the pack store and the variant renderer over it, or registers nothing at all.
 /// </summary>
 /// <remarks>
 /// <b>In <c>JobPlatform.Data</c> rather than beside the endpoints that read it, because two hosts
@@ -51,12 +51,13 @@ public static class ApplicationPackSetup
     /// Wires the store when storage is configured. Call once from each host's <c>Program</c>.
     /// </summary>
     /// <remarks>
-    /// <b>Both spellings of the key are read.</b> The container app sets
-    /// <c>ApplicationPacks__serviceUri</c> and <c>ApplicationPacks__ContainerName</c>; a host that
+    /// <b>Both spellings of every key are read.</b> The container app sets
+    /// <c>ApplicationPacks__serviceUri</c>, <c>ApplicationPacks__ContainerName</c> and
+    /// <c>ApplicationPacks__VariantContainerName</c>; a host that
     /// maps environment variables in the usual way turns those into the <c>ApplicationPacks</c>
     /// section, which is what the options class binds - and that mapping is the whole of how the
     /// Functions host, whose app settings reach the worker as environment variables and nothing
-    /// else, resolves the same two names. The literal double-underscore lookup is the same
+    /// else, resolves the same three names. The literal double-underscore lookup is the same
     /// belt-and-braces both <c>Program</c> files already apply to <c>ScraperConfig__serviceUri</c>
     /// and <c>LandingStorage__serviceUri</c>, and it is cheap insurance against a configuration
     /// source that does not do the mapping - the failure it prevents is a deployment that has
@@ -92,6 +93,16 @@ public static class ApplicationPackSetup
             configuration[$"{ApplicationPackOptions.SectionName}__ContainerName"])
             ?? new ApplicationPackOptions().ContainerName;
 
+        // The second container, read the same two ways as the first. Both hosts already set
+        // ApplicationPacks__VariantContainerName, and the default matches the template's - so a
+        // deployment that has not been redeployed since this shipped still writes variants to
+        // profile-cvs rather than into the pack container, where a variant id and a document id
+        // would collide. See ApplicationPackOptions.VariantContainerName.
+        var variantContainerName = Coalesce(
+            section[nameof(ApplicationPackOptions.VariantContainerName)],
+            configuration[$"{ApplicationPackOptions.SectionName}__VariantContainerName"])
+            ?? new ApplicationPackOptions().VariantContainerName;
+
         services.Configure<ApplicationPackOptions>(section);
 
         // A no-op wherever the section bound normally, which is every real deployment. It exists
@@ -102,6 +113,7 @@ public static class ApplicationPackSetup
         {
             options.ServiceUri = serviceUri;
             options.ContainerName = containerName;
+            options.VariantContainerName = variantContainerName;
         });
 
         var managedIdentityClientId = configuration["ManagedIdentityClientId"];
@@ -115,15 +127,39 @@ public static class ApplicationPackSetup
                     ManagedIdentityClientId = managedIdentityClientId,
                 });
 
-            // The account client is kept as well as the container's: a user delegation key is
+            // The account client is kept as well as the containers': a user delegation key is
             // requested at account scope, and reaching for it later would put the endpoint back
             // into the code that signs.
             var service = new BlobServiceClient(endpoint, credential);
 
-            return new ApplicationPackContainer(service, service.GetBlobContainerClient(containerName));
+            // Named rather than positional, because two container clients side by side transpose
+            // without a compiler error - and the deployment that results writes each candidate's
+            // CV over the generated document sharing its id, silently. See
+            // ApplicationPackOptions.VariantContainerName.
+            return new ApplicationPackContainer
+            {
+                Service = service,
+                Packs = service.GetBlobContainerClient(containerName),
+                Variants = service.GetBlobContainerClient(variantContainerName),
+            };
         });
 
-        services.AddSingleton<IApplicationPackStore, ApplicationPackStore>();
+        // One instance behind both contracts, which is why the two interfaces are forwarded to a
+        // concrete registration rather than registered separately. Two AddSingleton<TInterface,
+        // TImpl> calls build two stores, each with its own user delegation key cache and its own
+        // semaphore: twice the round trips to the account, and a key retired in one still warm in
+        // the other. The concrete registration is what both forward to, so a caller resolving
+        // either interface - or the class - gets the same object.
+        services.AddSingleton<ApplicationPackStore>();
+        services.AddSingleton<IApplicationPackStore>(sp => sp.GetRequiredService<ApplicationPackStore>());
+        services.AddSingleton<ICvVariantFileStore>(sp => sp.GetRequiredService<ApplicationPackStore>());
+
+        // Registered here rather than in either host, for the reason the store is: the API renders
+        // a variant when somebody saves one and the Functions host will render on a pass, and a
+        // worker cannot reference a web project. It is resolved as nullable everywhere, so a
+        // deployment with no storage keeps the library as text - the variants save, they simply
+        // never become sendable, which CvVariant.IsSendable already says out loud.
+        services.AddSingleton<CvVariantRenderer>();
 
         return services;
     }

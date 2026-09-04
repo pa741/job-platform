@@ -11,6 +11,7 @@ import { Searches } from './pages/Searches';
 import { Shortlist } from './pages/Shortlist';
 import { Applications } from './pages/Applications';
 import { Questions } from './pages/Questions';
+import { CvLibrary } from './pages/CvLibrary';
 import { Vocabulary } from './pages/Vocabulary';
 import { AiCalls } from './pages/AiCalls';
 import { ErrorNote } from './components/Primitives';
@@ -253,7 +254,7 @@ function Dashboard({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => 
 }
 
 /**
- * The nine pages `route.ts` declares, each with a case here.
+ * The ten pages `route.ts` declares, each with a case here.
  *
  * <b>The return type is what makes the switch exhaustive, and it is load-bearing rather than
  * documentation.</b> A `PageId` with no case falls out of the bottom and returns undefined,
@@ -268,12 +269,18 @@ function Dashboard({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => 
  * a section at a time behind them. Swapping all nine at once would have meant nothing rendered
  * until the last one was finished, and every problem found on the way would have been found in
  * a dashboard that could not be opened.
+ *
+ * <b>`go` carries the query string as well as the path, which only the CV library uses.</b> Its
+ * "write this CV" link opens the editor against one gap out of the brief, and the gap has to
+ * survive a reload or a shared link - state held here would not, and a page whose deep link
+ * opens the right form with the wrong context is worse than one that opens a blank form. The
+ * pages that pass two arguments are unaffected.
  */
 function Page({ page, api, searchTerm, go, route, replace, back }: {
   page: PageId;
   api: JobPlatformApi;
   searchTerm: string | undefined;
-  go: (page: PageId, id?: string | null) => void;
+  go: (page: PageId, id?: string | null, params?: URLSearchParams) => void;
   route: Route;
   replace: (page: PageId, id?: string | null) => void;
   back: (fallback: () => void) => void;
@@ -296,6 +303,25 @@ function Page({ page, api, searchTerm, go, route, replace, back }: {
       />
     );
     case 'profile': return <Profile api={api} />;
+    case 'cvs': return (
+      <CvLibrary
+        api={api}
+        // The path segment is a variant id or the word `new`, and it is left as a string on
+        // purpose: `Number('new')` is NaN, and a page deciding between "open this CV" and
+        // "start one" on a number would have to test for that rather than for the word it was
+        // given. The questions page parses because every one of its ids is a number.
+        editing={route.id ?? undefined}
+        gapSeed={route.params.get('gap') ?? undefined}
+        // Opening an editor pushes, so Back closes it rather than leaving the app. Closing
+        // walks history back where we put an entry there, and falls through to a plain
+        // navigation where somebody arrived on the link directly - the same pairing the
+        // questions queue and the postings panel use.
+        onOpen={(target, gapSeed) => (target === undefined
+          ? back(() => go('cvs'))
+          : go('cvs', target, gapSeed ? new URLSearchParams({ gap: gapSeed }) : undefined))}
+        go={go}
+      />
+    );
     case 'briefing': return <Briefing api={api} searchTerm={searchTerm} go={go} />;
     case 'postings': return searchTerm ? (
       <Postings

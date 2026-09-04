@@ -29,10 +29,24 @@ public record ApplicationSummary
     public required DateTimeOffset CreatedAtUtc { get; init; }
 }
 
-/// <summary>A generated draft, with both documents as markdown.</summary>
+/// <summary>A generated draft, as markdown.</summary>
 public sealed record ApplicationDetail : ApplicationSummary
 {
-    public required string CurriculumVitaeMarkdown { get; init; }
+    /// <summary>
+    /// The CV, for a draft old enough to have one. Null for everything written since.
+    /// </summary>
+    /// <remarks>
+    /// <b>Nullable rather than gone, because the column is.</b> A CV was written per posting until
+    /// the library replaced it, and an application made under the old rule has to stay explicable
+    /// - "what exactly did we send them" is a question about a document somebody else received.
+    /// So the field survives, answers null for anything drafted since, and is not something a
+    /// client should be building a page around any more.
+    ///
+    /// Null rather than the empty string the store flattens it to: a client cannot tell "the CV
+    /// is blank" from "there is no CV" out of <c>""</c>, and only one of those is true here.
+    /// </remarks>
+    public string? CurriculumVitaeMarkdown { get; init; }
+
     public required string CoverLetterMarkdown { get; init; }
 
     /// <summary>What this draft chose to lead with.</summary>
@@ -40,25 +54,33 @@ public sealed record ApplicationDetail : ApplicationSummary
 }
 
 /// <summary>
-/// Generating and downloading a tailored CV and cover letter.
+/// Generating and downloading the cover letter, and the per-posting free text with it.
 /// </summary>
 /// <remarks>
 /// <b>The only path in the system that spends money on the expensive deployment</b>, which is
 /// why it is the only one gated behind an explicit action rather than running on a schedule.
 /// A candidate presses generate; nothing here ever fires because a page was opened.
 ///
-/// Generation is per-match, and the match must already exist. That is not a convenience: the
-/// writer is handed the gap list as the set of claims it must not make, and a document written
-/// without one has nothing stopping it from inventing the very skills the candidate lacks.
-/// Refusing to generate for an unscored posting is what keeps that guarantee real.
+/// <b>It no longer writes a CV, and that is the largest thing this file has stopped doing.</b> The
+/// CV is now chosen from a library the candidate authors - <c>CvVariantSelector</c> picks one per
+/// posting and <c>get_submission_pack</c> serves it - so what is generated here is what is
+/// genuinely per-posting: the letter, and the free-text answers this advert will ask for. The
+/// reason is not cost, although it is much cheaper: a model asked to describe somebody's work
+/// eventually writes a sentence they would not, and the CV is the document that sentence would
+/// have been read in.
 ///
-/// <b>Generation now renders as well as writes, and rendering is deliberately the part allowed
-/// to fail.</b> The model call took tens of seconds and cost real money; a MigraDoc page and an
-/// OOXML package take milliseconds and cost nothing, and losing one costs a re-render rather
-/// than a regeneration. So the draft is stored first, the files are rendered and uploaded
-/// afterwards, and whatever survived is recorded on the row - the pack then reports what it has.
-/// Failing the request because a container's role assignment has not finished propagating would
-/// throw away the expensive half to protect the cheap one. It is the argument
+/// Generation is still per-match, and the match must already exist. That is not a convenience: the
+/// writer is handed the gap list as the set of claims it must not make, and prose written without
+/// one has nothing stopping it from claiming the very skills the candidate lacks. Refusing to
+/// generate for an unscored posting is what keeps that guarantee real.
+///
+/// <b>Generation renders as well as writes, and rendering is deliberately the part allowed to
+/// fail.</b> The model call took tens of seconds and cost real money; a MigraDoc page takes
+/// milliseconds and costs nothing, and losing one costs a re-render rather than a regeneration.
+/// So the draft is stored first, the file is rendered and uploaded afterwards, and whatever
+/// survived is recorded on the row - the pack then reports what it has. Failing the request
+/// because a container's role assignment has not finished propagating would throw away the
+/// expensive half to protect the cheap one. It is the argument
 /// <c>ProfileEndpoints.ExtractAsync</c> already makes about a save whose extraction failed.
 ///
 /// <b>The download routes still render per request, and that is not a duplicate.</b> They serve
@@ -66,6 +88,12 @@ public sealed record ApplicationDetail : ApplicationSummary
 /// change should reach documents already generated. What is stored serves the other consumer: an
 /// agent needs a URL an employer's upload box can fetch, and that cannot be a route behind this
 /// API's bearer token.
+///
+/// <b>The CV download route survives as a reader of history and nothing else.</b> Every draft
+/// written from now on carries no CV markdown, so it answers 404 without a branch being added -
+/// the same answer it already gave when a render had failed. Removing it outright would make a
+/// document that was actually sent last year unreachable, which is the thing the nullable column
+/// exists to prevent; leaving it renders nothing new, because there is nothing new to render.
 /// </remarks>
 public sealed class ApplicationEndpoints : IEndpointGroup
 {
@@ -235,28 +263,27 @@ public sealed class ApplicationEndpoints : IEndpointGroup
     }
 
     /// <summary>
-    /// Renders this draft, stores what rendered, and records where it went.
+    /// Renders this draft's cover letter, stores it, and records where it went.
     /// </summary>
     /// <remarks>
-    /// <b>Every step is allowed to fail on its own and none of them may fail the caller.</b> The
-    /// PDF, the DOCX and the cover letter are three independent renders and three independent
-    /// uploads, so the ordinary partial outcome - a backend that threw on one document, a role
-    /// assignment that has not propagated yet - is recorded as what it is rather than discarded
-    /// wholesale. <c>RenderedDocuments</c> reads a null member as "nothing to say about this
-    /// file" and never as "clear the one on the row", which is what makes recording a partial
-    /// result safe to do repeatedly.
+    /// <b>One document now, where there were three.</b> The CV's PDF and DOCX were rendered here
+    /// until the library replaced generation with selection; the files an application actually
+    /// sends as a CV are rendered once per <i>variant</i>, when the candidate writes it, and are
+    /// byte-identical on every later fetch - which is what makes "what exactly did we send them"
+    /// answerable by hash. Rendering a per-posting CV as well would produce a second file with the
+    /// same stable filename and no way to tell afterwards which one went.
     ///
-    /// <b>The hash is paired with the PDF and with nothing else.</b> <c>CvSha256</c> sits beside
-    /// <c>CvBlobPath</c> and describes the bytes at it; carrying the DOCX's hash there when the
-    /// PDF had failed would leave a row asserting that the file at a path it does not have hashes
-    /// to something. A checksum that describes a different file is worse than no checksum,
-    /// because the whole point of storing it is that somebody may check a document against it
-    /// after it has been sent.
+    /// <b>What survives the shrinking is the failure contract, and it still matters.</b> The
+    /// render may fail on its own and must not fail the caller: <c>RenderedDocuments</c> reads a
+    /// null member as "nothing to say about this file" and never as "clear the one on the row",
+    /// which is what makes recording a partial result safe to repeat - and it is why the CV
+    /// members are left unset here rather than nulled, so a re-generation of a draft that predates
+    /// this change does not erase the paths of files that still exist.
     ///
     /// <b>Nothing is written when nothing was stored.</b> <c>RecordRenderedAsync</c> would answer
     /// true and change no column, but only after a round trip to a database billed on wall-clock
     /// time - which is the round trip <c>RenderedDocuments.IsEmpty</c> exists to let a caller
-    /// skip.
+    /// skip, and it is now the ordinary path for a deployment with no storage.
     /// </remarks>
     private static async Task RenderAsync(
         IApplicationPackStore? packs,
@@ -272,21 +299,12 @@ public sealed class ApplicationEndpoints : IEndpointGroup
             return;
         }
 
-        var cvPdf = await StoreAsync(
-            packs, profileId, candidateName, stored, PackDocument.CurriculumVitae, PackFormat.Pdf, logger, ct);
-
-        var cvDocx = await StoreAsync(
-            packs, profileId, candidateName, stored, PackDocument.CurriculumVitae, PackFormat.Docx, logger, ct);
-
-        var letterPdf = await StoreAsync(
-            packs, profileId, candidateName, stored, PackDocument.CoverLetter, PackFormat.Pdf, logger, ct);
+        var letterPdf = await StoreCoverLetterAsync(
+            packs, profileId, candidateName, stored, logger, ct);
 
         var rendered = new RenderedDocuments
         {
-            CvBlobPath = cvPdf?.BlobPath,
-            CvDocxBlobPath = cvDocx?.BlobPath,
             CoverLetterBlobPath = letterPdf?.BlobPath,
-            CvSha256 = cvPdf?.Sha256,
         };
 
         if (rendered.IsEmpty)
@@ -317,64 +335,60 @@ public sealed class ApplicationEndpoints : IEndpointGroup
     }
 
     /// <summary>
-    /// Renders one document in one format and uploads it. Null where either half did not happen.
+    /// Renders the cover letter to a PDF and uploads it. Null where either half did not happen.
     /// </summary>
     /// <remarks>
     /// <b>Only the render is wrapped, because only the render can throw.</b> A renderer walks
     /// model output, and the failures it can have - a construct the AST maps onto nothing, a font
-    /// resolver that did not install, an OOXML part the SDK refused - are exactly the failures a
-    /// generated document is most likely to produce and least likely to have been tested against.
-    /// The upload below needs no guard of its own: <c>IApplicationPackStore</c> answers null for
-    /// every storage failure by contract, which is the half of this that was already safe.
+    /// resolver that did not install - are exactly the failures a generated document is most
+    /// likely to produce and least likely to have been tested against. The upload below needs no
+    /// guard of its own: <c>IApplicationPackStore</c> answers null for every storage failure by
+    /// contract, which is the half of this that was already safe.
+    ///
+    /// <b>PDF and no DOCX, which is a difference from the CV rather than an oversight.</b> A CV is
+    /// parsed by an ATS and Workday reads DOCX more reliably, which is the whole reason a variant
+    /// is rendered twice; a covering letter is read by a person or pasted into a box, and nothing
+    /// parses it into fields. A second format here would be a second file to keep in step for no
+    /// reader.
     ///
     /// The title is the document's own metadata rather than its filename: it is what a PDF reader
-    /// puts in a window title and what Word shows in properties. The filename is
-    /// <c>ApplicationPackFile</c>'s, derived from the candidate's name, and the two are
-    /// deliberately different - one is read by a person looking at an open document, the other by
-    /// a recruiter looking at a list of forty.
+    /// puts in a window title. The filename is <c>ApplicationPackFile</c>'s, derived from the
+    /// candidate's name, and the two are deliberately different - one is read by a person looking
+    /// at an open document, the other by a recruiter looking at a list of forty.
     /// </remarks>
-    private static async Task<StoredPackFile?> StoreAsync(
+    private static async Task<StoredPackFile?> StoreCoverLetterAsync(
         IApplicationPackStore packs,
         long profileId,
         string? candidateName,
         StoredApplication stored,
-        PackDocument document,
-        PackFormat format,
         ILogger logger,
         CancellationToken ct)
     {
-        var markdown = document == PackDocument.CoverLetter
-            ? stored.CoverLetterMarkdown
-            : stored.CurriculumVitaeMarkdown;
-
-        if (string.IsNullOrWhiteSpace(markdown))
+        if (string.IsNullOrWhiteSpace(stored.CoverLetterMarkdown))
         {
             return null;
         }
 
-        var kind = document == PackDocument.CoverLetter ? "Cover letter" : "CV";
         byte[] content;
 
         try
         {
-            content = format == PackFormat.Docx
-                ? MarkdownDocxRenderer.Render(markdown, $"{kind} - {stored.PostingTitle}")
-                : MarkdownPdfRenderer.Render(markdown, $"{kind} - {stored.PostingTitle}");
+            content = MarkdownPdfRenderer.Render(
+                stored.CoverLetterMarkdown, $"Cover letter - {stored.PostingTitle}");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // Warning rather than error, and the draft id rather than the markdown: the document
+            // Warning rather than error, and the draft id rather than the markdown: the letter
             // itself is saved and is what the candidate reads, and this log line is read by
             // somebody deciding whether a renderer has a bug rather than by somebody recovering
-            // data. The markdown is a tailored CV and does not belong in a log at all.
+            // data. The markdown names this candidate and this employer and does not belong in a
+            // log at all.
             logger.LogWarning(
                 ex,
-                "Could not render the {Kind} of draft {DocumentId} as {Format}. The draft is "
-                + "saved and the markdown is the record; the pack will report that no file of "
-                + "that format is available for it.",
-                kind,
-                stored.Id,
-                format);
+                "Could not render the cover letter of draft {DocumentId}. The draft is saved and "
+                + "the markdown is the record; the pack will report that no rendered letter is "
+                + "available for it.",
+                stored.Id);
 
             return null;
         }
@@ -384,8 +398,8 @@ public sealed class ApplicationEndpoints : IEndpointGroup
             {
                 ProfileId = profileId,
                 DocumentId = stored.Id,
-                Document = document,
-                Format = format,
+                Document = PackDocument.CoverLetter,
+                Format = PackFormat.Pdf,
                 Content = content,
                 CandidateName = candidateName,
             },
@@ -519,7 +533,12 @@ public sealed class ApplicationEndpoints : IEndpointGroup
             Instructions = stored.Instructions,
             Model = stored.Model,
             CreatedAtUtc = stored.CreatedAtUtc,
-            CurriculumVitaeMarkdown = stored.CurriculumVitaeMarkdown,
+            // Empty back to null. The store flattens a null column to the empty string so its own
+            // record needs no nullable, and a client cannot tell "blank CV" from "no CV" out of
+            // one - which is the whole distinction now that most drafts have none.
+            CurriculumVitaeMarkdown = string.IsNullOrWhiteSpace(stored.CurriculumVitaeMarkdown)
+                ? null
+                : stored.CurriculumVitaeMarkdown,
             CoverLetterMarkdown = stored.CoverLetterMarkdown,
             Emphasised = stored.Emphasised,
         };

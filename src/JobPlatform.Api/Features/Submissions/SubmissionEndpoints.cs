@@ -145,7 +145,13 @@ public sealed class SubmissionEndpoints : IEndpointGroup
             requested ?? target.Channel,
             request.ApplyUrl ?? target.ApplyUrl,
             time.GetUtcNow(),
-            ct);
+
+            // No CV variant. A submission created from the dashboard is a person recording that
+            // an application exists, and nothing here ran a selection - only get_submission_pack
+            // does. Naming the argument rather than letting the token fall through positionally,
+            // so the absence reads as a decision.
+            cvVariantId: null,
+            ct: ct);
 
         var response = ToResponse(row);
 

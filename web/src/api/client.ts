@@ -7,6 +7,7 @@ import type {
   ScraperSearchRequest, ScraperSearchListResponse, ScraperSearchOptionsResponse,
   SkillGapResponse, Submission, SubmissionEvent,
   AnswerQuestionRequest, AnswerQuestionResponse, OpenQuestion,
+  CreateCvVariantRequest, CvGapBriefResponse, CvLibraryResponse, CvVariantDetail,
 } from './types';
 
 /** Thrown for any non-2xx response, carrying the RFC 9457 detail the API returns. */
@@ -322,6 +323,136 @@ export class JobPlatformApi {
       body: JSON.stringify(answer),
     });
 
+  // --- the CV library ------------------------------------------------------
+  //
+  // Per-principal and SQL-backed like the profile, and bounded the same way: read when the
+  // page opens, written when somebody presses save. Never a poll, never a bootstrap.
+  //
+  // **There is no method here that asks for a CV to be written, and there is no parameter one
+  // could be smuggled through.** The CV stopped being generated per posting because a writer,
+  // asked what else an employer should know, gave the candidate's citizenship and added "I am
+  // an AI and they should have seen this" - stored, served through the pack, one submission
+  // from a real employer. Every write below carries markdown that came out of a textarea. A
+  // `regenerate` here would be the first half of putting the model back into the one document
+  // it was taken out of, and the staleness nudge is exactly where such a call looks helpful.
+
+  /**
+   * The whole library in one read: the rows, how many predate the last profile change, and
+   * how much of the cap is spent.
+   *
+   * One call rather than three, because the server answers all of it from one materialisation.
+   * Three calls would also let the three answers come from three moments, which is how a
+   * summary sentence ends up disagreeing with the rows underneath it.
+   *
+   * An empty library for a principal with no profile, not a 404: somebody who has not filled
+   * the form in has no CVs, which is a complete answer rather than a failure.
+   */
+  cvLibrary = () => this.request<CvLibraryResponse>('/api/v1/cv-variants');
+
+  /**
+   * One CV, including the words the list deliberately does not carry.
+   *
+   * Fetched when the editor opens rather than held for every row: the markdown is unbounded,
+   * archived variants are kept forever, and a library nobody has pruned would otherwise put
+   * every retired document on the wire to draw a list of labels.
+   */
+  cvVariant = (id: number) => this.request<CvVariantDetail>(`/api/v1/cv-variants/${id}`);
+
+  /**
+   * Stores a new CV in the candidate's own words.
+   *
+   * 409 where the library is full or the label is in use - neither is a fault in the request,
+   * and both come back with the numbers behind them, which is what makes the refusal
+   * actionable rather than merely negative. 400 is a document that could never be stored.
+   */
+  createCvVariant = (variant: CreateCvVariantRequest) =>
+    this.request<CvVariantDetail>('/api/v1/cv-variants', {
+      method: 'POST',
+      body: JSON.stringify(variant),
+    });
+
+  /**
+   * Changes what a CV is called, and touches nothing else.
+   *
+   * Its own route rather than a field on a general update, because a rename must not move
+   * `authoredAtUtc`: that timestamp is the whole of the staleness signal and half of the
+   * render comparison, so moved by a rename a document nobody edited looks freshly written and
+   * last week's PDF is quietly marked current.
+   */
+  renameCvVariant = (id: number, label: string) =>
+    this.request<CvVariantDetail>(`/api/v1/cv-variants/${id}/label`, {
+      method: 'PUT',
+      body: JSON.stringify({ label }),
+    });
+
+  /**
+   * Replaces a CV's words with the candidate's own, dates them, and renders again.
+   *
+   * The words are in the body and there is nowhere else they could come from: no posting id,
+   * no instruction field, no flag asking for text rather than supplying it. This is the route
+   * a "regenerate" button would have been hung on.
+   *
+   * Saving an unchanged document is still an edit. Somebody who reads a CV the page flagged as
+   * stale, decides it is still accurate and presses save has answered the nudge, and
+   * converging on "nothing changed" would leave the notice standing after they dealt with it.
+   */
+  reauthorCvVariant = (id: number, markdown: string) =>
+    this.request<CvVariantDetail>(`/api/v1/cv-variants/${id}/markdown`, {
+      method: 'PUT',
+      body: JSON.stringify({ markdown }),
+    });
+
+  /**
+   * Retires a CV from selection, or puts it back. There is no delete, and there must not be.
+   *
+   * A submission records which variant it sent, so "what exactly did we send them" is a
+   * question about a document that has to still exist. Archiving takes a CV out of selection,
+   * out of the cap's count and out of the label's uniqueness - and changes nothing else.
+   *
+   * A PUT carrying the direction rather than two verbs, the same shape as dismissing a match
+   * and for the same reason: a client that can archive can always unarchive, and neither is a
+   * destruction. Unarchiving can be refused where archiving never is - a CV brought back
+   * occupies the cap, and the name it was archived under is very often the name of the CV that
+   * replaced it.
+   */
+  setCvVariantArchived = (id: number, archived: boolean) =>
+    this.request<CvVariantDetail>(`/api/v1/cv-variants/${id}/archived`, {
+      method: 'PUT',
+      body: JSON.stringify({ archived }),
+    });
+
+  /**
+   * The CVs that have not been written, ranked by how many applyable postings each unblocks.
+   *
+   * The other half of an abstention. Selection declines to send a CV that does not fit, which
+   * is right - the failure it replaces is invisible, because an application sent on the wrong
+   * document simply never comes back - but the pass that declined has just computed, for every
+   * posting it parked, exactly what would have made it possible. This is that, aggregated.
+   *
+   * Read separately from the library rather than folded into it, and the split is deliberate:
+   * it is a different query over a different table, it is the one read on this page that can
+   * be slow, and a failure here must leave somebody still able to open and edit their own CVs.
+   */
+  cvGaps = () => this.request<CvGapBriefResponse>('/api/v1/cv-variants/gaps');
+
+  /**
+   * Fetches a variant's rendered file, so the candidate can see what an employer is handed.
+   *
+   * The one thing on the library page that is not text the person typed. A library they cannot
+   * open is a library they have to trust, and the template is exactly the part of this system
+   * most likely to disappoint - the spec's answer to a disappointing CV is to fix the template
+   * once, which nobody does without looking at the output.
+   *
+   * Both formats, because the pack sends both and an ATS may take only one. The PDF is what a
+   * person would send; several large vendors parse the DOCX more reliably.
+   */
+  cvVariantFile = (id: number, format: 'pdf' | 'docx'): Promise<Blob> =>
+    this.download(
+      `${this.baseUrl}/api/v1/cv-variants/${id}/cv.${format}`,
+      format === 'docx'
+        ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        : 'application/pdf');
+
   matches = (params: MatchQuery = {}) =>
     this.request<{ items: MatchSummary[]; offset: number }>(
       `/api/v1/matches${JobPlatformApi.query({ ...params })}`);
@@ -385,23 +516,35 @@ export class JobPlatformApi {
    * they return somebody's CV. So the file is fetched with the token, turned into an object
    * URL and handed to a synthetic link; the caller revokes the URL afterwards.
    */
-  applicationPdf = async (id: number, kind: 'cv' | 'cover-letter'): Promise<Blob> => {
+  applicationPdf = (id: number, kind: 'cv' | 'cover-letter'): Promise<Blob> =>
+    this.download(this.applicationPdfUrl(id, kind), 'application/pdf');
+
+  /**
+   * One authenticated file fetch, for every download in the product.
+   *
+   * <b>Shared rather than copied, because the copy is what went wrong here once.</b> This body
+   * used to live inline on the CV download and used a bare fetch with no AbortController, so
+   * the single download in the product was the single request that could hang forever -
+   * against endpoints that render out of a database which pauses when idle, which is precisely
+   * where a request hangs. A second copy written for the CV library would have been a second
+   * chance to leave the deadline out, and nothing would have failed until somebody sat looking
+   * at a button that never came back.
+   *
+   * `Accept` is passed rather than assumed: the library serves a DOCX from the same shape of
+   * route, and a client asking for `application/pdf` and being handed a Word document is the
+   * kind of mismatch that is only noticed at an upload box.
+   */
+  private async download(url: string, accept: string): Promise<Blob> {
     const token = await this.getToken();
-    const headers = new Headers({ Accept: 'application/pdf' });
+    const headers = new Headers({ Accept: accept });
     if (token) headers.set('Authorization', `Bearer ${token}`);
 
-    // The same deadline every other call carries. This one used a bare fetch with no
-    // AbortController, so the single download in the product was the single request that
-    // could hang forever - against endpoints that render the PDF per request out of a
-    // database which pauses when idle, which is exactly where a request hangs.
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
 
     let response: Response;
     try {
-      response = await fetch(this.applicationPdfUrl(id, kind), {
-        headers, signal: controller.signal,
-      });
+      response = await fetch(url, { headers, signal: controller.signal });
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
         throw new ApiTimeoutError(DEFAULT_TIMEOUT_MS);
@@ -412,11 +555,11 @@ export class JobPlatformApi {
     }
 
     if (!response.ok) {
-      throw new ApiError(response.status, `Could not download the PDF (${response.status}).`);
+      throw new ApiError(response.status, `Could not download the file (${response.status}).`);
     }
 
     return response.blob();
-  };
+  }
 }
 
 export interface MatchQuery {

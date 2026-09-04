@@ -4,8 +4,9 @@ The Azure side of a job-market data pipeline. A scraper
 ([`job-scrapper`](https://github.com/pa741/job-scrapper)) runs on a NAS and uploads
 timestamped CSVs of job postings to Blob Storage; this repository turns each upload into
 queryable relational data and a set of market metrics, within seconds of it landing — and then
-matches those postings against a candidate's own profile, writing a tailored CV and cover
-letter for the ones worth applying to.
+matches those postings against a candidate's own profile, chooses which of the CVs that person
+has written fits each posting worth applying to, and drafts the covering letter that goes with
+it.
 
 Built to run at **zero cost** on Azure free tiers, with **no secrets anywhere** — every
 service-to-service hop is authenticated by managed identity, the language models included, and
@@ -227,20 +228,26 @@ posting endpoints during development never reaches them.
 | --- | --- |
 | `GET /api/v1/profile` | The caller's profile. 404 where they have not created one, which is a real state rather than an error |
 | `PUT /api/v1/profile` | Replaces it with the submitted form, and re-reads it for skills when the text actually changed |
-| `DELETE /api/v1/profile` | Erases the profile, every match and every generated document |
+| `DELETE /api/v1/profile` | Erases the profile, every match, every generated document and the whole CV library |
 | `GET /api/v1/matches` | Scored matches, best first. `minScore`, `assessedOnly`, paging |
 | `GET /api/v1/matches/{postingId}` | One match with the breakdown behind the number |
 | `GET /api/v1/searches` | The caller's scraper searches, and when the scraper was last told about them |
 | `POST`, `PUT /{slug}`, `DELETE /{slug}` | Add, replace and remove one. Each rewrites the scraper's configuration |
 | `POST /api/v1/searches/publish` | Rewrites that configuration from what is stored. The repair path |
-| `POST /api/v1/applications/{postingId}` | Writes a tailored CV and cover letter. The only route that spends money on the expensive model |
+| `GET /api/v1/cv-variants` | The caller's CV library, and how much of it predates their last profile change |
+| `GET /api/v1/cv-variants/{id}` | One CV, with the markdown the candidate wrote |
+| `POST /api/v1/cv-variants` | Stores a new CV in their own words, then renders it to PDF and DOCX and reads it for concepts |
+| `PUT /api/v1/cv-variants/{id}/label` | Renames one. Deliberately does not touch the authoring date, which is the whole staleness signal |
+| `PUT /api/v1/cv-variants/{id}/markdown` | Replaces the words, dates them, and renders again |
+| `PUT /api/v1/cv-variants/{id}/archived` | Retires one from selection, or puts it back. There is no delete |
+| `POST /api/v1/applications/{postingId}` | Writes the cover letter and the posting-specific answers. The only route that spends money on the expensive model |
 | `GET /api/v1/applications`, `/{id}` | Generated drafts, as markdown |
-| `GET /api/v1/applications/{id}/cv.pdf` | The CV, rendered |
 | `GET /api/v1/applications/{id}/cover-letter.pdf` | The cover letter, rendered |
+| `GET /api/v1/applications/{id}/cv.pdf` | A draft written before the library existed, rendered. Nothing writes a CV into a draft now; a variant's files are stored and linked instead |
 | `GET /api/v1/submissions` | Applications actually sent, and where each stands. The status is folded from the event log, never stored |
 | `POST /api/v1/submissions` | Records that one was sent. Idempotent per posting - a retry converges rather than duplicating |
 | `GET`, `POST /api/v1/submissions/{id}/events` | The append-only log, and one append. No deletes: withdrawing is a `Withdrawn` event |
-| `POST /api/v1/mcp` | The agent surface, over MCP. Fourteen tools, seven of which write; see [`mcp_handoff.md`](mcp_handoff.md) |
+| `POST /api/v1/mcp` | The agent surface, over MCP. Fifteen tools, six of which write, and none of which applies to anything; see [`mcp_handoff.md`](mcp_handoff.md) |
 
 OpenAPI at `/openapi/v1.json`, with a Scalar UI at `/scalar/v1`.
 
@@ -305,7 +312,15 @@ SK's experimental `Microsoft.Extensions.AI` bridge. Two things fell out of movin
 | | Deployment | Runs on | Why |
 | --- | --- | --- | --- |
 | Extraction, candidacy assessment | `gpt-5.6-luna` | Every posting; every shortlisted pair | Cheapest of the 5.6 family, 1.05M context. High volume, structured output, judged in aggregate. |
-| Tailored CV and cover letter | `gpt-5.6-sol` | Once per application | Roughly 25× the price per token, and the call ratio runs several thousand to one the other way. This is the artefact a human reads. |
+| Cover letter and the posting-specific answers | `gpt-5.6-sol` | Once per application | Roughly 25× the price per token, and the call ratio runs several thousand to one the other way. This is prose a human reads, written about one employer. |
+
+The CV used to be the third row of that table and is now nowhere in it: it is chosen rather than
+written, which costs arithmetic and no call at all. The one exception is a tie the arithmetic
+cannot break, and that goes to **Luna** rather than to Sol — picking one of two finished documents
+with the advert in hand is a multiple-choice question, and paying writing prices for it would be
+the same mistake the two deployments exist to avoid, in the direction nobody notices because it
+works. Reading a CV for the concepts selection scores it on is Luna's too, and it stays on the
+Azure path with the rest of the candidate's own data.
 
 Both are deployment *names* rather than model ids, so pointing one at a newer release is a
 repository variable, not a code change.
@@ -329,8 +344,13 @@ indices are all pinned by tests.
 A candidate fills in a form — experience, education, projects, certifications, declared
 skills — rather than uploading a CV. Parsing a PDF back into structure is a lossy guess at
 something the person already knows: which employer, which dates, which bullet point is the one
-that matters. Asking directly produces a record with fields, which is what makes the generated
-CV an *output* rather than a rewrite of an input.
+that matters. Asking directly produces a record with fields, and that record is the only thing
+this system will ever judge somebody on.
+
+The candidate does keep CVs here — a small library of them, written by hand, from which one is
+chosen per application. That is not a reversal of the rule above and does not soften it:
+**nothing parses a CV back into the profile**, and what those documents say never widens what
+the matcher believes the candidate has. See [Applications](#applications).
 
 The free text in that form goes through the same extractor a job advert does, with the same
 vocabulary, into a `ProfileConcepts` table with the same columns as `PostingConcepts`. **That
@@ -380,39 +400,127 @@ All of it runs at 03:30 UTC, after the ingest and extraction queues have drained
 somebody opens the page. A shortlist that costs model calls to look at is one nobody can afford
 to browse.
 
-## Generated applications
+## Applications
 
-For a matched posting, the writing deployment produces a tailored CV and cover letter as
-markdown, which the API renders to PDF on demand.
+The covering letter and the posting-specific free text are still written for the posting, where
+the advert is in hand and the artefact is short. **The CV is not written at all any more. It is
+chosen.**
 
-The gap list from the match is passed in as **the set of claims the document must not make**.
-Tailoring means choosing what to lead with and rewriting real work to foreground the relevant
-part of it; it never means adding what is not there. A CV that invents a year of Kubernetes is
-not a better CV — it is one that falls apart in the interview, and it is the candidate rather
-than this system that pays for that. Generation therefore requires an existing match: a document
-written without a gap list has nothing stopping it.
+That is a change, and it was made on evidence rather than taste. On the first real generation run
+the writer was asked what else an employer should know. It answered with the candidate's
+citizenship — correctly, out of their own summary — and then added *"I am an AI and they should
+have seen this."* The sentence was stored, served through the application pack, and would have
+been typed into a real employer's form under a person's name. A guard now drops that class of
+sentence, and a guard is a net under a trapeze. The other half is structural: **a curated CV takes
+the model out of the document that matters most**, because a model that is not writing the CV
+cannot invent a claim in it. Two smaller findings pointed the same way. Choosing among documents
+that already exist is close to free, so the nightly cap on model calls stops applying to the CV
+and moves to the letter. And outcome feedback finally has something to correlate: every draft was
+written by the same writer at the same version, so until now there were no variants to compare.
 
-Markdown, and never HTML. `MarkdownPdfRenderer` parses the model's output into an abstract
-syntax tree and maps each node type onto a fixed set of document elements, so there is no path
-by which a response becomes markup that anything executes or styles. The layout belongs to this
-repository; the model supplies words and structure only. A node type with no mapping renders as
-its plain text rather than being dropped — silently losing one would take content out of a
-document somebody is about to send to an employer.
+So the candidate writes their own CVs — at most six live ones, in markdown, in the dashboard — and
+this system renders them, chooses between them, and tells the candidate what to write next when
+none of them fits.
 
-The markdown is the record and the download routes render from it per request. Storing the PDF in
-the database would mean a layout change could not reach documents already generated, and would put
-megabytes of binary into something billed by the second.
+**Authored as markdown rather than uploaded as finished PDFs**, and the three reasons are reasons
+rather than a preference. Several ATS parse the upload, and one controlled template with embedded
+fonts produces simple, selectable, parseable structure where a PDF authored elsewhere may not —
+and that failure is silent, because a badly parsed CV is a rejected application nobody
+investigates. A DOCX cannot be made from an uploaded PDF at all, and Workday parses DOCX more
+reliably. And the renderer emits the same bytes on a laptop and in the Linux container, which is
+what makes *"what exactly did we send them"* answerable by hash. If the template is what
+disappoints, fixing the template once is cheaper than giving up parseability and improves every
+variant at the same time.
 
-That was the whole story while a person was the only reader. An applicant tracking system takes an
-*upload*, and an agent filling in a form cannot be handed megabytes of one in a tool result — so
-generation now also renders each draft into Blob Storage, and the agent surface hands out
-short-lived user-delegation SAS links to the files rather than the bytes. **DOCX as well as PDF,
-because several vendors parse the upload**: a PDF says where the ink goes, and a DOCX still says
-what a heading is. It is a second backend over the same parsed markdown rather than a converter or
-a second template, so there is still no step at which model output becomes markup. Each file is
-named after the candidate rather than `cv.pdf`, because that name ends up in a recruiter's file
-list, and a SHA-256 of the rendered bytes is stored beside the path — a path alone cannot say
-whether what is at the end of it is still what was sent.
+**A variant is read for concepts, and those concepts feed selection only.** They never reach
+`ProfileConcepts`, never move a match score, and never widen what the candidate is judged to have.
+A CV is written *from* the profile; letting its reading back in would let a document inflate the
+record it came from, and the loop would then be applying to jobs on the strength of its own prose.
+That is enforced by shape rather than by discipline — a separate table, a result type the profile
+writer cannot accept, and a selector that is handed concept keys without the emphasis attached, so
+a document that describes itself forcefully cannot outscore one that mentions the same work
+plainly.
+
+**Selection is the house idiom again: the arithmetic runs on everything and the model runs on what
+survives it.** Each variant is scored against the advert over the same concept graph matching
+uses, through the same relation walk, so the pack and the match breakdown cannot reach different
+conclusions about the same two concepts. A variant wins only if it clears an absolute floor *and*
+beats the runner-up by a stated margin. The floor is 50 and it is derived from the credit table
+rather than measured: every partial-credit relation is worth less than half, so a CV answering
+every requirement by transferable ground alone tops out at 45 and fails, while one answering half
+of them outright passes. **A CV cannot be sent on resemblance.** The margin is 10, which is about
+one whole requirement wide for an advert that states six to ten of them, and refuses to separate
+two documents that differ only by which edge the graph happened to credit. What the arithmetic
+cannot separate goes to the model as a closed question — *which of these finished documents* —
+with the advert in front of it. It never writes and never invents; it picks from a fixed set, and
+it may decline.
+
+**And when nothing fits, nothing is sent.** Sending the nearest CV to a job it does not fit is the
+failure this replaces, and it is invisible: the application simply never comes back, and nothing
+in the system ever learns why. So the posting is parked, the run carries on, and the abstention
+leaves behind the most useful thing in it — what the posting asked for that no CV covers. Those
+are aggregated across the whole blocked queue and ranked by how many applications each gap blocks,
+because fifty individual "could not apply" notices is a queue nobody reads and one ranked list of
+three is a Saturday afternoon with an obvious payoff:
+
+> **Eleven applyable postings are waiting on a CV you have not written.**
+> They ask for Kubernetes, Terraform and platform engineering; none of your variants covers them.
+
+That is not a refusal. It is the brief for the next CV, with its business case attached. A parked
+posting comes back when a variant covering what *it* recorded as missing exists — never merely
+because the library grew, or the release would be the same loop at a longer period with the bill
+handed to the person who has just written a CV.
+
+**Every application uploads the same filename, whichever CV was chosen.** The reason is not
+tidiness: `Pablo_De_Groot_AI_Engineer_CV.pdf` tells an employer that a different CV is kept for
+other roles, which is a true fact they have no business being handed, and it arrives in the file
+list before anybody opens the document. The stable name is at the end of the stored path and not
+only in the `Content-Disposition` header, because the loop hands a local file to a browser's file
+input and a client that saves a URL by its path would upload the last segment verbatim. The header
+is a request; the path is the guarantee.
+
+**A variant is archived, never deleted**, because an application made last year has to stay
+explicable and the submission that records it names the CV by id. Archiving takes a variant out of
+selection and does nothing else. And a variant that predates the last profile change is *flagged*,
+never regenerated — rewriting the candidate's document with a model is precisely the thing this
+change removes, and doing it on a timer would put the model back into the one document it was
+taken out of, unattended.
+
+Everything below this line is unchanged by all of that, and that is deliberate.
+
+The gap list from the match is still passed to the writer as **the set of claims the document must
+not make** — for the covering letter and the drafted free-text answers now, rather than for a CV.
+A letter that invents a year of Kubernetes is not a better letter; it is one that falls apart in
+the interview, and it is the candidate rather than this system that pays for that. Generation
+therefore still requires an existing match: a document written without a gap list has nothing
+stopping it.
+
+Markdown, and never HTML. `MarkdownPdfRenderer` parses the source into an abstract syntax tree and
+maps each node type onto a fixed set of document elements, so there is no path by which a response
+becomes markup that anything executes or styles. The layout belongs to this repository; the words
+and structure come from the model for a letter and from the candidate for a CV, and the renderer
+cannot tell the difference. A node type with no mapping renders as its plain text rather than being
+dropped — silently losing one would take content out of a document somebody is about to send to an
+employer.
+
+**DOCX as well as PDF, because several vendors parse the upload**: a PDF says where the ink goes,
+and a DOCX still says what a heading is. It is a second backend over the same parsed markdown
+rather than a converter or a second template, so there is still no step at which anything becomes
+markup.
+
+The files are stored rather than returned. An applicant tracking system takes an *upload*, and an
+agent filling in a form cannot be handed megabytes of one in a tool result, so the agent surface
+hands out short-lived user-delegation SAS links to the files rather than the bytes. A SHA-256 of
+the rendered bytes is stored beside the path — a path alone cannot say whether what is at the end
+of it is still what was sent.
+
+**The two document paths store the opposite things, and the inversion is the point.** A
+per-posting letter keeps its markdown as the record and re-renders per request, so a layout fix
+reaches drafts already written and no megabytes land in a database billed by the second. A CV
+variant is rendered once and hashed, because its bytes were uploaded into somebody else's system:
+*what exactly did we send them* is a question about a file that has to still exist and still be
+the same file. A template improvement reaches a variant by re-rendering it, which is free and
+deterministic, rather than by quietly changing what a stored hash describes.
 
 One trap worth writing down: PDFsharp's platform-independent build resolves **no fonts at all**,
 and throws on its first call without a resolver — including for its own internal error font.
@@ -425,8 +533,8 @@ and turns a missing apt package into a 500 on somebody's CV download.
 
 A React SPA on Static Web Apps (Free tier), signing in with MSAL and calling the API with
 an Entra bearer token. An overview of the market metrics, a filterable postings browser, the
-candidate's own matches, the profile form that feeds them, and the searches that decide what
-gets scraped in the first place.
+candidate's own matches, the profile form that feeds them, the CV library those matches draw
+their documents from, and the searches that decide what gets scraped in the first place.
 
 The per-person pages behave differently from the corpus ones on purpose. Overview and Postings
 are about a slice of the corpus and wait on the search-term bootstrap; Profile, Matches and
@@ -753,8 +861,9 @@ What still needs care, and how it is handled:
   and salary expectations. Every read and write is scoped to the caller's own `oid`, and the
   repositories take a subject id rather than a profile id so an endpoint cannot be written
   that reads a stranger's record by mistake. `DELETE /api/v1/profile` erases the profile,
-  every match and every generated document — a system that stores an employment history
-  without offering a way to remove it is not one anybody should hand a CV to.
+  every match, every generated document and the whole CV library, which cascades from the
+  profile because a CV means nothing without the person — a system that stores an employment
+  history without offering a way to remove it is not one anybody should hand a CV to.
 - `.gitignore` was the repository's first commit, before any other file existed.
 - CI runs `gitleaks`, and `pull_request` (never `pull_request_target`) keeps fork code away
   from secrets.
@@ -798,7 +907,7 @@ event log per posting, with the status folded from it on read so staleness canno
 dashboard page that makes the pipeline legible to a person before anything automated writes to it.
 
 On top of it sits an MCP server at `/api/v1/mcp`, behind the same Entra token the dashboard
-already carries. **Fourteen tools, and seven of them write.** It started as four reads - what to
+already carries. **Fifteen tools, and six of them write.** It started as four reads - what to
 apply to next, the pack for one application, one allowlisted profile answer at a time, and the
 pipeline's own state - which is a surface an agent can read from and then has nowhere to report
 back to. An application that exists in the world and not in the log is the one state this pipeline
@@ -822,16 +931,26 @@ does.
 listings of one job, says whose ATS form is at the end of a link and which links are inferences
 rather than published facts, enforces the assessment floor server-side so a prompt-level bug
 cannot fire applications at bad matches, and reports how much of the day's cap is left - because
-discovering a cap by being refused happens after the form has already gone. And a form field is
+discovering a cap by being refused happens after the form has already gone. The pack now also
+*chooses*: it scores the candidate's own CVs against the advert and hands over the one that fits,
+with the arithmetic that chose it, so the browser loop stays a lookup rather than acquiring a
+judgement. Where none fits it says so plainly, parks the posting rather than offering the nearest
+CV, and `list_cv_gaps` turns the whole parked backlog into one ranked answer to *which CV should I
+write next* - which is the one useful thing an abstention can leave behind. And a form field is
 resolved *inside* the server, against what this candidate has already answered: shipping the
 answer store into a model's context to fill one box would be the whole-profile disclosure the
 allowlist exists instead of, with an extra hop and a bill attached.
 
 **What it deliberately cannot do is apply.** There is no `submit_application` tool and there never
 will be: applying is irreversible and outward-facing, so it stays outside this system entirely and
-no bug in this repository can send anything to an employer. There is no `get_profile` either - a
-tool result is transcript content wherever the client runs - and every read that discloses the
-candidate's own data records what it disclosed, never the value.
+no bug in this repository can send anything to an employer. The CV library narrows the blast
+radius on the other side of the same boundary: the document a recruiter reads first is now one the
+candidate wrote, so the worst a model can do to it is choose the wrong one of six - and where the
+arithmetic cannot choose confidently, it sends nothing and says what is missing.
+
+There is no `get_profile` either - a tool result is transcript content wherever the client runs -
+and every read that discloses the candidate's own data records what it disclosed, never the
+value.
 
 ## Status
 
@@ -860,19 +979,32 @@ Verified live against the real ingested data, with a real Entra token:
 The cold start is the cost of `minReplicas: 0`, and it is the right trade here: the API is
 idle most of the day, and an always-warm replica would burn the free grant serving nobody.
 
-The candidate profile, matching and generated applications are built on top of that: a
-form-filled profile extracted into the same concept vocabulary as a posting, a pure scorer
-that runs over every pair nightly, a model pass over what clears the threshold, and a tailored
-CV and cover letter rendered to PDF. 365 tests cover them, and moving the provider to Azure
-OpenAI removed the last secret in the system on the way through.
+The candidate profile, matching and applications are built on top of that: a form-filled profile
+extracted into the same concept vocabulary as a posting, a pure scorer that runs over every pair
+nightly, a model pass over what clears the threshold, and a covering letter rendered to PDF and
+DOCX. Moving the provider to Azure OpenAI removed the last secret in the system on the way
+through.
 
-The apply loop on top of them - the fourteen tools, the answer store, parking, the duplicate
+**The CV is the newest of those and it moved in the opposite direction to everything else here:
+away from the model.** A candidate keeps up to six CVs of their own, in markdown; a pure pass
+scores each against the advert over the shared concept graph and sends one only where it clears a
+floor and beats the rest by a margin; a tie goes to the model as a choice between finished
+documents; and nothing fitting means nothing is sent, the posting is parked, and the candidate is
+told which CV would unblock how many applications. Core and Data are built and committed with the
+selector, the library rules, the gap brief and the park that waits on coverage rather than on
+authorship all covered by tests. It has not been driven end to end by a real client yet - see
+below.
+
+The apply loop on top of them - the fifteen tools, the answer store, parking, the duplicate
 clustering and the stored document packs - is built and tested and **has not yet been driven by a
 real MCP client**, which is the next thing rather than a footnote to it. And the measurement that
-reordered its build is worth stating plainly: exactly one posting in the corpus has generated
-documents, so the queue a careful run would compose - documents ready, an employer's own apply
-link, an assessment of 80 or better - is currently empty. **Generation, not the tool surface, is
-what the loop is waiting on.** [`mcp_handoff.md`](mcp_handoff.md) carries the numbers and the open
+reordered its build is worth stating plainly: when it was taken, exactly one posting in the corpus
+had generated documents, so the queue a careful run would compose - documents ready, an employer's
+own apply link, an assessment of 80 or better - was empty. **Generation, not the tool surface, was
+what the loop was waiting on**, which is most of why the CV stopped being generated: choosing
+among documents that already exist costs nothing, so the nightly cap now binds on the covering
+letter alone. That number wants re-measuring rather than repeating - it was taken against a writer
+that was still writing CVs. [`mcp_handoff.md`](mcp_handoff.md) carries the numbers and the open
 work.
 
 Still to come, per the architecture in `model.md`: a Cosmos change-feed function driving

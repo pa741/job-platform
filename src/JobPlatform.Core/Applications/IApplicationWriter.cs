@@ -42,23 +42,60 @@ public sealed record ApplicationRequest(
     string? Instructions = null);
 
 /// <summary>
-/// A tailored CV and cover letter, as markdown.
+/// A cover letter and the free text one posting asks for, as markdown.
 /// </summary>
 /// <remarks>
 /// <b>Markdown, and never HTML.</b> The renderer walks a parsed markdown tree and emits a
 /// document from a fixed set of node types, so there is no path by which model output becomes
 /// markup that anything executes or styles. The layout belongs to this repository; the model
 /// supplies words and structure only.
+///
+/// <b>The CV is no longer one of these, and the reason is a sentence a model wrote.</b> Asked what
+/// else an employer should know, it gave the candidate's citizenship - correctly, out of their own
+/// summary - and then added <i>"I am an AI and they should have seen this."</i> It was stored,
+/// served through the pack, and would have been typed into an employer's form under a person's
+/// name. A guard drops that class of sentence now, and a guard is a net under a trapeze. What
+/// removes the failure rather than catching it is not writing the document at all: the candidate
+/// authors a small library of CVs and <see cref="CvVariantSelector"/> chooses one, so the model
+/// cannot invent a claim about work it is not writing about.
+///
+/// <b>What is left is what is genuinely per-posting.</b> The cover letter and the drafted free-text
+/// answers are short, cheap, low-risk, and answerable only by something holding this advert - and
+/// the advert is already in hand when they are written. The division to keep is that the model
+/// <i>writes the bespoke short things and chooses among the curated long ones</i>, which is why
+/// <see cref="IApplicationWriter"/> now carries both halves rather than one.
 /// </remarks>
 public sealed record ApplicationDraft
 {
     /// <summary>
     /// Bumped when the prompt or the rendering changes what the same input would produce.
     /// </summary>
-    public const int CurrentVersion = 2;
+    /// <remarks>
+    /// Three, because the prompt stopped asking for a CV. That is the largest change this constant
+    /// has ever recorded: version 2 and version 3 of the same posting differ by a whole document,
+    /// so a reader comparing two drafts without it would see a rendering fault where there is a
+    /// deliberate absence.
+    /// </remarks>
+    public const int CurrentVersion = 3;
 
-    /// <summary>The CV, tailored to this posting. Headings, dates, bullet points.</summary>
-    public required string CurriculumVitaeMarkdown { get; init; }
+    /// <summary>
+    /// The CV, where one was written. Null for anything drafted from version 3 onwards.
+    /// </summary>
+    /// <remarks>
+    /// <b>Nullable rather than removed, and the column stays with it.</b> Applications made last
+    /// year have to remain explicable: "what exactly did we send them" is a question about a
+    /// document that went into somebody else's system, and it cannot be answered by a field that
+    /// was dropped because nothing writes it any more. It is the same rule archiving follows on
+    /// the other side of this feature - a retired variant is removed from selection and from
+    /// nothing else - and it is the same rule for the same reason, which is that this system's
+    /// record of what it sent is the only copy anybody here controls.
+    ///
+    /// <b>Null is therefore ordinary and not a failure.</b> Every consumer already treated a blank
+    /// as "there is no file of that kind to offer" - the pack said so in its note and the download
+    /// route answered 404 - because a render could always fail on its own. Nothing had to learn a
+    /// new state; what changed is which state is the common one.
+    /// </remarks>
+    public string? CurriculumVitaeMarkdown { get; init; }
 
     /// <summary>The cover letter. Prose, no headings beyond the addressee.</summary>
     public required string CoverLetterMarkdown { get; init; }
@@ -101,7 +138,31 @@ public sealed record ApplicationDraft
 }
 
 /// <summary>
-/// Writes the documents a candidate actually sends.
+/// The tie the arithmetic refused to settle, as the model is asked to settle it.
+/// </summary>
+/// <remarks>
+/// <b>Labels and scores, never markdown.</b> The ballot carries what
+/// <see cref="CvVariantSelector"/> already computed, which is a name the candidate chose and a
+/// number this system derived - so the model is asked which of these finished documents to send
+/// and is given no document to rewrite. That is the same narrowing <see cref="CvVariantFacts"/>
+/// makes for the arithmetic, applied one layer further out: a caller that cannot reach the prose
+/// cannot be tempted to ask for a better version of it.
+///
+/// <b>The advert is the whole of the new information.</b> The scores are what the graph could say
+/// about this pair and they came out too close to separate; what a model adds is the half the
+/// vocabulary cannot see - that an advert about payments infrastructure wants the backend CV
+/// rather than the data one, in words neither concept list carries.
+/// </remarks>
+/// <param name="Posting">The advert, as the writer already receives it.</param>
+/// <param name="Ballot">
+/// The variants to choose between, best first. <b>Bounded by the caller</b>: an advert stating
+/// nothing that discriminates ties the whole library, and a ballot of six is a question nobody
+/// should be answering from a list of names.
+/// </param>
+public sealed record CvChoiceRequest(PostingBrief Posting, IReadOnlyList<CvVariantScore> Ballot);
+
+/// <summary>
+/// Writes the bespoke short things, and chooses among the curated long ones.
 /// </summary>
 /// <remarks>
 /// The one path in this system that runs on the expensive deployment, and the one place that is
@@ -110,10 +171,37 @@ public sealed record ApplicationDraft
 /// ratio between the two deployments is roughly twenty-five to one and the call ratio is
 /// several thousand to one in the other direction.
 ///
+/// <b>Two methods, and the pairing is the design rather than a convenience.</b> Writing a CV was
+/// the largest thing this interface did and it is gone; what replaced it is a closed question over
+/// documents somebody else wrote. Keeping both here says the division out loud - the model writes
+/// what is genuinely per-posting and short, and it chooses among what is curated and long - and it
+/// keeps the tie-break behind the same nullable registration, so a deployment with no provider
+/// abstains on the choice exactly as it abstains on the prose. A separate interface would have
+/// needed its own registration, and a service that is registered separately is one that can be
+/// forgotten separately.
+///
 /// Registered <b>only</b> where a Kernel is, so consumers take <c>IApplicationWriter?</c>.
 /// </remarks>
 public interface IApplicationWriter
 {
     /// <summary>Null when the model returned nothing usable. Never throws for a bad response.</summary>
     Task<ApplicationDraft?> WriteAsync(ApplicationRequest request, CancellationToken ct = default);
+
+    /// <summary>
+    /// Which of these CVs to send. Null to abstain, which is always an available answer.
+    /// </summary>
+    /// <remarks>
+    /// <b>The answer is a variant id off the ballot and nothing else.</b> An id outside the set,
+    /// a malformed response, a timeout and an explicit refusal all come back as null, because the
+    /// caller does the same thing with all four: it sends no CV. There is deliberately no free
+    /// text - a rationale from a model is prose this system would then have to sanitise, and the
+    /// sentence that started this whole feature was exactly that kind of prose. The audit line is
+    /// written here, from the ballot and the answer, and says which id came back.
+    ///
+    /// <b>It never writes and it never invents.</b> The question is closed and checkable: the
+    /// caller re-checks the returned id against the ballot it offered, on the rule
+    /// <c>KernelDocumentExtractor</c> already follows for concept keys - a hallucinated id is
+    /// indistinguishable from a real one once it is stored.
+    /// </remarks>
+    Task<long?> ChooseCurriculumVitaeAsync(CvChoiceRequest request, CancellationToken ct = default);
 }

@@ -13,13 +13,14 @@ namespace JobPlatform.Data.Applications;
 /// </summary>
 /// <remarks>
 /// <b>Bound to the <c>ApplicationPacks</c> section, whose keys are set by the hosting template.</b>
-/// <c>ApplicationPacks__serviceUri</c> and <c>ApplicationPacks__ContainerName</c> are written by
+/// <c>ApplicationPacks__serviceUri</c>, <c>ApplicationPacks__ContainerName</c> and
+/// <c>ApplicationPacks__VariantContainerName</c> are written by
 /// <c>infra/modules/containerapp.bicep</c>, and the names here match those exactly - the section
 /// is bound case-insensitively, which is why the lower-case <c>serviceUri</c> in the template
 /// still reaches <see cref="ServiceUri"/>. A rename on either side is a deployment that silently
 /// loses its storage, so neither side renames without the other.
 ///
-/// <b>The Functions host takes the same two names, and that is why there is only one pair.</b>
+/// <b>The Functions host takes the same three names, and that is why there is only one set.</b>
 /// Its app settings arrive as environment variables, where <c>__</c> is the section separator, so
 /// the container app's spelling binds there unchanged. A second spelling for the second host
 /// would be a second thing to keep in step with two templates, and the half that fell behind
@@ -53,6 +54,31 @@ public sealed class ApplicationPackOptions
     /// the account-wide grant.
     /// </remarks>
     public string ContainerName { get; set; } = "application-packs";
+
+    /// <summary>The container the candidate's own CV variants live in. Never <see cref="ContainerName"/>.</summary>
+    /// <remarks>
+    /// <b>A second container rather than a prefix under the first, and that is a constraint rather
+    /// than a preference.</b> An <c>ApplicationDocuments</c> id and a <c>CvVariants</c> id are
+    /// independent identity spaces that both start at one, so under a single container document 34
+    /// and variant 34 belonging to one candidate address the same directory - and now that a chosen
+    /// CV and a generated one spell the filename identically, the same blob. Whichever was written
+    /// second would overwrite the other, and the hash stored beside the survivor would describe
+    /// bytes nobody sent. Nothing downstream could notice, either: both rows point at a file that
+    /// exists, of the right type, under the right name, and the only symptom is an employer
+    /// receiving a document the candidate never chose to send them.
+    ///
+    /// <b>Separate on the infrastructure's terms as well, which is an argument the curated zone has
+    /// already won here.</b> <c>main.bicep</c> creates <c>profile-cvs</c> and gives the identity a
+    /// scoped Blob Data Contributor assignment on it, exactly as <c>jobs-curated</c> is a container
+    /// rather than a prefix under the landing one - a grant over the documents a person wrote that
+    /// can be reasoned about, and revoked, without touching the generated ones.
+    ///
+    /// The default matches the template's, so a host that sets only the service URI still keeps the
+    /// two apart. <see cref="ApplicationPackStore.StoreVariantAsync"/> refuses outright where the
+    /// two names fold to one container: the separation is the whole of what stops the collision
+    /// above, and it must not be undone by a typo in an app setting.
+    /// </remarks>
+    public string VariantContainerName { get; set; } = "profile-cvs";
 
     /// <summary>
     /// How many minutes a signed link lives. Fifteen by default.
@@ -92,22 +118,162 @@ public sealed class ApplicationPackOptions
 }
 
 /// <summary>
-/// The container rendered documents are written to, and the account client that signs for it.
+/// The two containers rendered documents are written to, and the account that signs for both.
 /// </summary>
 /// <remarks>
 /// <b>A named wrapper rather than bare client registrations</b>, following
 /// <c>ScraperConfigContainer</c> and <c>CuratedContainer</c> and for the reason written there:
 /// two registrations of one type resolve by whichever was added last, and a rendered CV written
 /// into the landing container - where Event Grid would try to ingest it as a CSV - would fail
-/// silently.
+/// silently. That argument bites twice as hard now there are two container clients of one type in
+/// one place, because these two in particular must never be swapped: a variant written into
+/// <c>application-packs</c> collides with a generated document by id, which is the failure
+/// <see cref="ApplicationPackOptions.VariantContainerName"/> exists to describe.
 ///
-/// <b>Both clients, because signing and writing happen at different scopes.</b> The blob is
-/// written through the container; the user delegation key is requested from the <i>account</i>,
+/// <b>Named init properties rather than positional parameters, for exactly that reason.</b> Two
+/// <see cref="BlobContainerClient"/> arguments side by side transpose without a compiler error and
+/// with nothing wrong-looking afterwards - no exception, no log line, no bad row - while the
+/// deployment quietly writes each candidate's CV over the generated document that happens to share
+/// its id. It is the rule <c>PackFileRequest</c> states about two <c>long</c> identifiers, one
+/// layer down and with a worse consequence, because these two files are the ones an employer is
+/// sent.
+///
+/// <b>All three clients, because signing and writing happen at different scopes.</b> A blob is
+/// written through its container; the user delegation key is requested from the <i>account</i>,
 /// which is why <see cref="Service"/> is carried rather than reached for. Deriving one from the
 /// other at the point of use would put the account endpoint back into the calling code, which is
-/// the thing this wrapper exists to keep in one place.
+/// the thing this wrapper exists to keep in one place. One account holds both containers, so one
+/// key signs for both and <see cref="Resolve"/> decides which container a reference belongs to.
 /// </remarks>
-public sealed record ApplicationPackContainer(BlobServiceClient Service, BlobContainerClient Client);
+public sealed record ApplicationPackContainer
+{
+    /// <summary>The account. What a user delegation key is requested from, and what signs.</summary>
+    public required BlobServiceClient Service { get; init; }
+
+    /// <summary>Where the per-posting generated documents go: <c>application-packs</c>.</summary>
+    public required BlobContainerClient Packs { get; init; }
+
+    /// <summary>Where the candidate's own CV variants go: <c>profile-cvs</c>. Never <see cref="Packs"/>.</summary>
+    public required BlobContainerClient Variants { get; init; }
+
+    /// <summary>
+    /// Which of the two containers a stored reference names, and the blob inside it.
+    /// </summary>
+    /// <remarks>
+    /// <b>The reference decides, not the caller.</b> The caller with the most need of a link is the
+    /// pack, and it holds both kinds at once: a chosen variant's path read out of <c>CvVariants</c>
+    /// and a generated document's path read out of <c>ApplicationDocuments</c>. Asking it to
+    /// remember which column each came from is how one of the two is eventually signed against the
+    /// wrong container - and that is not an error anybody sees, it is a perfectly valid URL for a
+    /// blob that does not exist, discovered by the browser loop at the upload box with the tab
+    /// already open.
+    ///
+    /// <b>Only a reference qualified with the variant container's own name is read against it;
+    /// everything else is a pack reference.</b> <c>ApplicationPackFile.TryBlobName</c> deliberately
+    /// accepts a bare <c>{profile}/{document}/{name}</c> as well as the qualified form, so "try one
+    /// container, then the other" would resolve every bare path in whichever happened to be tried
+    /// first. A bare path is a pack document by construction - nothing wrote a variant before the
+    /// variant container existed - so the pack container is the fallback and the variant container
+    /// is entered only on its own name.
+    ///
+    /// <b>It resolves inside one of these two containers or not at all</b>, which is the property
+    /// <c>ApplicationPackFile.TryBlobName</c> is written for: a reference naming some third
+    /// container is treated as a blob name that happens to contain slashes, so the worst a path
+    /// from the wrong column can do is produce a dead link - never a signature over anything
+    /// outside the two containers whose contents are allowed to leave the tenant.
+    /// </remarks>
+    public bool Resolve(string? storedPath, out BlobContainerClient client, out string blobName)
+    {
+        client = Packs;
+        blobName = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(storedPath))
+        {
+            return false;
+        }
+
+        var prefix = Variants.Name.Trim().Trim('/') + "/";
+
+        if (storedPath.Trim().TrimStart('/').StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            client = Variants;
+        }
+
+        return ApplicationPackFile.TryBlobName(client.Name, storedPath, out blobName);
+    }
+}
+
+/// <summary>
+/// One rendered CV variant, on its way to the container the candidate's library lives in.
+/// </summary>
+/// <remarks>
+/// <b>A separate request from <c>PackFileRequest</c>, and the separation is itself the guard.</b>
+/// The two carry the same bytes to the same account and differ in one field - a document id against
+/// a variant id - which is precisely the pair whose independence forced two containers in the first
+/// place. Reusing the pack's request would put a variant id in a property called <c>DocumentId</c>,
+/// and the collision this design engineered out of the storage would walk back in through the
+/// naming.
+///
+/// <b>There is no <c>PackDocument</c> member, and that is not an omission.</b> A variant is a CV -
+/// there is no such thing as a covering letter in a candidate's CV library - so the enum has
+/// nowhere to appear here and no caller can put a letter in the container CVs are chosen from. The
+/// filename follows from the same absence rather than from an argument: see
+/// <c>ApplicationPackFile.VariantBlobPath</c>, which has nowhere to pass a label either.
+/// </remarks>
+public sealed record VariantFileRequest
+{
+    /// <summary>Whose library this is. From the caller's resolved profile, never an argument.</summary>
+    public required long ProfileId { get; init; }
+
+    /// <summary>The <c>CvVariants</c> row this was rendered from. A directory, never part of a name.</summary>
+    /// <remarks>
+    /// The variant rather than the posting or the application, so re-rendering a variant overwrites
+    /// the file it replaces - which is what makes the digest stored beside it describe the bytes
+    /// actually at that path.
+    /// </remarks>
+    public required long VariantId { get; init; }
+
+    /// <summary>What it was rendered as.</summary>
+    public required PackFormat Format { get; init; }
+
+    /// <summary>The rendered bytes.</summary>
+    public required byte[] Content { get; init; }
+
+    /// <summary>The candidate's own name, for the filename. Blank is allowed.</summary>
+    public string? CandidateName { get; init; }
+}
+
+/// <summary>
+/// Where a CV variant's rendered files are put.
+/// </summary>
+/// <remarks>
+/// <b>A second, smaller contract beside <c>IApplicationPackStore</c> rather than two more methods
+/// on it.</b> That interface is the pack's: every consumer resolves it as nullable in order to
+/// offer a link, its <c>StoreAsync</c> takes a document id, and widening it would hand the ability
+/// to write a candidate's CV to every caller that only wanted a URL. This is one method, over one
+/// container, taking the one identifier that container is keyed by.
+///
+/// <b>In Data rather than Core, because nothing in Core hands out a variant's files.</b> Core owns
+/// the naming rules - <c>ApplicationPackFile</c> - and the pack contract a domain type needs; the
+/// write is infrastructure, and Data is the assembly both hosts already reach into for the store,
+/// for the reason <c>ApplicationPackSetup</c> gives at length. One instance is registered behind
+/// both contracts.
+///
+/// <b>It also gives <c>CvVariantRenderer</c> a seam, which is not a convenience here.</b> The thing
+/// worth asserting about that class is that the digest it hands the repository is the digest of the
+/// PDF that was actually uploaded rather than of some other file, and a suite that cannot reach
+/// Azure - which is every suite in this repository, deliberately - can only see that through a
+/// seam. Without one the assertion would be a comment.
+///
+/// <b>It does not throw</b>, for the reason <c>IApplicationPackStore</c> does not: the markdown is
+/// the record and a rendered file is a copy of it, so a role assignment that has not finished
+/// propagating must not fail the save a person is waiting on.
+/// </remarks>
+public interface ICvVariantFileStore
+{
+    /// <summary>Uploads one rendered variant file. Null where it could not be stored.</summary>
+    Task<StoredPackFile?> StoreVariantAsync(VariantFileRequest file, CancellationToken ct = default);
+}
 
 /// <summary>
 /// Puts a rendered document where a browser can fetch it, and lets it at one for a few minutes.
@@ -137,14 +303,23 @@ public sealed record ApplicationPackContainer(BlobServiceClient Service, BlobCon
 /// <b>Nothing here throws.</b> Storage is a convenience over a record that lives in SQL: the
 /// markdown is the document, the rendered file is a copy of it, and a role assignment that has not
 /// finished propagating must not fail the generation that a person is waiting on or the pack a
-/// client is reading. Both methods answer null and log at warning with the container named, which
+/// client is reading. Every method answers null and logs at warning with the container named, which
 /// is the contract <c>ScraperConfigPublisher</c> runs under and for the same reason.
+///
+/// <b>Two containers, one store, because the account and the delegation key are shared.</b> The
+/// generated documents go to <c>application-packs</c> and the candidate's own CV variants to
+/// <c>profile-cvs</c> - kept apart because their identifiers collide, which
+/// <see cref="ApplicationPackOptions.VariantContainerName"/> sets out - but both are in one storage
+/// account, so one user delegation key signs for both and a second store would only mean a second
+/// cache of it and twice the round trips to fetch it. Which container a stored reference belongs to
+/// is read off the reference by <see cref="ApplicationPackContainer.Resolve"/> rather than passed
+/// in, so the pack can hand this a path from either column without having to remember which.
 /// </remarks>
 public sealed class ApplicationPackStore(
     ApplicationPackContainer container,
     IOptions<ApplicationPackOptions> options,
     TimeProvider time,
-    ILogger<ApplicationPackStore> logger) : IApplicationPackStore
+    ILogger<ApplicationPackStore> logger) : IApplicationPackStore, ICvVariantFileStore
 {
     /// <summary>
     /// How long a user delegation key is asked for.
@@ -187,15 +362,14 @@ public sealed class ApplicationPackStore(
     /// side: a row keeping the old hash beside a path whose bytes had changed would claim the file
     /// there is something it is not.
     ///
-    /// <b>The content type and the download name are set on the blob, not on a response.</b>
-    /// Nothing in this system serves these bytes - storage does, to a browser holding a signed URL
-    /// - so storage is the only thing in a position to say what they are and what to call them. A
-    /// blob without them downloads as <c>application/octet-stream</c> named after the last path
-    /// segment, which for a signed URL is the filename followed by a query string.
+    /// <b>The pack container, always.</b> This is the half of the store that writes what a model
+    /// generated per posting; a CV the candidate wrote goes to
+    /// <see cref="StoreVariantAsync"/> and its own container, because a document id and a variant
+    /// id collide. Nothing here takes a container, which is what makes that a property of the
+    /// method a caller picked rather than of an argument it passed.
     ///
-    /// <b>The hash is taken over what was uploaded</b>, in the one place that holds exactly those
-    /// bytes, so <c>RenderedDocuments.CvSha256</c> describes the file rather than the markdown it
-    /// came from. A renderer change moves the bytes without moving a character of the source.
+    /// The headers, the overwrite, the hash and the failure contract are
+    /// <see cref="UploadAsync"/>'s, shared with the variant half so the two cannot drift.
     /// </remarks>
     public async Task<StoredPackFile?> StoreAsync(PackFileRequest file, CancellationToken ct = default)
     {
@@ -214,19 +388,152 @@ public sealed class ApplicationPackStore(
         }
 
         var fileName = ApplicationPackFile.FileName(file.CandidateName, file.Document, file.Format);
-        var blobPath = ApplicationPackFile.BlobPath(
-            container.Client.Name, file.ProfileId, file.DocumentId, fileName);
-        var contentType = ApplicationPackFile.ContentType(file.Format);
 
-        if (!ApplicationPackFile.TryBlobName(container.Client.Name, blobPath, out var blobName))
+        return await UploadAsync(
+            container.Packs,
+            ApplicationPackFile.BlobPath(container.Packs.Name, file.ProfileId, file.DocumentId, fileName),
+            fileName,
+            ApplicationPackFile.ContentType(file.Format),
+            file.Content,
+            ct);
+    }
+
+    /// <summary>
+    /// Uploads one rendered CV variant. Returns where it went, or null if it did not.
+    /// </summary>
+    /// <remarks>
+    /// <b>The variant container, and it refuses rather than falling back.</b> The two names come
+    /// from two app settings and a deployment that spells them the same has asked for the one thing
+    /// this separation exists to prevent: document 34 and variant 34 of one candidate would address
+    /// the same directory and, now that a chosen CV and a generated one spell the filename
+    /// identically, the same blob - so one silently overwrites the other and the digest stored
+    /// beside the survivor describes bytes nobody sent. Neither answer is good, but refusing costs a
+    /// variant that stays unrendered and says so on the dashboard, where writing anyway costs an
+    /// employer being sent the wrong document with a row that looks correct. Refusing here rather
+    /// than in <c>ApplicationPackSetup</c> makes it a property of the write instead of a property of
+    /// one registration path.
+    ///
+    /// <b>Overwrites, deliberately, exactly as <see cref="StoreAsync"/> does.</b> The path is
+    /// derived from the variant rather than from the moment, so re-rendering replaces the file it
+    /// replaces in SQL - which is the whole of what makes <c>CvVariants.Sha256</c> describe the
+    /// bytes at <c>PdfBlobPath</c>. A fresh path per render would leave the previous file behind
+    /// with a row that no longer describes it, and "what exactly did we send them" is a question
+    /// about a file that has to still exist and still be the same file.
+    ///
+    /// <b>The download name is taken from the path rather than derived a second time.</b>
+    /// <c>ApplicationPackFile.VariantBlobPath</c> has already built it, and the last segment is
+    /// exactly what a client ignoring <c>Content-Disposition</c> saves the file as - so reading it
+    /// back means the header and the path cannot disagree about what the file is called, whichever
+    /// of the two a client honours.
+    ///
+    /// <b>And the name is checked before the bytes go anywhere.</b>
+    /// <c>ApplicationPackFile.IsStableCvName</c> exists to be asked here - where the bytes and the
+    /// name are both in scope - and it is unreachable in the same way the resolve assertion below
+    /// is: <c>VariantBlobPath</c> has nowhere to pass a label, so it cannot produce a leaking name.
+    /// It is asked anyway because of what a leaking one costs, and because it is silent: a filename
+    /// carrying "AI_Engineer" tells an employer that a different CV is kept for other roles, in the
+    /// file list, before the document is opened, and nothing in this loop is choosing to disclose
+    /// that so nothing in it would notice the disclosure.
+    /// </remarks>
+    public async Task<StoredPackFile?> StoreVariantAsync(
+        VariantFileRequest file, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(file);
+
+        if (file.Content.Length == 0)
         {
-            // Unreachable through the naming rules above, and checked anyway: the two functions
-            // are inverses, and this is the assertion that says so at the one point where both
-            // are in scope. A path that cannot be read back is a file that can never be linked.
+            logger.LogDebug(
+                "Nothing to store for variant {VariantId}: the render produced no bytes.",
+                file.VariantId);
+
+            return null;
+        }
+
+        if (string.Equals(
+            container.Variants.Name.Trim().Trim('/'),
+            container.Packs.Name.Trim().Trim('/'),
+            StringComparison.OrdinalIgnoreCase))
+        {
             logger.LogWarning(
-                "Refusing to store document {DocumentId}: the derived path {BlobPath} does not "
-                + "resolve back to a blob name.",
-                file.DocumentId,
+                "Refusing to store variant {VariantId}: {Container} is configured as both the "
+                + "application pack container and the CV variant container. A document id and a "
+                + "variant id are independent and both start at one, so one candidate's CV would "
+                + "overwrite a generated document sharing its id and the stored hash would "
+                + "describe bytes nobody sent. Set ApplicationPacks__VariantContainerName to the "
+                + "variant container - profile-cvs by default - and re-render.",
+                file.VariantId,
+                container.Variants.Name);
+
+            return null;
+        }
+
+        var blobPath = ApplicationPackFile.VariantBlobPath(
+            container.Variants.Name, file.ProfileId, file.VariantId, file.CandidateName, file.Format);
+
+        if (!ApplicationPackFile.IsStableCvName(blobPath))
+        {
+            logger.LogWarning(
+                "Refusing to store variant {VariantId} at {BlobPath}: the last segment is not the "
+                + "one filename every CV is sent under. A name that distinguishes one variant from "
+                + "another is a fact about how this candidate looks for work, handed to an employer "
+                + "in their file list before the document is opened.",
+                file.VariantId,
+                blobPath);
+
+            return null;
+        }
+
+        return await UploadAsync(
+            container.Variants,
+            blobPath,
+            blobPath[(blobPath.LastIndexOf('/') + 1)..],
+            ApplicationPackFile.ContentType(file.Format),
+            file.Content,
+            ct);
+    }
+
+    /// <summary>
+    /// Puts bytes at a path in one of the two containers, and says what was written.
+    /// </summary>
+    /// <remarks>
+    /// <b>One upload, because the two callers differ only in the container and the path.</b> The
+    /// headers, the overwrite, the hash and the failure contract are one decision each, and a
+    /// second copy of them is a copy free to drift - the variant half acquiring a content type the
+    /// pack half does not have, or losing the content disposition, with nothing failing until an
+    /// ATS refuses an upload for having the wrong media type.
+    ///
+    /// <b>The content type and the download name are set on the blob, not on a response.</b>
+    /// Nothing in this system serves these bytes - storage does, to a browser holding a signed URL
+    /// - so storage is the only thing in a position to say what they are and what to call them. A
+    /// blob without them downloads as <c>application/octet-stream</c> named after the last path
+    /// segment, which for a signed URL is the filename followed by a query string.
+    ///
+    /// <b>The hash is taken over what was uploaded</b>, in the one place that holds exactly those
+    /// bytes, so the digest a row stores describes the file rather than the markdown it came from.
+    /// A renderer change moves the bytes without moving a character of the source.
+    ///
+    /// <b>It logs the path rather than the identifier</b>, which is the same fact said better: the
+    /// path carries the profile and the document or variant it was built from, and it is what
+    /// somebody investigating would paste into the portal.
+    /// </remarks>
+    private async Task<StoredPackFile?> UploadAsync(
+        BlobContainerClient client,
+        string blobPath,
+        string fileName,
+        string contentType,
+        byte[] content,
+        CancellationToken ct)
+    {
+        if (!ApplicationPackFile.TryBlobName(client.Name, blobPath, out var blobName))
+        {
+            // Unreachable through the naming rules above, and checked anyway: the path builders and
+            // TryBlobName are inverses, and this is the assertion that says so at the one point
+            // where both are in scope. A path that cannot be read back is a file that can never be
+            // linked.
+            logger.LogWarning(
+                "Refusing to store {Container}/{BlobPath}: the derived path does not resolve back "
+                + "to a blob name.",
+                client.Name,
                 blobPath);
 
             return null;
@@ -234,9 +541,9 @@ public sealed class ApplicationPackStore(
 
         try
         {
-            using var stream = new MemoryStream(file.Content, writable: false);
+            using var stream = new MemoryStream(content, writable: false);
 
-            await container.Client.GetBlobClient(blobName).UploadAsync(
+            await client.GetBlobClient(blobName).UploadAsync(
                 stream,
                 new BlobUploadOptions
                 {
@@ -250,8 +557,8 @@ public sealed class ApplicationPackStore(
 
             logger.LogInformation(
                 "Stored {Bytes} bytes at {Container}/{BlobName}.",
-                file.Content.Length,
-                container.Client.Name,
+                content.Length,
+                client.Name,
                 blobName);
 
             return new StoredPackFile
@@ -259,18 +566,18 @@ public sealed class ApplicationPackStore(
                 BlobPath = blobPath,
                 FileName = fileName,
                 ContentType = contentType,
-                Sha256 = Convert.ToHexStringLower(SHA256.HashData(file.Content)),
-                Length = file.Content.Length,
+                Sha256 = Convert.ToHexStringLower(SHA256.HashData(content)),
+                Length = content.Length,
             };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogWarning(
                 ex,
-                "Could not store a rendered document at {Container}/{BlobName}. The draft itself "
+                "Could not store a rendered document at {Container}/{BlobName}. The markdown itself "
                 + "is saved and can be re-rendered; on a fresh deployment the usual cause is the "
                 + "container's scoped role assignment still propagating.",
-                container.Client.Name,
+                client.Name,
                 blobName);
 
             return null;
@@ -298,7 +605,12 @@ public sealed class ApplicationPackStore(
     /// </remarks>
     public async Task<Uri?> LinkAsync(string? blobPath, CancellationToken ct = default)
     {
-        if (!ApplicationPackFile.TryBlobName(container.Client.Name, blobPath, out var blobName))
+        // Which container this belongs to is read off the reference rather than passed in. The
+        // pack holds both kinds at once - a chosen variant's path out of CvVariants, a generated
+        // document's out of ApplicationDocuments - and a caller asked to remember which column it
+        // read is one that eventually signs the wrong container: not an error, just a valid URL
+        // for a blob that is not there.
+        if (!container.Resolve(blobPath, out var client, out var blobName))
         {
             return null;
         }
@@ -321,7 +633,7 @@ public sealed class ApplicationPackStore(
 
             var builder = new BlobSasBuilder
             {
-                BlobContainerName = container.Client.Name,
+                BlobContainerName = client.Name,
                 BlobName = blobName,
                 Resource = "b",
                 StartsOn = now - ClockSkew,
@@ -333,7 +645,7 @@ public sealed class ApplicationPackStore(
 
             var signature = builder.ToSasQueryParameters(key, container.Service.AccountName);
 
-            return new UriBuilder(container.Client.GetBlobClient(blobName).Uri)
+            return new UriBuilder(client.GetBlobClient(blobName).Uri)
             {
                 Query = signature.ToString(),
             }.Uri;
@@ -346,7 +658,7 @@ public sealed class ApplicationPackStore(
                 + "file is available. On a fresh deployment the usual cause is the identity's "
                 + "Blob Data Reader assignment - which is what carries the right to request a user "
                 + "delegation key - still propagating.",
-                container.Client.Name,
+                client.Name,
                 blobName);
 
             return null;

@@ -13,7 +13,7 @@ using Microsoft.SemanticKernel;
 namespace JobPlatform.Ai.Applications;
 
 /// <summary>
-/// Writes the tailored CV and cover letter, on the writing deployment.
+/// Writes the cover letter and the posting's own free text, on the writing deployment.
 /// </summary>
 /// <remarks>
 /// The only path in this system that runs on the expensive model, and the only one where that
@@ -22,10 +22,20 @@ namespace JobPlatform.Ai.Applications;
 /// per application rather than once per posting. The price ratio between the deployments runs
 /// the opposite way to the call ratio, which is the whole argument for having two.
 ///
-/// <b>The profile is the only source of biographical fact.</b> The prompt is built so that
+/// <b>It no longer writes the CV, and that is the change this class exists to record.</b> On the
+/// apply loop's first real run the model answered the "anything else we should know" box with the
+/// candidate's citizenship and then <i>"I am an AI and they should have seen this."</i> The
+/// sentence was stored, served through the pack, and was one browser step from an employer's form.
+/// A guard drops that class of sentence now; a guard is a net under a trapeze. The CV is the
+/// document a human reads first and the one a candidate is judged on, so it is now chosen from a
+/// library the candidate authored rather than produced here - which removes the failure instead of
+/// catching it, and takes the largest per-application call off the expensive deployment at the
+/// same time.
+///
+/// <b>The profile is still the only source of biographical fact.</b> The prompt is built so that
 /// every claim the model can make has to come from a field the candidate filled in, and the
-/// match's gap list is passed in explicitly as the set of things it must not claim. A CV that
-/// invents a year of Kubernetes is not a better CV - it is one that falls apart in the
+/// match's gap list is passed in explicitly as the set of things it must not claim. A letter that
+/// invents a year of Kubernetes is not a better letter - it is one that falls apart in the
 /// interview, and it is the candidate rather than this system that pays for it.
 ///
 /// Output is markdown. The renderer walks a parsed tree and emits from a fixed set of node
@@ -41,6 +51,29 @@ public sealed class KernelApplicationWriter(
     /// <summary>Names this pass in the AI call ledger.</summary>
     public const string LedgerOperation = "application-writing";
 
+    /// <summary>
+    /// Names the tie-break in the ledger. Separate, because it is a different bill and a
+    /// different question.
+    /// </summary>
+    /// <remarks>
+    /// Merged into <see cref="LedgerOperation"/> the two would be indistinguishable in the one
+    /// place anybody looks at what this system spends - and they are not comparable: writing is a
+    /// long call on the expensive deployment that happens once per application, and this is a
+    /// short one on the bulk deployment that happens only when two CVs tie. A ledger showing one
+    /// operation with a bimodal duration is a ledger nobody can read a regression out of.
+    /// </remarks>
+    public const string ChoiceLedgerOperation = "cv-variant-choice";
+
+    /// <summary>How many variants a ballot may carry before the prompt stops being a question.</summary>
+    /// <remarks>
+    /// Three, which is the spec's "the top two or three". It is enforced here as well as at the
+    /// call site, because the ballot is built from <c>CvSelection.Tied</c> and that list can be
+    /// the whole library - a posting stating nothing that discriminates ties everything. A caller
+    /// that forgot to bound it would send six names and get back a preference rather than a
+    /// choice; this is the second lock on the same door, in the file that pays for the tokens.
+    /// </remarks>
+    public const int MaxBallot = 3;
+
     private readonly TimeProvider _time = time ?? TimeProvider.System;
     private readonly AzureOpenAiOptions _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
 
@@ -54,11 +87,13 @@ public sealed class KernelApplicationWriter(
 
         Schema:
         {
-          "cv": "<the tailored CV, as markdown>",
           "coverLetter": "<the cover letter, as markdown>",
           "emphasised": ["<what this draft leads with, one short sentence each>"],
           "draftedAnswers": [{ "question": "<the question, copied exactly>", "answer": "<the answer>" }]
         }
+
+        You are NOT writing a CV. The candidate keeps their own, and one of theirs is chosen to
+        go with this letter; do not offer one, and do not restate it in prose.
 
         THE ROLE
         Title: {{$title}}
@@ -83,22 +118,11 @@ public sealed class KernelApplicationWriter(
 
         Candidate's own instructions: {{$instructions}}
 
-        Rules for the CV:
+        Rules that bind everything you write here:
         - Every employer, date, qualification and technology must come from THE CANDIDATE
-          section. Invent nothing. If a section would be empty, omit the section.
+          section. Invent nothing.
         - Nothing in the "does NOT show" list may be claimed, implied, or listed as a skill.
           Tailoring means choosing what to lead with, never adding what is not there.
-        - Reorder and rewrite what is there so the parts this role wants come first. Rewriting
-          a bullet point to foreground the relevant part of real work is the job; adding a
-          bullet point that did not happen is not.
-        - Structure: an H1 with the candidate's name, a contact line, then "## Summary",
-          "## Skills", "## Experience", "## Education", and "## Projects" where each has
-          content. Under Experience use "### Title, Company" and an italic date line, then
-          bullet points.
-        - Bullet points lead with what was done and name the outcome where the profile gives
-          one. Three to five per recent role, fewer for older ones.
-        - Markdown only: headings, bold, italics, bullet lists, links. No tables, no HTML, no
-          images, no horizontal rules.
         - British English.
 
         Rules for the drafted answers:
@@ -107,8 +131,8 @@ public sealed class KernelApplicationWriter(
         - OMIT a question entirely rather than answering it thinly. An empty box is better than a
           paragraph that would fit any employer, which is detectable in one sentence and is read
           as a mailshot.
-        - The "does NOT show" list binds these exactly as it binds the CV. A paragraph is an
-          easier place to overclaim than a bullet point.
+        - A paragraph is an easier place to overclaim than a bullet point, so the "does NOT
+          show" list is repeated here rather than assumed to carry over.
         - Say nothing about the company the advert does not say. An invented fact about an
           employer is read by somebody who works there.
         - Prose, first person, no markdown, no headings, no bullet points. British English.
@@ -120,6 +144,52 @@ public sealed class KernelApplicationWriter(
           honest note where a gap is worth naming, and a close.
         - Prose. No bullet points, no headings beyond the addressee, no reciting of the CV.
         - Never claim enthusiasm for something the advert does not describe.
+        """;
+
+    /// <summary>
+    /// The tie-break. A closed question over documents this call cannot read and will not write.
+    /// </summary>
+    /// <remarks>
+    /// <b>Names and an advert, and deliberately not the CVs themselves.</b> The arithmetic has
+    /// already scored every variant against this posting's requirements over the shared
+    /// vocabulary; what it could not do is read the advert's prose, which is where the difference
+    /// between two documents a point apart actually lives. Handing over the markdown would buy a
+    /// slightly better-informed choice and reopen the exact failure this feature closes, because a
+    /// model holding a CV is a model that can be asked to improve it.
+    ///
+    /// <b>The answer is one of a fixed set, and the prompt says the set out loud.</b> That is what
+    /// makes it checkable: the caller re-checks the id against the ballot it offered, so a
+    /// hallucinated id is refused rather than stored - the rule <c>KernelDocumentExtractor</c>
+    /// follows for concept keys, for the same reason. Null is stated as a legitimate answer rather
+    /// than left to be discovered, because a model with no way to abstain invents a preference.
+    /// </remarks>
+    private const string ChoicePromptTemplate =
+        """
+        Two or more of this candidate's CVs fit the role below equally well by the numbers.
+        Choose which one to send.
+
+        Return ONLY a JSON object.
+
+        Schema:
+        { "variantId": <one of the ids listed below, or null> }
+
+        THE ROLE
+        Title: {{$title}}
+        Company: {{$company}}
+        Advert:
+        {{$advert}}
+
+        THE CVs, by id, with the share of this advert's requirements each one answers:
+        {{$ballot}}
+
+        Rules:
+        - Answer with one of the ids listed above, exactly as it is written, and nothing else.
+        - Choose the one whose name best matches what THIS advert is asking for. The scores are
+          already tied, so they are not the reason to prefer one.
+        - Answer null where the advert gives you nothing to tell them apart. That is a correct
+          answer and no CV is sent; guessing is not, because a CV aimed at the wrong role is a
+          rejection nobody ever hears the reason for.
+        - Do not write, rewrite, summarise or suggest a CV. You are picking from a list.
         """;
 
     /// <summary>
@@ -242,29 +312,40 @@ public sealed class KernelApplicationWriter(
             using var document = JsonDocument.Parse(json);
             var root = document.RootElement;
 
-            var cv = String(root, "cv");
             var letter = String(root, "coverLetter");
 
-            // Half a draft is worse than none: the caller would store it, the candidate would
-            // open it, and the missing half would look like a rendering fault rather than a
-            // model one.
-            if (string.IsNullOrWhiteSpace(cv) || string.IsNullOrWhiteSpace(letter))
+            // "Half a draft is worse than none" used to mean a CV without a letter or a letter
+            // without a CV: the caller stored it, the candidate opened it, and the missing half
+            // read as a rendering fault rather than a model one. There is no second half any
+            // more, and the argument narrows rather than disappearing - it was never about the
+            // arithmetic of two documents but about what an absence looks like to the person who
+            // asked for one.
+            //
+            // The letter is what is left of that, and it is the whole of it. A draft with no
+            // letter is a row that exists, satisfies `documentsReady`, takes the posting out of
+            // the generation pass's queue, and offers an employer nothing - which is worse than
+            // no row at all, because the failure is invisible and the posting will not come back.
+            // The drafted answers are deliberately NOT part of the test: they are boxes a
+            // candidate fills in by hand when they are absent, which is where every application
+            // stood before they existed, and refusing the letter over a missing one would throw
+            // away the expensive half to protect the cheap one.
+            if (string.IsNullOrWhiteSpace(letter))
             {
-                logger?.LogWarning("Application writing returned an incomplete draft.");
-                return (null, "draft was missing a CV or a cover letter", prompt, usage);
+                logger?.LogWarning("Application writing returned no cover letter.");
+                return (null, "draft carried no cover letter", prompt, usage);
             }
 
             return (
                 new ApplicationDraft
                 {
-                    CurriculumVitaeMarkdown = cv,
+                    // No CV, and none is read back either. A model that ignored the schema and
+                    // wrote one anyway must not have it stored: a "cv" key quietly honoured here
+                    // is this whole feature undone by a response nobody diffed.
                     CoverLetterMarkdown = letter,
                     Emphasised = Strings(root, "emphasised"),
 
-                    // Absent, empty or malformed all read as "nothing drafted". A missing CV is
-                    // half a draft and refused above; a missing answer is a box the candidate
-                    // fills in themselves, which is the state every application was in before
-                    // this existed.
+                    // Absent, empty or malformed all read as "nothing drafted" - see above on why
+                    // that is not the same test as the letter's.
                     DraftedAnswers = DraftedAnswers(root),
                     Model = _options.WritingDeployment,
                 },
@@ -276,6 +357,170 @@ public sealed class KernelApplicationWriter(
         {
             logger?.LogWarning(ex, "Application writing returned malformed JSON.");
             return (null, $"malformed JSON: {ex.Message}", prompt, usage);
+        }
+    }
+
+    /// <summary>
+    /// Settles a tie between finished CVs, or declines to.
+    /// </summary>
+    /// <remarks>
+    /// <b>On the bulk deployment, and that is not a saving to be reversed later.</b> Writing needs
+    /// the expensive model because a person reads the sentences it produces; this returns one
+    /// integer from a list of three, having read an advert the bulk deployment already reads for
+    /// every posting in the corpus. Paying Sol prices for a multiple-choice question would be the
+    /// same mistake the two deployments exist to avoid, in the direction nobody notices, because
+    /// it works.
+    ///
+    /// <b>Recorded in the ledger whatever happens to it, like every other call here.</b> An
+    /// abstention is a successful call that returned no choice, so the outcome is
+    /// <c>Succeeded</c> with <c>returned: 0</c> rather than <c>Failed</c> - the distinction that
+    /// matters to somebody reading the ledger is "did the provider answer", and a model correctly
+    /// declining to guess is not a fault. A failure is a timeout, a malformed response, or an id
+    /// off the ballot.
+    ///
+    /// <b>Never throws, for the reason nothing on this interface does.</b> The caller's next step
+    /// is to send no CV and say why, which is a state it already has to handle - the ballot only
+    /// exists because the arithmetic had already declined to choose.
+    /// </remarks>
+    public async Task<long?> ChooseCurriculumVitaeAsync(
+        CvChoiceRequest request, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var ballot = (request.Ballot ?? []).Take(MaxBallot).ToList();
+
+        // Nothing to choose between. Answered without a call rather than with one, because a
+        // ballot of one is a decision the arithmetic already made and a ballot of none is a
+        // caller bug - and both would otherwise be a bill for a question with one answer.
+        if (ballot.Count < 2)
+        {
+            return null;
+        }
+
+        var started = _time.GetTimestamp();
+
+        var arguments = new KernelArguments(AiPrompt.Bulk(_options))
+        {
+            ["title"] = request.Posting.Title,
+            ["company"] = request.Posting.Company ?? "(not stated)",
+            ["advert"] = Truncate(request.Posting.Text, MaxPostingChars),
+            ["ballot"] = string.Join(
+                "\n",
+                ballot.Select(entry =>
+                    $"- id {entry.VariantId.ToString(CultureInfo.InvariantCulture)}: "
+                    + $"\"{entry.Label}\" - answers {entry.Score} of 100")),
+        };
+
+        var (chosen, reason) = await ChooseCoreAsync(ballot, arguments, ct);
+
+        if (callLog is not null)
+        {
+            try
+            {
+                await callLog.RecordAsync(
+                    AiCallRecord.Create(
+                        _time.GetUtcNow(),
+                        ChoiceLedgerOperation,
+                        _options.BulkDeployment,
+                        reason is null ? AiCallOutcome.Succeeded : AiCallOutcome.Failed,
+                        requested: 1,
+                        returned: chosen is null ? 0 : 1,
+                        (long)_time.GetElapsedTime(started).TotalMilliseconds,
+                        reason,
+                        [request.Posting.PostingId],
+
+                        // No prompt. It carries an advert, a handful of the candidate's own CV
+                        // names and nothing else - so unlike the writing prompt there is no whole
+                        // profile in it to guard, and a sink keeping prompts would be storing the
+                        // labels a person chose for their own documents to buy nothing.
+                        prompt: null),
+                    ct);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "Could not record the CV choice call to the AI ledger.");
+            }
+        }
+
+        return chosen;
+    }
+
+    private async Task<(long? Chosen, string? Reason)> ChooseCoreAsync(
+        List<CvVariantScore> ballot, KernelArguments arguments, CancellationToken ct)
+    {
+        string response;
+
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(_options.TimeoutSeconds));
+
+            var result = await kernel.InvokePromptAsync(
+                ChoicePromptTemplate, arguments, cancellationToken: timeout.Token);
+
+            response = result.ToString();
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            logger?.LogWarning("The CV tie-break timed out after {Seconds}s.", _options.TimeoutSeconds);
+            return (null, $"timed out after {_options.TimeoutSeconds}s");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger?.LogWarning(ex, "The CV tie-break failed.");
+            return (null, $"{ex.GetType().Name}: {ex.Message}");
+        }
+
+        var json = AiJson.ExtractJsonObject(response);
+
+        if (json is null)
+        {
+            return (null, "response carried no JSON object");
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+
+            if (!document.RootElement.TryGetProperty("variantId", out var value))
+            {
+                return (null, "response named no variantId");
+            }
+
+            // An explicit null is the abstention the prompt asks for, and it is a success. It is
+            // separated from a missing property deliberately: "I could not tell them apart" and
+            // "I ignored the schema" want different reading in the ledger, and only the second is
+            // a reason to look at the prompt.
+            if (value.ValueKind is JsonValueKind.Null)
+            {
+                return (null, null);
+            }
+
+            // Read as a number or as a quoted number. The assessment pass lost a whole batch to
+            // exactly this - a prompt saying "copied exactly" is an invitation to answer in a
+            // string - and the fix there was to accept both rather than to argue with the model.
+            var chosen = value.ValueKind switch
+            {
+                JsonValueKind.Number when value.TryGetInt64(out var number) => number,
+                JsonValueKind.String when long.TryParse(
+                    value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) => parsed,
+                _ => (long?)null,
+            };
+
+            // Re-checked against the ballot this call offered, on the rule KernelDocumentExtractor
+            // follows for concept keys: an invented id is indistinguishable from a real one the
+            // moment it is written onto a submission, and it would say a document went to an
+            // employer that never did. Refused rather than repaired - there is no nearest variant.
+            if (chosen is not { } variantId || !ballot.Any(entry => entry.VariantId == variantId))
+            {
+                return (null, "answer was not one of the variants offered");
+            }
+
+            return (variantId, null);
+        }
+        catch (JsonException ex)
+        {
+            return (null, $"malformed JSON: {ex.Message}");
         }
     }
 
