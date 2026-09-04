@@ -64,8 +64,8 @@ public sealed class CvVariantEndpointTests
     /// </remarks>
     private static readonly string[] RouteNames =
     [
-        "CreateCvVariant", "GetCvGapBrief", "GetCvVariant", "ListCvVariants", "ReauthorCvVariant",
-        "RenameCvVariant", "SetCvVariantArchived",
+        "CreateCvVariant", "DownloadCvVariant", "GetCvGapBrief", "GetCvVariant", "ListCvVariants",
+        "ReauthorCvVariant", "RenameCvVariant", "SetCvVariantArchived",
     ];
 
     /// <summary>
@@ -688,7 +688,7 @@ public sealed class CvVariantEndpointTests
     }
 
     /// <summary>
-    /// The route surface is exactly these seven, which is how the absent eighth stays absent.
+    /// The route surface is exactly these eight, which is how the absent ninth stays absent.
     /// </summary>
     /// <remarks>
     /// <b>An equality rather than a superset, and the property is what is missing.</b> There is no
@@ -702,7 +702,7 @@ public sealed class CvVariantEndpointTests
     /// this resource would make an application made last year unexplainable in order to tidy a row.
     /// </remarks>
     [Fact]
-    public void The_route_surface_is_exactly_these_seven_and_none_of_them_writes_a_CV()
+    public void The_route_surface_is_exactly_these_eight_and_none_of_them_writes_a_CV()
     {
         var routes = VariantRoutes();
 
@@ -809,6 +809,62 @@ public sealed class CvVariantEndpointTests
 
         return await response.Content.ReadFromJsonAsync<JsonElement>();
     }
+
+    /// <summary>
+    /// The download serves a real PDF, under the one filename every application uses.
+    /// </summary>
+    /// <remarks>
+    /// <b>The route existed nowhere until a review looked for it, and the page had been calling it
+    /// all along.</b> That is the third time in this codebase a dashboard has been built against a
+    /// route nobody mapped - the question queue, the gap brief, and this - so the name equality
+    /// above is not enough on its own: it proves something is mapped, not that it answers. This
+    /// asks for the bytes.
+    ///
+    /// <b>And it asserts the filename, which is the rule the whole of section six exists for.</b>
+    /// Somebody checking their own CV should see exactly what the employer sees, named the way the
+    /// employer sees it - never after the variant, which would say that a different CV is kept for
+    /// other roles.
+    /// </remarks>
+    [Fact]
+    public async Task The_download_serves_the_rendered_cv_under_the_stable_filename()
+    {
+        using var harness = await CvLibraryHarness.CreateAsync();
+
+        var created = await CreateAsync(
+            harness, "Platform engineering", "# Ada Lovelace\n\n## Summary\n\nEngineer.");
+
+        var id = created.GetProperty("variantId").GetInt64();
+
+        var response = await harness.As(CvLibraryHarness.Ada).GetAsync($"/api/v1/cv-variants/{id}/cv.pdf");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/pdf", response.Content.Headers.ContentType?.MediaType);
+
+        var name = response.Content.Headers.ContentDisposition?.FileNameStar
+            ?? response.Content.Headers.ContentDisposition?.FileName?.Trim('"');
+
+        Assert.EndsWith("Curriculum_Vitae.pdf", name, StringComparison.Ordinal);
+        Assert.DoesNotContain("Platform", name, StringComparison.OrdinalIgnoreCase);
+
+        var bytes = await response.Content.ReadAsByteArrayAsync();
+
+        Assert.Equal("%PDF"u8.ToArray(), bytes.Take(4).ToArray());
+    }
+
+    /// <summary>An extension this system does not render is a route that does not exist.</summary>
+    [Fact]
+    public async Task A_format_nobody_renders_is_not_found()
+    {
+        using var harness = await CvLibraryHarness.CreateAsync();
+
+        var created = await CreateAsync(harness, "Platform", "# Ada\n\nEngineer.");
+
+        var response = await harness.As(CvLibraryHarness.Ada)
+            .GetAsync($"/api/v1/cv-variants/{created.GetProperty("variantId").GetInt64()}/cv.txt");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
 
     private static async Task<string?> DetailOf(HttpResponseMessage response)
         => (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("detail").GetString();

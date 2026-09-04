@@ -825,7 +825,21 @@ public sealed class SubmissionTools(
         {
             var variant = await variants.GetAsync(profileId, winner.VariantId, ct);
 
-            if (variant is not null)
+            // Sendability re-asserted on the row rather than assumed from the read that produced
+            // the winner, and the two reads are why.
+            //
+            // The scoring read filters on the SQL shadow of IsSendable; this one deliberately does
+            // NOT, because a submission names the variant it sent and an application made last
+            // year has to stay explicable however the library has moved since. So between the two
+            // round trips a candidate can archive the CV that just won, or re-author it - and the
+            // second read hands it back regardless, signed and ready to upload. Retiring a CV
+            // would then not retire it, which is the one thing this feature promises somebody
+            // about their own documents.
+            //
+            // IsSendable is the whole test rather than IsArchived alone, so a variant re-authored
+            // in the gap is caught too: its render is then older than its words, and the file the
+            // employer would receive is a PDF of text the candidate has already replaced.
+            if (variant is { IsSendable: true })
             {
                 return new CvDecision(
                     selection, variant, "arithmetic", [], Parked: false, winner.Score,
@@ -837,8 +851,10 @@ public sealed class SubmissionTools(
 
             return new CvDecision(
                 selection, null, null, [], Parked: false, null,
-                "A CV was chosen and could not be read back - it was archived between the two "
-                + "reads. Nothing is offered rather than the next best; fetch the pack again.");
+                "A CV was chosen and is no longer the document it was when it won - it was "
+                + "archived or rewritten between the two reads. Nothing is offered rather than the "
+                + "next best, because the next best was not chosen for this posting; fetch the "
+                + "pack again.");
         }
 
         if (selection.Outcome is CvSelectionOutcome.Ambiguous)

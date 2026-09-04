@@ -4,6 +4,7 @@ using JobPlatform.Api.Endpoints;
 using JobPlatform.Api.Infrastructure;
 using JobPlatform.Core.Applications;
 using JobPlatform.Core.Enrichment;
+using JobPlatform.Documents;
 using JobPlatform.Data.Applications;
 using JobPlatform.Data.Sql;
 using Microsoft.AspNetCore.Mvc;
@@ -89,6 +90,13 @@ public sealed class CvVariantEndpoints : IEndpointGroup
             .WithName("GetCvVariant")
             .WithSummary("One CV, with the markdown the candidate wrote.");
 
+        // Not in the OpenAPI description, like the application downloads: a browser follows this
+        // and no client generates against it.
+        group.MapGet("/{id:long}/cv.{format}", DownloadAsync)
+            .WithName("DownloadCvVariant")
+            .WithSummary("The rendered CV, exactly as an employer would receive it.")
+            .ExcludeFromDescription();
+
         group.MapPost("/", CreateAsync)
             .WithName("CreateCvVariant")
             .WithSummary("Stores a new CV in the candidate's own words, then renders and reads it.");
@@ -167,6 +175,77 @@ public sealed class CvVariantEndpoints : IEndpointGroup
         var blocked = await matches.ListCvBlockedPostingsAsync(profileId.Value, ct);
 
         return TypedResults.Ok(CvGapBrief.Compute(blocked, ConceptGraph.Default).ToResponse());
+    }
+
+    /// <summary>
+    /// The rendered CV, as the file an employer would be sent.
+    /// </summary>
+    /// <remarks>
+    /// <b>Laid out again here rather than read back from storage, and the two are the same
+    /// bytes.</b> The renderers are deterministic - identical markdown produces an identical file
+    /// on a laptop and in the container, which is a property the renderer's own tests pin - and a
+    /// variant is only offered for download once it has been rendered, which means its stored file
+    /// was laid out from exactly these words. So this route needs no blob read, no signature and no
+    /// second failure mode, and still answers the question the page is asking: what does the
+    /// employer get.
+    ///
+    /// <b>The filename is the stable one, for the reason it is stable everywhere else.</b> Somebody
+    /// checking their own CV downloads the file an employer would receive, named the way the
+    /// employer would see it - and never named after the variant, which would tell them nothing and
+    /// would be the one spelling of it that must not exist.
+    ///
+    /// An unknown format is a 404 rather than a 400: the extension is part of the path, so a
+    /// request for cv.txt is a route that does not exist rather than an argument that is wrong.
+    /// </remarks>
+    private static async Task<IResult> DownloadAsync(
+        ClaimsPrincipal user,
+        long id,
+        string format,
+        [FromServices] CandidateProfileRepository profiles,
+        [FromServices] JobsDbContext db,
+        CancellationToken ct)
+    {
+        if (!user.TryGetSubjectId(out var subjectId, out var error))
+        {
+            return error;
+        }
+
+        var docx = string.Equals(format, "docx", StringComparison.OrdinalIgnoreCase);
+
+        if (!docx && !string.Equals(format, "pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            return TypedResults.NotFound();
+        }
+
+        var view = await profiles.GetAsync(subjectId, ct);
+
+        if (view is null)
+        {
+            return TypedResults.NotFound();
+        }
+
+        // Ignores IsArchived, like the read behind it and for the same reason: a retired CV is
+        // still the document some application was sent, and the candidate may need to look at it.
+        var variant = await Library(db).GetAsync(view.Id, id, ct);
+
+        if (variant is null || !variant.IsRendered)
+        {
+            return TypedResults.NotFound();
+        }
+
+        var name = view.Profile.FullName;
+
+        var title = string.IsNullOrWhiteSpace(name)
+            ? "Curriculum Vitae"
+            : $"{name.Trim()} - Curriculum Vitae";
+
+        return TypedResults.File(
+            docx
+                ? MarkdownDocxRenderer.Render(variant.Markdown, title)
+                : MarkdownPdfRenderer.Render(variant.Markdown, title),
+            contentType: ApplicationPackFile.ContentType(docx ? PackFormat.Docx : PackFormat.Pdf),
+            fileDownloadName: ApplicationPackFile.FileName(
+                name, PackDocument.CurriculumVitae, docx ? PackFormat.Docx : PackFormat.Pdf));
     }
 
     private static async Task<IResult> ListAsync(
