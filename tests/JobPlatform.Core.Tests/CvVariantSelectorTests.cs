@@ -1,4 +1,4 @@
-using JobPlatform.Core.Applications;
+﻿using JobPlatform.Core.Applications;
 using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Matching;
 using Xunit;
@@ -414,4 +414,40 @@ public sealed class CvVariantSelectorTests
         Assert.Empty(selection.Missing);
         Assert.Contains("no requirements at all", selection.Rationale, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// Three specialised CVs covering a broad advert between them still name a gap.
+    /// </summary>
+    /// <remarks>
+    /// <b>The worst outcome this feature has, and it is silent.</b> Missing is filled from ANY
+    /// variant that entails a demand, so a candidate holding Kubernetes in one CV, Terraform in
+    /// another and .NET in a third can have every demand of a broad posting answered somewhere
+    /// while no single CV scores above a third of it. The set difference is then empty - and a
+    /// NoFit carrying no gaps parks the posting into a state nothing can release, because the
+    /// queue reads an empty gap set as nothing having been covered yet. The candidate writes six
+    /// more CVs and that posting never comes back.
+    ///
+    /// What is missing here is a combination rather than a concept, and naming the whole demand
+    /// set is what makes it sayable: "these postings want all of this in one CV".
+    /// </remarks>
+    [Fact]
+    public void A_posting_covered_across_several_cvs_and_by_none_of_them_still_names_its_gap()
+    {
+        // Six unrelated demands, split three ways: every one is entailed by some CV, and no CV
+        // entails more than two, so each scores 33 against a floor of 50.
+        var selection = CvVariantSelector.Select(
+            [.. Unrelated.Take(6).Select(key => Wants(key))],
+            [
+                Variant(1, "Platform", Unrelated[0], Unrelated[1]),
+                Variant(2, "Backend", Unrelated[2], Unrelated[3]),
+                Variant(3, "Cloud", Unrelated[4], Unrelated[5]),
+            ],
+            ConceptGraph.Default);
+
+        Assert.Equal(CvSelectionOutcome.NoFit, selection.Outcome);
+
+        // Not empty, which is the whole point: an empty gap set is a posting parked for ever.
+        Assert.NotEmpty(selection.Missing);
+    }
+
 }

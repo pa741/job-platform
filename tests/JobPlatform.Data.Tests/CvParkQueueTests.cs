@@ -285,7 +285,7 @@ public sealed class CvParkQueueTests : IDisposable
     [Fact]
     public async Task A_park_that_recorded_no_gaps_is_held_rather_than_released()
     {
-        await ParkForCvAsync(postingId: 1);
+        await ParkWithNoGapsAsync(postingId: 1);
 
         await WriteVariantAsync("Backend .NET", [DotNet]);
 
@@ -650,7 +650,7 @@ public sealed class CvParkQueueTests : IDisposable
     public async Task A_posting_whose_park_recorded_nothing_still_counts_as_blocked()
     {
         await ParkForCvAsync(postingId: 1, Kubernetes);
-        await ParkForCvAsync(postingId: 2);
+        await ParkWithNoGapsAsync(postingId: 2);
 
         var blocked = await BlockedAsync();
 
@@ -726,6 +726,35 @@ public sealed class CvParkQueueTests : IDisposable
     /// </remarks>
     private Task ParkForCvAsync(long postingId, params string[] concepts)
         => ParkForCvAsync(postingId, Now, concepts);
+
+    /// <summary>
+    /// A park with no gap rows, written round the repository because the repository refuses it.
+    /// </summary>
+    /// <remarks>
+    /// <b>The state is unreachable through <c>ParkAsync</c> and still worth pinning.</b> Parking
+    /// for want of a CV without naming what was missing holds the posting for ever, so the
+    /// repository throws rather than storing it - but a row can arrive in that state anyway: a
+    /// migration, a half-written batch, a bug in whatever computes the gaps. What the queue does
+    /// when it meets one is a property of the queue, and it is asserted here by constructing the
+    /// row directly, the same way the idempotency guarantees are asserted by writing round the
+    /// repository that upholds them.
+    /// </remarks>
+    private async Task ParkWithNoGapsAsync(long postingId, DateTimeOffset? at = null)
+    {
+        await using var db = CreateContext();
+
+        db.Submissions.Add(new SubmissionEntity
+        {
+            ProfileId = ProfileId,
+            PostingId = postingId,
+            Channel = SubmissionChannel.Unknown,
+            CreatedAtUtc = at ?? Now,
+            ParkedReason = ParkReason.NoCvVariant,
+            ParkedAtUtc = at ?? Now,
+        });
+
+        await db.SaveChangesAsync();
+    }
 
     private async Task ParkForCvAsync(long postingId, DateTimeOffset at, params string[] concepts)
     {
@@ -902,5 +931,46 @@ public sealed class CvParkQueueTests : IDisposable
 
         Assert.Equal(sent, (await read.Submissions.SingleAsync(x => x.PostingId == 1)).CvVariantId);
     }
+
+    /// <summary>
+    /// Parking for want of a CV without saying what was missing is refused, not stored.
+    /// </summary>
+    /// <remarks>
+    /// The queue holds a park with no standing gaps deliberately, so that a park whose rows failed
+    /// to be written is not released by the mere existence of any CV. The cost of that decision is
+    /// that an empty set is permanent - the posting leaves the queue and no document written
+    /// afterwards brings it back, and nothing reports it. It is one missing argument away at every
+    /// call site, so it is refused where every call site passes through.
+    /// </remarks>
+    [Fact]
+    public async Task A_park_for_want_of_a_cv_must_say_what_was_missing()
+    {
+        await using var db = CreateContext();
+
+        var repository = new SubmissionRepository(db);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => repository.ParkAsync(
+            ProfileId, 1, ParkReason.NoCvVariant, Now, missingConceptKeys: []));
+
+        await Assert.ThrowsAsync<ArgumentException>(() => repository.ParkAsync(
+            ProfileId, 1, ParkReason.NoCvVariant, Now));
+
+        // And nothing was written, so the refusal is not a half-park somebody has to unpick.
+        Assert.Empty(await db.Submissions.ToListAsync());
+    }
+
+    /// <summary>Every other reason still parks without one, because none of them waits on a CV.</summary>
+    [Fact]
+    public async Task A_park_for_any_other_reason_needs_no_concepts()
+    {
+        await using var db = CreateContext();
+
+        var (row, created) = await new SubmissionRepository(db).ParkAsync(
+            ProfileId, 1, ParkReason.Captcha, Now);
+
+        Assert.True(created);
+        Assert.Equal(ParkReason.Captcha, row.ParkedReason);
+    }
+
 
 }

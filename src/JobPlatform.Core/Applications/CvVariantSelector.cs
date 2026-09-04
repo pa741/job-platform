@@ -1,4 +1,4 @@
-using JobPlatform.Core.Enrichment;
+﻿using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Matching;
 
 namespace JobPlatform.Core.Applications;
@@ -453,13 +453,39 @@ public static class CvVariantSelector
 
         if (leader.Score < SelectionFloor)
         {
+            // What is missing is sometimes a combination rather than a concept, and saying so is
+            // the difference between a brief and a posting nobody ever sees again.
+            //
+            // <b>Missing can be empty here while nothing clears the floor.</b> It is filled from
+            // ANY variant that entails a demand, so a candidate with three specialised CVs -
+            // Kubernetes in one, Terraform in another, .NET in a third - can have every demand of
+            // a broad posting answered somewhere and no single CV scoring above a third of it. The
+            // set difference is then empty and the honest reading is not "nothing is missing": it
+            // is that no ONE document holds what this advert asks for, which is the only kind of
+            // document an application can send.
+            //
+            // Parking on an empty set is the worst outcome this feature has. The queue holds a
+            // park with no standing gaps - deliberately, so a park whose rows failed to be written
+            // is not released by the mere existence of a CV - so such a posting is parked and never
+            // returns, whatever the candidate writes afterwards, and nothing reports it. Naming the
+            // whole demand set instead gives the brief something true to say ("these postings want
+            // all of this in one CV"), gives the queue something to release against, and costs at
+            // most a re-park if the next CV covers part of it.
+            var gap = missing.Count > 0
+                ? missing
+                : judged
+                    .Select(demand => new ConceptGap(demand.ConceptKey, demand.Polarity, demand.YearsMin))
+                    .OrderByDescending(entry => entry.Demand)
+                    .ThenBy(entry => entry.RequiredKey, StringComparer.Ordinal)
+                    .ToList();
+
             return new CvSelection
             {
                 Outcome = CvSelectionOutcome.NoFit,
                 RunnerUp = runnerUp,
                 Scores = scores,
-                Missing = missing,
-                Rationale = NoFitRationale(leader, scores.Count, missing, graph),
+                Missing = gap,
+                Rationale = NoFitRationale(leader, scores.Count, gap, graph),
             };
         }
 

@@ -604,6 +604,26 @@ public sealed class SubmissionRepository(JobsDbContext db)
         // the argument that it never wrote to SQL, and under that a read-then-mutate saves
         // nothing and throws nothing. The default has been corrected, and stating it here
         // means this write no longer depends on which host it runs in.
+        // A park that waits on coverage must name what it is waiting for, and this refuses
+        // rather than trusts.
+        //
+        // The queue holds a park with no standing gaps - deliberately, so that a park whose rows
+        // failed to be written is not released by the mere existence of any CV. The cost of that
+        // decision is that an empty set here is permanent: the posting leaves the queue and no
+        // document the candidate ever writes brings it back, and nothing anywhere reports it. It
+        // is the worst outcome this feature has, it is silent, and it is one missing argument
+        // away at every call site - so it is refused at the only place every call site passes
+        // through, rather than documented at each of them.
+        if (ParkReasonPolicy.AwaitingCvVariant.Contains(reason)
+            && (missingConceptKeys is null || missingConceptKeys.Count == 0))
+        {
+            throw new ArgumentException(
+                $"Parking for '{reason}' needs the concepts that were missing. Without them the "
+                + "posting is held for ever: the queue reads an empty gap set as nothing having "
+                + "been covered yet, and no CV written afterwards can release it.",
+                nameof(missingConceptKeys));
+        }
+
         var entity = await db.Submissions
             .AsTracking()
             .FirstOrDefaultAsync(s => s.ProfileId == profileId && s.PostingId == postingId, ct);
