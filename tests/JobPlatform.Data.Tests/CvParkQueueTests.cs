@@ -742,7 +742,7 @@ public sealed class CvParkQueueTests : IDisposable
     /// signature <c>ApplyableQuery</c> exists to avoid, and "archived" and "unrendered" mean
     /// opposite things to a reader while meaning the same thing to the release clause.
     /// </remarks>
-    private async Task WriteVariantAsync(
+    private async Task<long> WriteVariantAsync(
         string label,
         string[] concepts,
         long profileId = ProfileId,
@@ -770,6 +770,8 @@ public sealed class CvParkQueueTests : IDisposable
         }
 
         await db.SaveChangesAsync();
+
+        return variant.Id;
     }
 
     private static Task<int> ConceptIdAsync(JobsDbContext db, string key)
@@ -824,4 +826,81 @@ public sealed class CvParkQueueTests : IDisposable
 
         return variant;
     }
+
+    /// <summary>
+    /// The application that used a chosen CV records which one, even though a park made the row.
+    /// </summary>
+    /// <remarks>
+    /// <b>The sequence the whole feature exists for, and the one that recorded nothing.</b> A
+    /// posting nothing fits is parked <c>NoCvVariant</c>, and parking CREATES the submission row.
+    /// The candidate writes the covering CV, the posting returns, the pack chooses it and the loop
+    /// applies - and <c>create_submission</c> then takes its existing-row path, where the variant
+    /// id was only ever written on the insert. So the applications the library was built to make
+    /// possible were exactly the ones recording no CV, which is the correlation C4 was specified
+    /// to provide and would have been silently empty.
+    /// </remarks>
+    [Fact]
+    public async Task An_application_after_a_park_records_the_variant_that_was_chosen()
+    {
+        var variantId = await WriteVariantAsync("Platform engineering", [Kubernetes, Terraform]);
+
+        await using var db = CreateContext();
+
+        var repository = new SubmissionRepository(db);
+
+        var (parked, _) = await repository.ParkAsync(
+            ProfileId, 1, ParkReason.NoCvVariant, Now,
+            missingConceptKeys: [Kubernetes, Terraform]);
+
+        Assert.Null((await db.Submissions.SingleAsync(x => x.Id == parked.Id)).CvVariantId);
+
+        var result = await repository.CreateWithEventAsync(
+            ProfileId, 1, SubmissionChannel.Ats, "https://ats.example.invalid/1",
+            new SubmissionEvent(Now.AddDays(1), SubmissionEventType.Submitted, null, SubmissionEventSource.Client, null),
+            "run-2:1:Submitted",
+            Now.AddDays(1),
+            cvVariantId: variantId);
+
+        Assert.Equal(SubmissionEventResult.Recorded, result.Event);
+
+        await using var read = CreateContext();
+
+        var stored = await read.Submissions.SingleAsync(x => x.PostingId == 1);
+
+        Assert.Equal(variantId, stored.CvVariantId);
+        Assert.Equal(CvSelection.CurrentVersion, stored.CvSelectionVersion);
+    }
+
+    /// <summary>A CV already recorded is never overwritten by a later claim naming another.</summary>
+    /// <remarks>
+    /// The other half of the rule, and the reason the fill is a fill rather than an assignment: a
+    /// second call naming a different variant is a client that re-fetched the pack after the
+    /// library moved, and the document the employer actually received is the one the first call
+    /// named.
+    /// </remarks>
+    [Fact]
+    public async Task A_second_claim_naming_another_variant_does_not_move_what_was_sent()
+    {
+        var sent = await WriteVariantAsync("Platform engineering", [Kubernetes, Terraform]);
+        var other = await WriteVariantAsync("Backend .NET", [DotNet]);
+
+        await using var db = CreateContext();
+
+        var repository = new SubmissionRepository(db);
+
+        await repository.CreateWithEventAsync(
+            ProfileId, 1, SubmissionChannel.Ats, null,
+            new SubmissionEvent(Now, SubmissionEventType.Submitted, null, SubmissionEventSource.Client, null),
+            "k1", Now, cvVariantId: sent);
+
+        await repository.CreateWithEventAsync(
+            ProfileId, 1, SubmissionChannel.Ats, null,
+            new SubmissionEvent(Now.AddDays(1), SubmissionEventType.Acknowledged, null, SubmissionEventSource.Client, null),
+            "k2", Now.AddDays(1), cvVariantId: other);
+
+        await using var read = CreateContext();
+
+        Assert.Equal(sent, (await read.Submissions.SingleAsync(x => x.PostingId == 1)).CvVariantId);
+    }
+
 }

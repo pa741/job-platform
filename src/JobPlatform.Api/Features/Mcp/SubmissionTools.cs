@@ -650,6 +650,12 @@ public sealed class SubmissionTools(
         return new
         {
             blockedPostings = brief.BlockedPostings,
+
+            // Carried as a field and not only inside the note, because it is what tells two empty
+            // rankings apart: zero says nothing blocking anything was nameable, which is a fault in
+            // the vocabulary or the selection, and more than zero says the requirements were
+            // nameable but too scattered for one CV to release more than one posting.
+            nameablePostings = brief.NameablePostings,
             gaps = brief.Gaps.Select(gap => new
             {
                 postings = gap.Postings,
@@ -692,13 +698,26 @@ public sealed class SubmissionTools(
             return "No applyable posting is waiting on a CV that has not been written.";
         }
 
-        if (brief.Gaps.Count == 0)
+        // Two empty rankings, and they are opposite messages. Nothing nameable is a fault in the
+        // vocabulary or the selection and there is genuinely nothing to write; nameable but
+        // scattered is ordinary, and telling somebody it was a fault would have hidden a CV they
+        // could have written from them.
+        if (brief.Gaps.Count == 0 && brief.NameablePostings == 0)
         {
             return $"{brief.BlockedPostings} applyable posting(s) are parked for want of a CV, and "
                 + "none of them names a concept a CV could be written about - the requirements "
                 + "blocking them are generic tags, or keys this system's vocabulary does not "
                 + "carry. That is a selection or vocabulary fault rather than a CV anybody can "
                 + "write, and it is worth reporting exactly as it stands.";
+        }
+
+        if (brief.Gaps.Count == 0)
+        {
+            return $"{brief.BlockedPostings} applyable posting(s) are parked for want of a CV, and "
+                + $"{brief.NameablePostings} of them name something a CV could cover - but no one "
+                + $"requirement is shared by {CvGapBrief.MinimumPostings} of them, so there is no "
+                + "single CV that would unblock more than one. Each wants its own, which is a "
+                + "judgement for the candidate rather than a backlog to work through.";
         }
 
         var top = brief.Gaps[0];

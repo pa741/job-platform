@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -64,8 +64,8 @@ public sealed class CvVariantEndpointTests
     /// </remarks>
     private static readonly string[] RouteNames =
     [
-        "CreateCvVariant", "GetCvVariant", "ListCvVariants", "ReauthorCvVariant", "RenameCvVariant",
-        "SetCvVariantArchived",
+        "CreateCvVariant", "GetCvGapBrief", "GetCvVariant", "ListCvVariants", "ReauthorCvVariant",
+        "RenameCvVariant", "SetCvVariantArchived",
     ];
 
     /// <summary>
@@ -688,7 +688,7 @@ public sealed class CvVariantEndpointTests
     }
 
     /// <summary>
-    /// The route surface is exactly these six, which is how the absent seventh stays absent.
+    /// The route surface is exactly these seven, which is how the absent eighth stays absent.
     /// </summary>
     /// <remarks>
     /// <b>An equality rather than a superset, and the property is what is missing.</b> There is no
@@ -702,7 +702,7 @@ public sealed class CvVariantEndpointTests
     /// this resource would make an application made last year unexplainable in order to tidy a row.
     /// </remarks>
     [Fact]
-    public void The_route_surface_is_exactly_these_six_and_none_of_them_writes_a_CV()
+    public void The_route_surface_is_exactly_these_seven_and_none_of_them_writes_a_CV()
     {
         var routes = VariantRoutes();
 

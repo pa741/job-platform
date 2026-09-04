@@ -1,8 +1,9 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using JobPlatform.Ai.Extraction;
 using JobPlatform.Api.Endpoints;
 using JobPlatform.Api.Infrastructure;
 using JobPlatform.Core.Applications;
+using JobPlatform.Core.Enrichment;
 using JobPlatform.Data.Applications;
 using JobPlatform.Data.Sql;
 using Microsoft.AspNetCore.Mvc;
@@ -77,6 +78,13 @@ public sealed class CvVariantEndpoints : IEndpointGroup
             .WithName("ListCvVariants")
             .WithSummary("The calling principal's CV library, with how much of it predates their last profile change.");
 
+        // Before the "/{id:long}" route, so "gaps" is matched as a literal rather than failing to
+        // parse as an id. ASP.NET Core's routing would prefer the literal anyway; the ordering says
+        // so out loud because the two are one line apart and a reader should not have to know that.
+        group.MapGet("/gaps", GapsAsync)
+            .WithName("GetCvGapBrief")
+            .WithSummary("The CVs worth writing next, ranked by how many blocked applications each would release.");
+
         group.MapGet("/{id:long}", GetAsync)
             .WithName("GetCvVariant")
             .WithSummary("One CV, with the markdown the candidate wrote.");
@@ -120,6 +128,47 @@ public sealed class CvVariantEndpoints : IEndpointGroup
     /// and question lists: somebody who has not filled the form in has no CVs, which is a complete
     /// and unsurprising answer and not the "something is wrong" path.
     /// </remarks>
+    /// <summary>
+    /// What to write next, argued from the applications waiting on it.
+    /// </summary>
+    /// <remarks>
+    /// <b>The same brief <c>list_cv_gaps</c> serves, from the same two calls, because it is one
+    /// answer with two audiences.</b> An unattended run reports how much of its queue it could not
+    /// reach; the person who can do something about it reads the ranking. Computing it twice would
+    /// let the number the agent reports and the number on the page disagree, and the whole value of
+    /// the ranking is that somebody trusts it enough to spend a Saturday on the top row.
+    ///
+    /// <b>No profile is not an error here.</b> Somebody who has not filled the form in has nothing
+    /// parked, so the honest answer is an empty brief rather than a 404 - the same shape
+    /// <see cref="ListAsync"/> takes, and for the same reason: this page is reachable before the
+    /// profile behind it exists.
+    /// </remarks>
+    private static async Task<IResult> GapsAsync(
+        ClaimsPrincipal user,
+        [FromServices] CandidateProfileRepository profiles,
+        [FromServices] JobMatchRepository matches,
+        CancellationToken ct)
+    {
+        if (!user.TryGetSubjectId(out var subjectId, out var error))
+        {
+            return error;
+        }
+
+        var profileId = await profiles.GetIdAsync(subjectId, ct);
+
+        if (profileId is null)
+        {
+            return TypedResults.Ok(CvVariantMapping.EmptyGapBrief());
+        }
+
+        // The concepts are already differenced - the park recorded what it was missing - so nothing
+        // here re-asks what "covered" means. Coverage is a walk over the graph and a set
+        // subtraction taken a second time would be free to disagree with the one that parked it.
+        var blocked = await matches.ListCvBlockedPostingsAsync(profileId.Value, ct);
+
+        return TypedResults.Ok(CvGapBrief.Compute(blocked, ConceptGraph.Default).ToResponse());
+    }
+
     private static async Task<IResult> ListAsync(
         ClaimsPrincipal user,
         [FromServices] CandidateProfileRepository profiles,

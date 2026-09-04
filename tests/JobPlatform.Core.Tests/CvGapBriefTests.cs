@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using JobPlatform.Core.Applications;
 using JobPlatform.Core.Enrichment;
 using Xunit;
@@ -295,7 +295,7 @@ public sealed class CvGapBriefTests
         // An equality rather than a superset, for the reason the MCP tool-surface test is one:
         // adding a posting id to any of these three would be the first step back to the
         // fifty-notice queue, and it should be a red build rather than a quiet diff.
-        Assert.Equal(["BlockedPostings", "Gaps"], PropertyNames(typeof(CvGapBrief)));
+        Assert.Equal(["BlockedPostings", "Gaps", "NameablePostings"], PropertyNames(typeof(CvGapBrief)));
         Assert.Equal(["Concepts", "Postings"], PropertyNames(typeof(CvGap)));
         Assert.Equal(["Key", "Label", "Postings"], PropertyNames(typeof(CvGapConcept)));
 

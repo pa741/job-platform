@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using JobPlatform.Core.Submissions;
 using JobPlatform.Data.Sql;
 using Microsoft.EntityFrameworkCore;
@@ -337,7 +337,7 @@ public sealed class CvSelectionToolTests
             await harness.Tools().ListCvGapsAsync(McpToolHarness.AsCandidate()));
 
         Assert.Equal(
-            ["blockedPostings", "gaps", "maxGaps", "minimumPostingsPerGap", "note"],
+            ["blockedPostings", "gaps", "maxGaps", "minimumPostingsPerGap", "nameablePostings", "note"],
             McpToolHarness.Keys(brief));
 
         Assert.Equal(2, brief.GetProperty("blockedPostings").GetInt32());

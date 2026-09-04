@@ -902,7 +902,13 @@ function GapBrief({ state, error, brief, hasRoom, onRetry, onWrite }: {
         </div>
       )}
 
-      {brief && brief.blockedPostings > 0 && brief.gaps.length === 0 && (
+      {/*
+        Two empty rankings, and they say opposite things. Nothing nameable is a fault nobody can
+        write their way out of; nameable but scattered is ordinary, and reporting it as a fault
+        would hide from somebody a CV they could have written this afternoon.
+      */}
+      {brief && brief.blockedPostings > 0 && brief.gaps.length === 0
+        && brief.nameablePostings === 0 && (
         <div className="card">
           <h4 className="mini">Worth reporting exactly as it stands</h4>
           <p className="note" style={{ marginTop: 0 }}>
@@ -912,6 +918,20 @@ function GapBrief({ state, error, brief, hasRoom, onRetry, onWrite }: {
             tags, or keys this system&rsquo;s vocabulary does not carry. That is a fault in the
             selection or in the vocabulary rather than a document you can write, so there is
             nothing here for you to do about it.
+          </p>
+        </div>
+      )}
+
+      {brief && brief.blockedPostings > 0 && brief.gaps.length === 0
+        && brief.nameablePostings > 0 && (
+        <div className="card">
+          <h4 className="mini">Nothing shared enough to be worth a CV yet</h4>
+          <p className="note" style={{ marginTop: 0 }}>
+            <b>{brief.blockedPostings}</b> applyable posting
+            {brief.blockedPostings === 1 ? ' is' : 's are'} parked for want of a CV, and{' '}
+            <b>{brief.nameablePostings}</b> of them name something a CV could cover - but no one
+            requirement is shared by enough of them for a single CV to unblock more than one. Each
+            would want its own, which is your call rather than a backlog to work through.
           </p>
         </div>
       )}

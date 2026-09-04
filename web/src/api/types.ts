@@ -1207,12 +1207,20 @@ export interface CvGapBriefResponse {
    * Every applyable posting currently blocked for want of a CV, counted once each.
    *
    * Deliberately larger than the gaps add up to: the remainder is gaps under the floor, gaps
-   * past the third, and postings whose requirements the vocabulary cannot name. **Blocked
-   * postings with no gaps is worth reporting as it stands** - it means postings are being
-   * parked over requirements that are all generic tags or all unknown keys, which is a fault
-   * in this system rather than a document anybody can write.
+   * past the third, and postings whose requirements the vocabulary cannot name.
    */
   blockedPostings: number;
+
+  /**
+   * How many of those postings named something a CV could actually be written about.
+   *
+   * **This is what tells two empty gap lists apart, and they mean opposite things.** Zero says
+   * the blocked postings are held up by generic tags or keys the vocabulary does not carry -
+   * a fault in this system rather than a document anybody can write. Greater than zero says
+   * the requirements were nameable but too scattered for one CV to unblock more than one
+   * posting, which is ordinary and is the candidate's judgement to make.
+   */
+  nameablePostings: number;
 
   /** The CVs to write, best first. */
   gaps: CvGap[];

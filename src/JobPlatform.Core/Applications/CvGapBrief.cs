@@ -1,4 +1,4 @@
-using JobPlatform.Core.Enrichment;
+﻿using JobPlatform.Core.Enrichment;
 
 namespace JobPlatform.Core.Applications;
 
@@ -127,8 +127,24 @@ public sealed record CvGap(IReadOnlyList<CvGapConcept> Concepts, int Postings);
 /// all unknown keys, which is a selection or vocabulary fault rather than a document anybody can
 /// write.
 /// </param>
+/// <param name="NameablePostings">
+/// How many of those postings named at least one concept a CV could be written about.
+/// </param>
+/// <remarks>
+/// <b><see cref="NameablePostings"/> exists to tell two empty briefs apart, and they want opposite
+/// things said to the candidate.</b> <see cref="Gaps"/> can be empty because nothing blocking
+/// anything was nameable - generic tags, or keys the vocabulary does not carry - which is a
+/// selection or vocabulary fault and genuinely nothing a person can act on. Or it can be empty
+/// because concepts were nameable and none of them reached <see cref="MinimumPostings"/>, which is
+/// ordinary: the blocked postings each want a different CV and no single one of them is yet worth
+/// a Saturday.
+///
+/// Without the distinction the second was reported as the first, telling somebody that a posting
+/// they could have unblocked by writing a Kubernetes CV was a fault in the system and that there
+/// was nothing here for them to do.
+/// </remarks>
 /// <param name="Gaps">The CVs to write, best first. At most <see cref="MaxGaps"/> of them.</param>
-public sealed record CvGapBrief(int BlockedPostings, IReadOnlyList<CvGap> Gaps)
+public sealed record CvGapBrief(int BlockedPostings, int NameablePostings, IReadOnlyList<CvGap> Gaps)
 {
     /// <summary>How many blocked postings a gap needs before it is worth a CV.</summary>
     /// <remarks>
@@ -209,8 +225,12 @@ public sealed record CvGapBrief(int BlockedPostings, IReadOnlyList<CvGap> Gaps)
         }
 
         // A posting with nothing nameable behind it is still blocked, so it stays in the total; it
-        // leaves the ranking because it can never contribute a concept to one.
+        // leaves the ranking because it can never contribute a concept to one. The count of the
+        // ones that did name something is carried out, because an empty ranking means one thing
+        // when it is zero and the opposite when it is not - see the remarks on CvGapBrief.
         var remaining = byPosting.Values.Where(missing => missing.Count > 0).ToList();
+
+        var nameable = remaining.Count;
 
         var gaps = new List<CvGap>();
 
@@ -230,7 +250,7 @@ public sealed record CvGapBrief(int BlockedPostings, IReadOnlyList<CvGap> Gaps)
             remaining.RemoveAll(missing => missing.Contains(seed));
         }
 
-        return new CvGapBrief(byPosting.Count, gaps);
+        return new CvGapBrief(byPosting.Count, nameable, gaps);
     }
 
     /// <summary>The concept blocking most of what is left, or null once nothing clears the floor.</summary>

@@ -1446,7 +1446,26 @@ public sealed class JobMatchRepository(JobsDbContext db)
             .Where(s => s.ProfileId == profileId
                 && s.ParkedReason != null
                 && s.UnparkedAtUtc == null
-                && ParkReasonPolicy.AwaitingCvVariant.Contains(s.ParkedReason.Value))
+                && ParkReasonPolicy.AwaitingCvVariant.Contains(s.ParkedReason.Value)
+                // And only where the posting is still one this candidate could apply to. A park is
+                // a fact about a document that did not exist; whether the vacancy is still wanted
+                // is a fact about the match, and the two are stored apart - dismissing a posting on
+                // the dashboard writes DismissedAtUtc and leaves the park exactly as it was.
+                //
+                // Without this the brief argues its own case from applications that will never be
+                // made: "eleven postings are waiting on a COBOL CV" counting vacancies the
+                // candidate has already refused, ranked above a gap they would actually apply
+                // through. That is worse than an omission, because the brief exists to be acted on
+                // and its ranking is the whole product - it is asking somebody to spend a Saturday
+                // on the strength of a number that is wrong.
+                //
+                // The same two tests the queue applies, for the same reason and in the same order,
+                // so a posting that cannot be offered cannot be argued for either.
+                && db.JobMatches.Any(m => m.ProfileId == profileId
+                    && m.PostingId == s.PostingId
+                    && m.DismissedAtUtc == null
+                    && m.Verdict != null
+                    && m.Verdict >= CandidacyVerdict.Possible))
             .OrderBy(s => s.PostingId)
             .Select(s => new
             {

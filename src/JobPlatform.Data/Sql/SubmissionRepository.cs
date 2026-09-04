@@ -325,6 +325,17 @@ public sealed class SubmissionRepository(JobsDbContext db)
 
         if (existing != 0)
         {
+            var parked = await db.Submissions
+                .AsTracking()
+                .FirstAsync(s => s.Id == existing, ct);
+
+            FillChosenVariant(parked, cvVariantId);
+
+            if (db.ChangeTracker.HasChanges())
+            {
+                await db.SaveChangesAsync(ct);
+            }
+
             var already = await GetAsync(profileId, existing, now, ct);
 
             // Non-null in practice: the row was just read under the same profile id.
@@ -444,6 +455,14 @@ public sealed class SubmissionRepository(JobsDbContext db)
 
         if (existing != 0)
         {
+            // Tracked, and read before the event is appended, so the fill below rides on the same
+            // SaveChanges AddEventAsync performs rather than costing a second round trip.
+            var parked = await db.Submissions
+                .AsTracking()
+                .FirstAsync(s => s.Id == existing, ct);
+
+            FillChosenVariant(parked, cvVariantId);
+
             var recorded = await AddEventAsync(profileId, existing, submissionEvent, idempotencyKey, ct);
             var already = await GetAsync(profileId, existing, now, ct);
 
@@ -466,11 +485,11 @@ public sealed class SubmissionRepository(JobsDbContext db)
             DocumentRevision = documentRevision,
             RunId = runId,
 
-            // Written only on the insert. A submission that already existed takes the retry path
-            // above and keeps whatever CV it recorded the first time - the same rule the apply URL
-            // follows, and for a sharper reason: a second call naming a different variant is a
-            // client that has re-fetched the pack after the library moved, and the document an
-            // employer actually received is the one the first call named.
+            // On the insert. A row that already exists keeps whatever CV it recorded the first
+            // time - a second call naming a different variant is a client that re-fetched the pack
+            // after the library moved, and the document an employer received is the one the first
+            // call named - but a row that recorded NONE is filled rather than left null, because a
+            // park creates the row before any CV has been chosen. See FillChosenVariant.
             CvVariantId = cvVariantId,
             CvSelectionVersion = cvVariantId is null ? null : CvSelection.CurrentVersion,
         };
@@ -1097,4 +1116,36 @@ public sealed class SubmissionRepository(JobsDbContext db)
 
         return trimmed.Length <= max ? trimmed : trimmed[..max];
     }
+
+    /// <summary>
+    /// Fills in the chosen CV on a row that exists but never named one.
+    /// </summary>
+    /// <remarks>
+    /// <b>Written because the rows this feature cares about most are created before any CV is
+    /// chosen.</b> A posting nothing fits is parked <c>NoCvVariant</c>, and parking creates the
+    /// submission row - so by the time the candidate has written the covering CV and the loop
+    /// applies, the row already exists and the insert path that records the variant is never
+    /// reached. The application that used a chosen CV would record none, and it would be exactly
+    /// the applications the library exists to make possible.
+    ///
+    /// <b>Filled, never overwritten.</b> Where the row already names a variant it keeps it: a
+    /// second call naming a different one is a client that re-fetched the pack after the library
+    /// moved, and the document an employer actually received is the one the first call named. Null
+    /// is not that case - it is a row that has never claimed anything, which is what a park is.
+    ///
+    /// The version travels with the id, because a variant id without the rule that chose it cannot
+    /// be compared against a later selection - the same reason <c>ScorerVersion</c> sits beside a
+    /// score.
+    /// </remarks>
+    private static void FillChosenVariant(SubmissionEntity submission, long? cvVariantId)
+    {
+        if (cvVariantId is null || submission.CvVariantId is not null)
+        {
+            return;
+        }
+
+        submission.CvVariantId = cvVariantId;
+        submission.CvSelectionVersion = CvSelection.CurrentVersion;
+    }
+
 }

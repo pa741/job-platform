@@ -1,4 +1,4 @@
-using JobPlatform.Core.Applications;
+﻿using JobPlatform.Core.Applications;
 using JobPlatform.Data.Sql;
 
 namespace JobPlatform.Api.Features.CvVariants;
@@ -372,4 +372,59 @@ internal static class CvVariantMapping
             IsStale = IsStale(variant, profileUpdatedUtc),
         };
     }
+
+    /// <summary>The brief, as the dashboard reads it.</summary>
+    /// <remarks>
+    /// The floor travels with the answer rather than being assumed by the client: without it, a
+    /// reader seeing a gap that blocks one posting missing from the list has no way to tell the
+    /// floor doing its job from a bug.
+    /// </remarks>
+    public static CvGapBriefResponse ToResponse(this CvGapBrief brief)
+        => new(
+            brief.BlockedPostings,
+            brief.NameablePostings,
+            [.. brief.Gaps.Select(gap => new CvGapResponse(
+                [.. gap.Concepts.Select(c => new CvGapConceptResponse(c.Key, c.Label, c.Postings))],
+                gap.Postings))],
+            CvGapBrief.MinimumPostings);
+
+    /// <summary>What a candidate with no profile is waiting on, which is nothing.</summary>
+    public static CvGapBriefResponse EmptyGapBrief() => new(0, 0, [], CvGapBrief.MinimumPostings);
+
 }
+
+/// <summary>One concept a missing CV would have to speak to.</summary>
+/// <param name="Key">The vocabulary's own spelling. Identity, not prose.</param>
+/// <param name="Label">The preferred name. What a sentence says.</param>
+/// <param name="Postings">How many of the gap's own postings ask for this one.</param>
+public sealed record CvGapConceptResponse(string Key, string Label, int Postings);
+
+/// <summary>One CV worth writing, and the applications it would release.</summary>
+/// <param name="Concepts">What it has to cover, heaviest first, so reading them in order names it.</param>
+/// <param name="Postings">
+/// Applyable postings this gap blocks, after the gaps ranked above it have taken theirs. Greedy on
+/// purpose: ranked independently, one set of nine postings wanting two things would report two gaps
+/// of nine and read as eighteen postings of payoff.
+/// </param>
+public sealed record CvGapResponse(IReadOnlyList<CvGapConceptResponse> Concepts, int Postings);
+
+/// <summary>
+/// The brief for the CVs that do not exist yet, ranked by what each would release.
+/// </summary>
+/// <remarks>
+/// <b>The point of this shape is that it is a work item and not an error list.</b> A refusal says
+/// an application could not be made; this says which document would have made it, and how many
+/// others it would carry with it - which is what turns "eleven postings could not be applied to"
+/// into an afternoon with an obvious payoff.
+/// </remarks>
+/// <param name="BlockedPostings">Applyable postings currently parked for want of a CV, counted once each.</param>
+/// <param name="NameablePostings">
+/// How many of those named something a CV could cover.
+/// </param>
+/// <param name="Gaps">The CVs to write, best first.</param>
+/// <param name="MinimumPostings">How many blocked postings a gap needs before it is listed.</param>
+public sealed record CvGapBriefResponse(
+    int BlockedPostings,
+    int NameablePostings,
+    IReadOnlyList<CvGapResponse> Gaps,
+    int MinimumPostings);
