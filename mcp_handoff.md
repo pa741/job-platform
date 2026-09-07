@@ -1,4 +1,4 @@
-# MCP server
+﻿# MCP server
 
 Exposing this system over MCP, for whoever picks it up next.
 
@@ -467,6 +467,46 @@ posting at no risk, and cross-board recovery returns ~5% of the missing links ou
 would reopen it** is a measured demand for the URL specifically rather than for the route: if
 `list_applyable` is in daily use and the rows with a vendor but no employer link are the ones that
 stall, that is evidence.
+
+### 3.2a That condition fired, and the answer was a third option
+
+**Measured 2026-09-07.** Of 382 applyable postings, 73 carry an employer link. All **309** that do
+not are LinkedIn - Indeed and freehire publish one every time. So the demand is real and it is
+entirely one board, which is exactly the evidence 3.2 asked for.
+
+**The decision above still stands, and the risk has moved against it since it was written.** hiQ
+ended with LinkedIn winning on *contract* rather than on the CFAA - an injunction, a $500,000
+judgment and destruction of the scraped corpus - so a terms breach is actionable even over public
+data. The 2026 enforcement wave targets *browser automation* specifically, which is the shape an
+authenticated `li_at` fetch takes. And there is no sanctioned way round it: LinkedIn's Job Posting
+API is write-only, for applicant tracking systems publishing *into* LinkedIn, and new partnerships
+are closed. One line in 3.2 is now too generous, though: it says authenticated automation breaches
+the User Agreement "unlike reading the signed-out pages". After hiQ, reading the signed-out pages is
+also a breach - materially lower risk, not a different kind of thing.
+
+**What 3.2 did not consider is that the employer will tell you.** It framed the choice as
+authenticated LinkedIn or the 5% cross-board recovery, and there is a third route: ask the
+employer's own applicant tracking system. Greenhouse, Ashby, Lever, Workable and SmartRecruiters all
+serve public, documented, unauthenticated board listings that exist to be read by job seekers.
+Verified live on 2026-09-07: `boards-api.greenhouse.io/v1/boards/cloudflare/jobs` answers 200 with
+333 jobs, and carries the exact posting held here as 3020 - *VoidZero Engineer* - with the
+`absolute_url` LinkedIn withheld.
+
+| | |
+| --- | --- |
+| Link-less applyable postings | **309**, every one LinkedIn |
+| At an employer whose ATS is already known from another posting | **122 (39%)** |
+| Further employers resolved by probing a slug from their name | **21 of 120 (~18%)** |
+| Employers corpus-wide on Greenhouse / Ashby / Workable / Lever / SmartRecruiters | **299** |
+
+So roughly half the gap is reachable with no account, no proxy and nothing to defend - an order of
+magnitude better than the cross-board recovery, and mostly a join over data already held.
+
+**Two things to keep honest about it.** A slug probed from a company name produces false positives -
+"Dex", "Kernel", "Fin" and "Orbital" are all real boards belonging to somebody, not necessarily to
+the employer on the advert - so a probed token is confirmed against a posting before it is trusted
+and the recovered link is marked as the inference it is, exactly as `MatchedOnAnotherBoard` is.
+And Workday, at 69 employers, has no clean public board listing, so it stays out.
 
 ---
 
