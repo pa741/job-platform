@@ -16,6 +16,17 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
 
     public DbSet<CompanyEntity> Companies => Set<CompanyEntity>();
 
+    /// <summary>
+    /// The board learned or probed for one employer, keyed by <see cref="Companies"/>.
+    /// </summary>
+    /// <remarks>
+    /// Read once per employer per pass rather than once per posting - one board answers every
+    /// vacancy that employer has open. See <see cref="ConfigureEmployerAtsBoards"/>, and
+    /// <see cref="EmployerAtsBoardEntity.ConfirmedAtUtc"/> for the one column that decides whether
+    /// a row may be used at all.
+    /// </remarks>
+    public DbSet<EmployerAtsBoardEntity> EmployerAtsBoards => Set<EmployerAtsBoardEntity>();
+
     public DbSet<ConceptEntity> Concepts => Set<ConceptEntity>();
     public DbSet<ConceptLabelEntity> ConceptLabels => Set<ConceptLabelEntity>();
     public DbSet<ConceptRelationEntity> ConceptRelations => Set<ConceptRelationEntity>();
@@ -225,6 +236,33 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
             entity.Property(e => e.JobUrlDirect).HasMaxLength(1000);
             entity.Property(e => e.CompanyUrl).HasMaxLength(1000);
 
+            // The three columns holding what the employer's own board said, beside the ones the
+            // board carrying the advert filled rather than over the top of them. JobUrlDirect's
+            // remarks say why at length; the short version is that a recovered link opens a form
+            // exactly like a published one, so the column it sits in is the only thing that can
+            // tell them apart afterwards.
+            //
+            // Every one of them is nullable with no default, which is what makes them safe to add
+            // to a live table: 7,368 rows gain three NULLs, the ALTER is metadata only and there
+            // is no backfill to get wrong. A default would also assert something untrue of every
+            // existing row - EmployerAtsCheckedUtc's entire job is to say nobody has asked yet.
+            //
+            // None of them is indexed. The pass's work list comes off the shortlist query, which
+            // already keys on CompanyId, and JobPostings is rewritten on every ingest upsert - so
+            // an index nobody has measured is a write cost on the hot path, of exactly the kind
+            // the now-redundant single-column Company index above is already carrying.
+            //
+            // The same width as JobUrlDirect, holding the same kind of value off the same hosts:
+            // a narrower column truncates an apply URL into something that still looks like one,
+            // which is the worst of the three available outcomes.
+            entity.Property(e => e.EmployerAtsApplyUrl).HasMaxLength(1000);
+
+            // int? rather than int, so null keeps meaning "nothing was matched" and no member of
+            // AtsMatchConfidence is zero - the same arrangement, and the same argument, as
+            // Submissions.ParkedReason. Mapped as the enum rather than as a raw int so a query
+            // that wants only the stronger matches can name the member instead of a digit.
+            entity.Property(e => e.EmployerAtsMatchConfidence).HasConversion<int?>();
+
             // Descriptions run to several KB and are stored intact, so no MaxLength is
             // set. EF already maps an unbounded string to nvarchar(max) on SQL Server;
             // spelling that type out explicitly would also make the model unbuildable on
@@ -269,6 +307,7 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
             entity.Property(e => e.Description);
         });
 
+        ConfigureEmployerAtsBoards(modelBuilder);
         ConfigureConceptGraph(modelBuilder);
         ConfigureAssertions(modelBuilder);
         ConfigureProfiles(modelBuilder);
@@ -310,6 +349,88 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
             entity.HasOne(e => e.LastSeenRun)
                 .WithMany()
                 .HasForeignKey(e => e.LastSeenRunId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+    }
+
+    /// <summary>
+    /// The boards known for an employer, and the uniqueness that keeps one board one row.
+    /// </summary>
+    /// <remarks>
+    /// <b>The unique index is the whole identity, and every part of it earns its place.</b> A
+    /// board is <c>(employer, vendor, token, region)</c> and a key that drops any one of those is
+    /// wrong in a way that shows up as an absence rather than as an error:
+    /// <list type="bullet">
+    /// <item>
+    /// <b>Without the region</b>, <c>jobs.eu.lever.co/acme</c> and <c>jobs.lever.co/acme</c> are
+    /// one row. They are two boards on two API hosts, possibly belonging to two companies, and
+    /// whichever was written first wins - so the other employer's postings are asked of an
+    /// endpoint that answers nothing, which reads as "not on Lever" and moves no count. This is
+    /// the constraint <c>The_same_token_on_two_regions_is_two_boards</c> pins, and it is the one
+    /// most likely to be tidied away by somebody who reads the region as a display detail.
+    /// </item>
+    /// <item>
+    /// <b>Without the employer</b>, a token would be globally unique - and then a wrong probe
+    /// claiming <c>orbital</c> for one company would block the <i>right</i> employer from ever
+    /// learning that token from a link they published. The stronger evidence would lose to the
+    /// weaker one, silently, on insert order.
+    /// </item>
+    /// <item>
+    /// <b>Without the token</b> - keying on employer and vendor alone - an employer could hold
+    /// only one board per vendor, and two Greenhouse boards after an acquisition is an ordinary
+    /// thing rather than a data error. Two rows cost one extra fetch; a rejected row costs every
+    /// posting on the board that lost.
+    /// </item>
+    /// </list>
+    ///
+    /// <b>No key column is nullable, which is what makes the index mean the same thing on both
+    /// engines.</b> SQL Server treats two NULLs in a unique index as equal and SQLite treats them
+    /// as distinct, so a nullable key column would be a production guarantee the tests could not
+    /// exercise and a test guarantee production did not have, first noticed as a live constraint
+    /// violation. That is <see cref="ConfigureFormAnswers"/>'s rule and
+    /// <see cref="ConfigureCvLibrary"/>'s, applied a third time - and it is most of why the
+    /// employer is <c>Companies.Id</c> rather than a nullable company name.
+    ///
+    /// <b>The employer leads the key because that is the direction the table is read in.</b> One
+    /// pass reads the boards for the employers in the shortlist and fetches each board once, so
+    /// the lookup is a seek on this index rather than a scan; the trust and freshness columns are
+    /// included so that read is answered from the index alone. Nothing is keyed the other way -
+    /// there is no index on <c>(Vendor, Token)</c> - because nothing asks "who else holds this
+    /// token", and an index with no reader is a write cost on every confirmation.
+    /// </remarks>
+    private static void ConfigureEmployerAtsBoards(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<EmployerAtsBoardEntity>(entity =>
+        {
+            entity.ToTable("EmployerAtsBoards");
+            entity.HasKey(e => e.Id);
+
+            // One row per board per employer. Named rather than left to the convention because
+            // what the four columns are doing together is the point, and a generated name says
+            // nothing about it.
+            entity.HasIndex(e => new { e.CompanyId, e.Vendor, e.Token, e.Region }, "IX_EmployerAtsBoards_Identity")
+                .IsUnique()
+                .IncludeProperties(e => new { e.Discovery, e.ConfirmedAtUtc, e.LastFetchedUtc });
+
+            entity.Property(e => e.Token).HasMaxLength(EmployerAtsBoardEntity.MaxTokenLength).IsRequired();
+
+            // Stored as int, like every other enum in this file. Both are part of the identity
+            // above rather than descriptions of it, so neither may become a string "for
+            // readability": a renumber is already forbidden on AtsBoardDiscovery's own remarks,
+            // and a re-spelling would be the same fault wearing different clothes.
+            entity.Property(e => e.Vendor).HasConversion<int>();
+            entity.Property(e => e.Region).HasConversion<int>();
+            entity.Property(e => e.Discovery).HasConversion<int>();
+
+            // Restrict, and for a different reason than the postings' own company link. There the
+            // argument is that a lookup must not take the record with it; here it is that a
+            // confirmed board is knowledge that cost a request to somebody else's API, and a
+            // cascade would delete it silently while a restrict fails the delete loudly. No
+            // navigation property, so no Include can drag a company blurb across - see the
+            // remarks on EmployerAtsBoardEntity.CompanyId.
+            entity.HasOne<CompanyEntity>()
+                .WithMany()
+                .HasForeignKey(e => e.CompanyId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
     }

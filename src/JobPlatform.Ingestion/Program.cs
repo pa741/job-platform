@@ -11,6 +11,7 @@ using JobPlatform.Data.Sql;
 using JobPlatform.Ai;
 using JobPlatform.Core.Enrichment;
 using JobPlatform.Ingestion;
+using JobPlatform.Ingestion.Ats;
 using JobPlatform.Ingestion.Curated;
 using JobPlatform.Ingestion.Functions;
 using JobPlatform.Ingestion.Extraction;
@@ -212,6 +213,15 @@ builder.Services.AddScoped<PostingExtractionWriter>();
 // than an unbounded pass. Setting DocumentsPerNight to 0 switches the pass off without a deploy,
 // which is the control worth having when the number is a bill.
 builder.Services.AddScoped<ApplicationDocumentRepository>();
+
+// Apply-link recovery. The board clients bring their own HttpClient registrations and their own
+// options; the repository and the pass's bounds are registered here beside the other scoped
+// repositories, because a function that is discovered and then cannot be activated fails only when
+// the timer fires - and this one fires at night, which is the worst place for a fault to be found.
+builder.Services.AddAtsBoardClients(builder.Configuration);
+builder.Services.AddScoped<EmployerAtsBoardRepository>();
+builder.Services.Configure<ApplyLinkRecoveryOptions>(
+    builder.Configuration.GetSection(ApplyLinkRecoveryOptions.SectionName));
 builder.Services.Configure<ApplicationGenerationOptions>(
     builder.Configuration.GetSection(ApplicationGenerationOptions.SectionName));
 

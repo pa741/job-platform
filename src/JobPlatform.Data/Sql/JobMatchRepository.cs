@@ -69,16 +69,19 @@ public sealed record MatchRow(
 /// re-scrape change every one of those fields without anything having to be migrated.
 /// </remarks>
 /// <param name="Channel">
-/// Where the application is made, projected from <c>JobUrlDirect</c> rather than stored. Present
-/// means the employer's own system; absent on a board posting means the board hosts it.
+/// Where the application is made, projected from the apply-link columns rather than stored. Any
+/// employer link at all - the one the board published or the one recovered from the employer's own
+/// applicant tracking system - means the employer's own system; absent on a board posting means
+/// the board hosts it.
 /// </param>
 /// <param name="ApplyUrl">
 /// Where to go. The direct link where there is one, the board's own posting URL otherwise -
 /// resolved here so no caller has to re-derive the rule that decides which.
 /// </param>
 /// <param name="ApplyUrlSource">
-/// Where <paramref name="ApplyUrl"/> came from, because one of the three is an inference and a
-/// caller acting on it deserves to know which.
+/// Where <paramref name="ApplyUrl"/> came from, because two of the four are inferences and a
+/// caller acting on one deserves to know which. Both inferences open a form exactly like a
+/// published link does, so nothing downstream can tell them apart once this is discarded.
 /// </param>
 /// <param name="AtsVendor">
 /// Whose application system sits at the end of <paramref name="ApplyUrl"/>, read off the URL.
@@ -170,13 +173,21 @@ public sealed record ApplyableQuery
     public SubmissionChannel? Channel { get; init; }
 
     /// <summary>
-    /// Restrict to apply links of one provenance. Null for all three.
+    /// Restrict to apply links of one provenance. Null for all four.
     /// </summary>
     /// <remarks>
-    /// How a run asks for postings it can actually apply through: <c>Posting</c> is the
-    /// employer's link as the board published it, and the other two are an inference and a board
-    /// page. Filtered on the same expression the projection uses, and held to it by
-    /// <c>The_apply_url_source_filter_agrees_with_the_projection_and_filters_before_the_bound</c>.
+    /// How a run asks for postings it can actually apply through: <c>Posting</c> is the employer's
+    /// link as the board published it, <c>MatchedOnEmployerAts</c> is the employer's own applicant
+    /// tracking system answering about a posting whose board had gone quiet, and the other two are
+    /// a link borrowed off a stranger's listing and a board page. Filtered on the same expression
+    /// the projection uses, and held to it by
+    /// <c>The_apply_url_source_filter_agrees_with_the_projection_and_filters_before_the_bound</c>
+    /// and <c>RecoveredApplyLinkQueueTests</c>.
+    ///
+    /// <b>A filter's test has to pass every value the filter accepts.</b> The two spellings had
+    /// already drifted once on an argument nothing ever passed, which is invisible until a run
+    /// asks for it - so a fourth value arrives with a fourth pair of assertions rather than on the
+    /// strength of the three that were already covered.
     /// </remarks>
     public ApplyUrlSource? ApplyUrlSource { get; init; }
 
@@ -234,7 +245,19 @@ public sealed record ApplyableQuery
 
 /// <summary>Where an application for one matched posting would be made.</summary>
 /// <param name="Channel">Projected from the apply link, never stored on the posting.</param>
-/// <param name="ApplyUrl">The direct link where there is one, the board's posting URL otherwise.</param>
+/// <param name="ApplyUrl">
+/// The link the advert's own board published where there is one, the link the employer's own
+/// applicant tracking system answered with where there is not, and the board's posting URL
+/// otherwise.
+/// </param>
+/// <remarks>
+/// <b>No provenance field, and that is not the omission it looks like.</b> The queue's
+/// <c>ApplyableRow</c> carries one because it is handing over an inference to be acted on; this
+/// answers where an application <i>went</i>, which is a fact about the application. What a
+/// submission needs from it is the address, and the row that records the address is not the place
+/// to re-litigate how it was found - the posting's columns still say, for as long as the posting
+/// exists.
+/// </remarks>
 public sealed record ApplyTarget(string Title, SubmissionChannel Channel, string? ApplyUrl);
 
 /// <summary>
@@ -893,7 +916,33 @@ public sealed class JobMatchRepository(JobsDbContext db)
     /// and the projection are written out twice because EF translates one and materialises the
     /// other; the apply-URL provenance filter has the same shape and the same hazard. A filter
     /// applied after <c>Take</c> is a silent reduction of the limit, three times over in this
-    /// codebase now, so it is asserted rather than assumed.
+    /// codebase now, so it is asserted rather than assumed. <b>And a test covers every argument
+    /// the filter accepts, not every argument it happened to be called with</b>: the two spellings
+    /// of the provenance rule had already drifted on a value nothing ever passed, which no test
+    /// asking about the other values could see.
+    ///
+    /// <b>The apply URL has four sources, and the recovered one sits second.</b>
+    /// <c>JobUrlDirect</c> is the board carrying the advert naming the destination outright -
+    /// nothing between the advert and the link, which is why it is read first and why nothing else
+    /// may write to it. <c>EmployerAtsApplyUrl</c> is the employer's own applicant tracking system
+    /// answering about a posting its board had gone quiet on, and it outranks a link borrowed off
+    /// another board because of who was asked: an employer's own register of its own vacancies, on
+    /// a token confirmed against a posting before it was trusted, against a third party's listing
+    /// that agreed on three normalised strings and was confirmed by nothing. Both are inferences -
+    /// the token may belong to another company and the title match may have landed on the vacancy
+    /// next to the right one - and the provenance is the only thing that says so, because both
+    /// open a form exactly as a published link does.
+    ///
+    /// <b>The recovered link overrules <c>OffsiteApply == false</c>, and it is the only rung of
+    /// this ladder that does.</b> That flag vetoes borrowing from another board, because a board
+    /// saying it hosts the application is talking about <i>this</i> listing rather than one that
+    /// resembles it. It does not veto the employer's own answer, for two reasons. The recovery
+    /// pass never asks about such a posting at all - <c>EmployerAtsBoardRepository</c>'s
+    /// unreachable-posting rule requires <c>OffsiteApply != false</c> - so a row carrying both is
+    /// one whose board changed its mind after the column was written, and the employer's system is
+    /// the later and better-placed of the two. And a veto here would leave the column populated,
+    /// the channel <c>Board</c>, and the queue silently declining to hand over a link the employer
+    /// itself published, with nothing on the row to show that it had.
     ///
     /// <b>The bound counts jobs, not rows.</b> Duplicate listings collapse after materialisation -
     /// the grouping is over a persisted key and the choice between members is arithmetic Core
@@ -1078,10 +1127,17 @@ public sealed class JobMatchRepository(JobsDbContext db)
         // expression tree nobody can read. That is what
         // The_channel_is_projected_from_the_apply_link_and_filters_before_the_bound holds
         // together, and it has already caught the two diverging once.
+        //
+        // A recovered link settles the channel on its own: the employer's own system answered
+        // about this posting, so the employer takes the application - which is why it appears in
+        // the Ats arm and is excluded from both of the others rather than only from Unknown. A
+        // posting whose board says it hosts the application and whose employer has since published
+        // a form is Ats, and the same override is spelled out in the projection below.
         matches = query.Channel switch
         {
             SubmissionChannel.Ats => matches.Where(m =>
                 m.Posting!.JobUrlDirect != null
+                || m.Posting.EmployerAtsApplyUrl != null
                 || m.Posting.OffsiteApply == true
                 || (m.Posting.OffsiteApply == null
                     && m.Posting.LocationCity != null
@@ -1092,9 +1148,12 @@ public sealed class JobMatchRepository(JobsDbContext db)
                         && other.Site != m.Posting.Site
                         && other.JobUrlDirect != null))),
             SubmissionChannel.Board => matches.Where(m =>
-                m.Posting!.JobUrlDirect == null && m.Posting.OffsiteApply == false),
+                m.Posting!.JobUrlDirect == null
+                && m.Posting.EmployerAtsApplyUrl == null
+                && m.Posting.OffsiteApply == false),
             SubmissionChannel.Unknown => matches.Where(m =>
                 m.Posting!.JobUrlDirect == null
+                && m.Posting.EmployerAtsApplyUrl == null
                 && m.Posting.OffsiteApply == null
                 && !(m.Posting.LocationCity != null && db.JobPostings.Any(other =>
                         other.Title == m.Posting.Title
@@ -1108,13 +1167,24 @@ public sealed class JobMatchRepository(JobsDbContext db)
         // The second filter-and-projection pair, and the same hazard as the channel: this decides
         // which rows come back and the projection decides what each one calls itself, and nothing
         // but a test stops the two drifting apart. Precedence is the projection's, exactly - a
-        // published link first, and a link borrowed from another board only where the posting's
-        // own board did not say it hosts the application.
+        // published link first, then the employer's own applicant tracking system, and a link
+        // borrowed from another board only where the posting's own board did not say it hosts the
+        // application and the employer's own system had nothing to say.
+        //
+        // Every arm carries the whole ladder above it and not just its own rung. A recovered link
+        // is MatchedOnEmployerAts, so it has to leave MatchedOnAnotherBoard and BoardPosting as
+        // well as join an arm of its own: an arm that only added itself would answer the new value
+        // correctly and quietly keep answering two of the old ones wrong, which is the exact shape
+        // of the drift this pair has already been caught in once.
         matches = query.ApplyUrlSource switch
         {
             ApplyUrlSource.Posting => matches.Where(m => m.Posting!.JobUrlDirect != null),
+            ApplyUrlSource.MatchedOnEmployerAts => matches.Where(m =>
+                m.Posting!.JobUrlDirect == null
+                && m.Posting.EmployerAtsApplyUrl != null),
             ApplyUrlSource.MatchedOnAnotherBoard => matches.Where(m =>
                 m.Posting!.JobUrlDirect == null
+                && m.Posting.EmployerAtsApplyUrl == null
                 && m.Posting.OffsiteApply != false
                 && m.Posting.LocationCity != null
                 && db.JobPostings.Any(other =>
@@ -1125,6 +1195,7 @@ public sealed class JobMatchRepository(JobsDbContext db)
                     && other.JobUrlDirect != null)),
             ApplyUrlSource.BoardPosting => matches.Where(m =>
                 m.Posting!.JobUrlDirect == null
+                && m.Posting.EmployerAtsApplyUrl == null
                 && !(m.Posting.OffsiteApply != false
                     && m.Posting.LocationCity != null
                     && db.JobPostings.Any(other =>
@@ -1145,12 +1216,17 @@ public sealed class JobMatchRepository(JobsDbContext db)
             m.Posting!.Title,
             m.Posting.Company,
             m.Posting.LocationRaw,
-            // Precedence, strongest evidence first: the posting's own published link, then
-            // what its own board said about itself, and only then the same job seen
-            // elsewhere. A board saying it hosts the application beats a title match on
-            // another board, because it is talking about this listing rather than one that
-            // resembles it.
+            // Precedence, strongest evidence first: the posting's own published link, then the
+            // one the employer's own applicant tracking system answered with, then what its own
+            // board said about itself, then the same job seen elsewhere. A board saying it hosts
+            // the application beats a title match on another board, because it is talking about
+            // this listing rather than one that resembles it - and loses to the employer's own
+            // system, which is talking about its own vacancy.
+            //
+            // A recovered link makes the channel Ats on its own, with no OffsiteApply clause
+            // beside it: the employer answered, so the employer takes the application.
             m.Posting.JobUrlDirect != null
+            || m.Posting.EmployerAtsApplyUrl != null
             || m.Posting.OffsiteApply == true
             || (m.Posting.OffsiteApply == null
                 && m.Posting.LocationCity != null
@@ -1164,7 +1240,12 @@ public sealed class JobMatchRepository(JobsDbContext db)
                 : m.Posting.OffsiteApply == false
                     ? SubmissionChannel.Board
                     : SubmissionChannel.Unknown,
+            // The recovered link is coalesced above the borrowed one rather than tested for, so
+            // the cross-board subquery is not even reached for a posting the employer's own board
+            // has already answered about - and a posting carrying both a published link and a
+            // recovered one keeps the published one, because that is the term on the left.
             m.Posting.JobUrlDirect
+                ?? m.Posting.EmployerAtsApplyUrl
                 ?? (m.Posting.OffsiteApply == false || m.Posting.LocationCity == null
                     ? null
                     : db.JobPostings
@@ -1177,18 +1258,25 @@ public sealed class JobMatchRepository(JobsDbContext db)
                         .Select(other => other.JobUrlDirect)
                         .FirstOrDefault())
                 ?? m.Posting.JobUrl,
+            // The same ladder in the same order, and it has to stay that way: this decides what
+            // the row calls its link and the coalesce above decides which link that is.
+            // MatchedOnEmployerAts is never Posting - a caller that cannot tell the employer's own
+            // answer from the advert's own published link cannot notice when the token or the
+            // title match was wrong.
             m.Posting.JobUrlDirect != null
                 ? ApplyUrlSource.Posting
-                : m.Posting.OffsiteApply != false
-                    && m.Posting.LocationCity != null
-                    && db.JobPostings.Any(other =>
-                        other.Title == m.Posting.Title
-                        && other.Company == m.Posting.Company
-                        && other.LocationCity == m.Posting.LocationCity
-                        && other.Site != m.Posting.Site
-                        && other.JobUrlDirect != null)
-                    ? ApplyUrlSource.MatchedOnAnotherBoard
-                    : ApplyUrlSource.BoardPosting,
+                : m.Posting.EmployerAtsApplyUrl != null
+                    ? ApplyUrlSource.MatchedOnEmployerAts
+                    : m.Posting.OffsiteApply != false
+                        && m.Posting.LocationCity != null
+                        && db.JobPostings.Any(other =>
+                            other.Title == m.Posting.Title
+                            && other.Company == m.Posting.Company
+                            && other.LocationCity == m.Posting.LocationCity
+                            && other.Site != m.Posting.Site
+                            && other.JobUrlDirect != null)
+                        ? ApplyUrlSource.MatchedOnAnotherBoard
+                        : ApplyUrlSource.BoardPosting,
             m.Score,
             m.AssessmentScore,
             m.Verdict,
@@ -1500,6 +1588,22 @@ public sealed class JobMatchRepository(JobsDbContext db)
     ///
     /// The apply link is resolved here rather than at the call site so exactly one place decides
     /// that a missing <c>JobUrlDirect</c> means the board hosts it.
+    ///
+    /// <b>A recovered link is read here as well as in the queue, because otherwise the log
+    /// disagrees with the world.</b> <c>list_applyable</c> hands an agent the employer's own form
+    /// and this is what <c>create_submission</c> writes down; if only the first of them read
+    /// <c>EmployerAtsApplyUrl</c>, an application made on the employer's form would be recorded as
+    /// a board application against the board's own posting page - a row that misdescribes where a
+    /// real application went, in a log whose entire purpose is that later decisions read it instead
+    /// of the world. The precedence is the queue's: the published link, then the recovered one,
+    /// then the board's page.
+    ///
+    /// <b>The link borrowed from another board is still deliberately absent here, and that
+    /// asymmetry predates this method reading a second column.</b> That one is a subquery over the
+    /// corpus for a listing that merely resembles this posting, and it is the weakest rung of the
+    /// four; <c>EmployerAtsApplyUrl</c> is a column on the row in hand, written by the employer's
+    /// own system answering about this posting. Widening this to the borrowed link is a separate
+    /// decision with a separate argument, and it is not made here.
     /// </remarks>
     public Task<ApplyTarget?> ResolveApplyTargetAsync(
         long profileId, long postingId, CancellationToken ct = default)
@@ -1508,12 +1612,14 @@ public sealed class JobMatchRepository(JobsDbContext db)
             .Where(m => m.ProfileId == profileId && m.PostingId == postingId)
             .Select(m => new ApplyTarget(
                 m.Posting!.Title,
-                m.Posting.OffsiteApply == true || m.Posting.JobUrlDirect != null
+                m.Posting.OffsiteApply == true
+                || m.Posting.JobUrlDirect != null
+                || m.Posting.EmployerAtsApplyUrl != null
                     ? SubmissionChannel.Ats
                     : m.Posting.OffsiteApply == false
                         ? SubmissionChannel.Board
                         : SubmissionChannel.Unknown,
-                m.Posting.JobUrlDirect ?? m.Posting.JobUrl))
+                m.Posting.JobUrlDirect ?? m.Posting.EmployerAtsApplyUrl ?? m.Posting.JobUrl))
             .FirstOrDefaultAsync(ct);
 
     /// <summary>One match in full, with whether a document has already been generated for it.</summary>

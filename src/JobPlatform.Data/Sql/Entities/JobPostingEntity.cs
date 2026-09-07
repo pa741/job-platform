@@ -1,3 +1,4 @@
+using JobPlatform.Core.Applications;
 using JobPlatform.Core.Enrichment;
 
 namespace JobPlatform.Data.Sql.Entities;
@@ -84,6 +85,25 @@ public sealed class JobPostingEntity
     public string? CompanyIndustry { get; set; }
 
     public string? JobUrl { get; set; }
+
+    /// <summary>
+    /// The employer apply URL as the board carrying the advert published it.
+    /// </summary>
+    /// <remarks>
+    /// <b>Only the board that carried the advert may write here, and a recovered link may not.</b>
+    /// This column is the one fact in the apply-link story that nobody inferred: no token to be
+    /// right about, no title to match, nothing between the advert and the link - which is why
+    /// <c>ApplyUrlSource.Posting</c> outranks every other provenance and why the queue reads this
+    /// column first. A link recovered from the employer's own applicant tracking system goes to
+    /// <see cref="EmployerAtsApplyUrl"/> instead. <b>Writing one here would not be a shortcut, it
+    /// would erase the distinction the whole feature rests on</b>: the recovered link opens a form
+    /// exactly like a published one, so once the two share a column nothing downstream - and
+    /// nobody reading the row afterwards - can tell which of them was a guess that went wrong.
+    ///
+    /// Its <i>absence</i> is load-bearing too, and is not on its own a fact about the board: "no
+    /// apply URL" meant either "the board hosts the application" or "nobody opened the detail
+    /// page" until <see cref="OffsiteApply"/> was added to tell them apart.
+    /// </remarks>
     public string? JobUrlDirect { get; set; }
 
     /// <summary>
@@ -136,6 +156,80 @@ public sealed class JobPostingEntity
     /// the personal data is not.
     /// </summary>
     public bool HasContactEmail { get; set; }
+
+    // --- recovered from the employer's own applicant tracking system --------------------
+
+    /// <summary>
+    /// The apply URL read off the employer's own board, and null where there is none.
+    /// </summary>
+    /// <remarks>
+    /// <b>A second column rather than a value written into <see cref="JobUrlDirect"/>, and the
+    /// separation is the entire provenance argument made physical.</b> That column is what the
+    /// board publishing the advert said; this one is what the employer's applicant tracking system
+    /// said when it was asked about a posting the board had gone quiet on. Both open a form, and
+    /// nothing a browser sees separates them - so only the columns can, and a caller that cannot
+    /// tell an inference from a published fact has no way to notice when the match was wrong. Two
+    /// ways this one can be wrong and neither is visible downstream: the board token may belong to
+    /// another company, and the title match may have landed on the vacancy next to the right one.
+    /// The queue projects <c>ApplyUrlSource.MatchedOnEmployerAts</c> from the presence of this
+    /// column, which ranks it below <see cref="JobUrlDirect"/> and above a link borrowed off a
+    /// stranger's listing on another board.
+    ///
+    /// <b>The provenance is the column and is not repeated in one beside it.</b> A recovered link
+    /// is <c>MatchedOnEmployerAts</c> by construction - nothing else may write here - so a second
+    /// column naming the source would be a copy free to disagree with the fact it copies, which is
+    /// the reason <c>AtsListing</c> carries no vendor either. The board it came from is
+    /// recoverable the same way: <c>AtsBoardToken.FromUrl</c> over this value returns the vendor,
+    /// token and region exactly, because a recovered link is by construction on a board host that
+    /// function can read.
+    ///
+    /// 1000 characters, matching <see cref="JobUrlDirect"/> because it holds the same kind of
+    /// value from the same hosts - and, as it happens, matching
+    /// <c>SubmissionLimits.MaxApplyUrlLength</c>, so a recovered link carried into a submission
+    /// records where the application actually went rather than a prefix of it. Deliberately not a
+    /// shared constant: the three agreeing is a coincidence worth keeping, not a fact to centralise
+    /// where widening one silently widens the others.
+    /// </remarks>
+    public string? EmployerAtsApplyUrl { get; set; }
+
+    /// <summary>
+    /// How much of the posting the matched board listing agreed with, and null where nothing was
+    /// matched.
+    /// </summary>
+    /// <remarks>
+    /// <b>Stored because a caller can act on it and cannot re-derive it.</b> <c>TitleOnly</c> means
+    /// the titles agreed and the place could not be checked - one side named an arrangement rather
+    /// than a city, or named nothing; <c>TitleAndPlace</c> means both sides named a place and it
+    /// was the same place, which is the failure the whole match rule exists to exclude actually
+    /// being excluded rather than merely undetectable. That is a bar an unattended run may want to
+    /// raise itself to, and re-deriving it later would mean fetching somebody else's board again
+    /// to ask a question already answered.
+    ///
+    /// It does not gate the link: <c>AtsMatchConfidence</c> numbers from one and never from zero,
+    /// so this is null exactly when <see cref="EmployerAtsApplyUrl"/> is null and can never read as
+    /// a match that was not made.
+    /// </remarks>
+    public AtsMatchConfidence? EmployerAtsMatchConfidence { get; set; }
+
+    /// <summary>
+    /// When the employer's board was last asked about this posting, and null where it never has
+    /// been.
+    /// </summary>
+    /// <remarks>
+    /// <b>The three-state rule, applied again, and the third state is again the load-bearing
+    /// one.</b> Without this column a null <see cref="EmployerAtsApplyUrl"/> means either "the
+    /// board was read and had nothing matching this posting" or "nobody has asked yet", and those
+    /// want opposite work: the first is settled until the board changes, the second is the pass's
+    /// entire work list. Collapsing them is the fault <see cref="OffsiteApply"/> was added to
+    /// undo, and it would show up here as a pass that re-asks the same employer about the same
+    /// unmatched postings every run, spending somebody else's rate limit to reach the same answer.
+    ///
+    /// It is also what makes the abstention visible. <c>AtsListingMatch</c> distinguishes
+    /// "nothing matched" from "several listings matched and the rule declined to choose", and both
+    /// leave the link null - so a stamp here with no link is a posting whose board <i>was</i> read,
+    /// which is the only trace either outcome leaves on the row.
+    /// </remarks>
+    public DateTimeOffset? EmployerAtsCheckedUtc { get; set; }
 
     // --- derived by PostingEnricher ----------------------------------------------------
 
