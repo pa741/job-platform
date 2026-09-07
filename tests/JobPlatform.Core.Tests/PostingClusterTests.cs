@@ -62,6 +62,104 @@ public sealed class PostingClusterTests
     }
 
     [Fact]
+    public void The_employers_own_ats_beats_a_link_borrowed_from_a_listing_that_resembles_this_one()
+    {
+        // Both are inferences, which is why they look interchangeable and why this needs pinning.
+        // One asks the employer's own register of its own vacancies through a token confirmed
+        // against a posting; the other agrees with a stranger's row on three normalised strings
+        // and is never checked again.
+        var employerAts = Member(301, ApplyUrlSource.MatchedOnEmployerAts);
+        var anotherBoard = Member(300, ApplyUrlSource.MatchedOnAnotherBoard);
+
+        // 300 is the lower id and would take the final tie-break, so the strength rule is what is
+        // being measured here rather than the stability rule underneath it.
+        Assert.Equal(301, PostingCluster.Choose([anotherBoard, employerAts]).PostingId);
+        Assert.Equal(301, PostingCluster.Choose([employerAts, anotherBoard]).PostingId);
+    }
+
+    [Fact]
+    public void A_published_link_still_outranks_one_recovered_from_the_employers_ats()
+    {
+        // The recovered link rests on a board token being the right employer's and a title
+        // matching a catalogue of hundreds; the published one rests on nothing. A cluster holding
+        // both must hand over the one with nothing between the advert and the destination.
+        var published = Member(401, ApplyUrlSource.Posting);
+        var recovered = Member(400, ApplyUrlSource.MatchedOnEmployerAts);
+
+        Assert.Equal(401, PostingCluster.Choose([recovered, published]).PostingId);
+        Assert.Equal(401, PostingCluster.Choose([published, recovered]).PostingId);
+    }
+
+    [Fact]
+    public void The_four_provenances_rank_published_then_employer_ats_then_matched_then_none()
+    {
+        // The whole ladder in one assertion, through the alternates, which are ordered by the
+        // same comparison that chose the primary. The ids ascend against the ranking on purpose:
+        // ordered by the tie-break alone this reads 1, 2, 3, 4, so the answer below is the
+        // strength rule and could not be anything else.
+        var cluster = PostingCluster.From(HarnhamKey,
+        [
+            Member(1, ApplyUrlSource.BoardPosting),
+            Member(2, ApplyUrlSource.MatchedOnAnotherBoard),
+            Member(3, ApplyUrlSource.MatchedOnEmployerAts),
+            Member(4, ApplyUrlSource.Posting),
+        ]);
+
+        Assert.Equal(4, cluster.Primary.PostingId);
+        Assert.Equal(new long[] { 3, 2, 1 }, cluster.AlternatePostings.Select(member => member.PostingId).ToArray());
+    }
+
+    [Fact]
+    public void No_ordering_of_the_enum_values_reproduces_the_strength_ranking()
+    {
+        // The fourth member did not make the numbering misleading, it made it misleading in both
+        // directions at once. Ascending puts BoardPosting - the absence of a link - first;
+        // descending puts MatchedOnEmployerAts, an inference, above the link the board published.
+        // Worth pinning because the fix people reach for on reading that is to renumber, and the
+        // numbers are what an MCP client sends back as a filter.
+        ClusterMember[] members =
+        [
+            Member(1, ApplyUrlSource.Posting),
+            Member(2, ApplyUrlSource.BoardPosting),
+            Member(3, ApplyUrlSource.MatchedOnAnotherBoard),
+            Member(4, ApplyUrlSource.MatchedOnEmployerAts),
+        ];
+
+        var chosen = PostingCluster.Choose(members).PostingId;
+
+        Assert.Equal(1, chosen);
+        Assert.NotEqual(chosen, members.OrderBy(member => (int)member.ApplyUrlSource).First().PostingId);
+        Assert.NotEqual(chosen, members.OrderByDescending(member => (int)member.ApplyUrlSource).First().PostingId);
+    }
+
+    [Fact]
+    public void Every_provenance_the_enum_declares_has_its_own_rung_in_the_ranking()
+    {
+        // Strength's catch-all is the floor rather than a throw, so a fifth member added without
+        // a line there ranks as though no link were known - silently, and nothing else in the
+        // build fails. Two provenances that tie fall through to the posting id, so the winner's
+        // *provenance* flips when the ids are swapped while a real ranking's does not. That is
+        // the whole test: it needs no knowledge of the order, only that one exists.
+        var provenances = Enum.GetValues<ApplyUrlSource>();
+
+        foreach (var first in provenances)
+        {
+            foreach (var second in provenances)
+            {
+                if (first == second)
+                {
+                    continue;
+                }
+
+                var lowIdFirst = PostingCluster.Choose([Member(1, first), Member(2, second)]);
+                var lowIdSecond = PostingCluster.Choose([Member(2, first), Member(1, second)]);
+
+                Assert.Equal(lowIdFirst.ApplyUrlSource, lowIdSecond.ApplyUrlSource);
+            }
+        }
+    }
+
+    [Fact]
     public void The_assessment_decides_between_rows_an_agent_can_apply_through_equally()
     {
         var weaker = Member(10, ApplyUrlSource.Posting, assessmentScore: 71);

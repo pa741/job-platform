@@ -4,15 +4,31 @@ namespace JobPlatform.Core.Dedup;
 /// <remarks>
 /// <b>The numbering is not the strength order, and that is the trap.</b>
 /// <see cref="BoardPosting"/> is zero because it is the <i>absence</i> of a link and an unset
-/// value should read as "nothing known"; <see cref="MatchedOnAnotherBoard"/> carries the highest
-/// number and is the weakest of the three, because it is an inference from a title, an employer
-/// and a city rather than something a board published. So anything sorting on the value gets the
-/// ordering inverted exactly at the top, where it decides whether an agent is handed the
-/// employer's own form or a guess. <see cref="PostingCluster"/> asks a function instead.
+/// value should read as "nothing known"; <see cref="MatchedOnAnotherBoard"/> is the weakest of
+/// the four and yet outranks two of them numerically, because it is an inference from a title,
+/// an employer and a city rather than something a board published. So anything sorting on the
+/// value gets the ordering inverted exactly at the top, where it decides whether an agent is
+/// handed the employer's own form or a guess. <see cref="PostingCluster"/> asks a function
+/// instead, and that is what keeps the numbers free to mean nothing.
+///
+/// <b>Nobody may renumber these, and the paragraph below is exactly what will convince somebody
+/// they may.</b> The numbers are persisted nowhere, so a renumber breaks no migration, fails no
+/// test and produces no compiler error, and sorting the members into strength order looks like
+/// tidying up after the first paragraph. What it moves is the meaning of a digit on the wire.
+/// <c>list_applyable</c> takes this provenance as a string a model chose, and the parse rejects a
+/// digit naming no member while accepting one that does - so <c>"2"</c> is
+/// <see cref="MatchedOnAnotherBoard"/> today and would be whatever inherited that number
+/// tomorrow. The <i>names</i> are what cross the MCP surface and the names would be unchanged,
+/// which is the whole problem: neither side of the call has anything left to compare. And the
+/// answer is acted on rather than displayed - a client carries it into <c>create_submission</c>
+/// as the channel it applied through, so a filter quietly re-pointed writes a row that
+/// misdescribes where a real application went, in a log whose entire purpose is that later
+/// decisions read it instead of the world. A new member takes the next free number, exactly as
+/// <c>AtsVendor</c> does.
 ///
 /// <b>This lives in Core rather than beside the query that projects it.</b> It was declared in
-/// <c>JobPlatform.Data.Sql</c> first, which put the three values a posting's applicability turns
-/// on behind a database. Deciding which of two rows for one job an agent can actually apply
+/// <c>JobPlatform.Data.Sql</c> first, which put the values a posting's applicability turns on
+/// behind a database. Deciding which of two rows for one job an agent can actually apply
 /// through is arithmetic over those values and belongs beside <c>MatchScorer</c> and
 /// <see cref="JobFingerprint"/>, where it is assertable without one - so the declaration moved
 /// here and the repository imports it. The stored numbers did not change, because they are
@@ -36,6 +52,46 @@ public enum ApplyUrlSource
     /// one employer advertising one title in several cities.
     /// </remarks>
     MatchedOnAnotherBoard = 2,
+
+    /// <summary>
+    /// Read off the employer's own applicant tracking system, matched to this posting by title
+    /// and place.
+    /// </summary>
+    /// <remarks>
+    /// <b>A fourth value rather than a shade of one of the other three, because the two ways it
+    /// can be wrong belong to neither.</b> The recovered link is real and the form opens either
+    /// way, so nothing a browser sees separates a good recovery from a bad one - only the
+    /// provenance can. The board token may belong to somebody else: "Dex", "Kernel", "Fin" and
+    /// "Orbital" are all real boards owned by <i>a</i> company, not necessarily the one on the
+    /// advert. And the title match may land on the vacancy next to the right one, because an
+    /// employer's board is a catalogue rather than a page - Cloudflare's answers with 333 jobs.
+    /// Folded into <see cref="Posting"/> both failures become invisible; folded into
+    /// <see cref="MatchedOnAnotherBoard"/> the queue would rank a link the employer itself
+    /// publishes below one borrowed off a stranger's listing.
+    ///
+    /// <b>Stronger than <see cref="MatchedOnAnotherBoard"/> because of who was asked.</b> That
+    /// one borrows a link from a listing that merely <i>resembles</i> this one - three normalised
+    /// strings agreeing, with nothing confirming the pair afterwards. This asks the employer's
+    /// own system, which is the register of its own vacancies rather than a resemblance to it,
+    /// and a token guessed from a company name is confirmed against a posting before it is
+    /// trusted. <b>Weaker than <see cref="Posting"/></b> because that is the board carrying the
+    /// advert naming the destination outright: no token to be right about, no title to match, and
+    /// nothing between the advert and the link.
+    ///
+    /// <b>No account is used to obtain it, and that is a decision with a record.</b> Greenhouse,
+    /// Ashby, Lever, Workable and SmartRecruiters serve public, documented, unauthenticated board
+    /// listings that exist to be read by job seekers, so nothing on this path takes a credential,
+    /// a cookie or a session. See <c>mcp_handoff.md</c> 3.2 and 3.2a: the authenticated LinkedIn
+    /// route is closed rather than merely unbuilt, and this exists because that one is.
+    ///
+    /// It is worth an order of magnitude more than the cross-board recovery, which is why it was
+    /// built at all. Measured 2026-09-07: of 382 applyable postings, 309 carried no employer link
+    /// and every one of those was LinkedIn; 122 of them - 39% - sit at an employer whose board
+    /// token is already known from a link held for another posting, and probing a slug from the
+    /// name resolved 21 of a further 120. Against roughly 5% for
+    /// <see cref="MatchedOnAnotherBoard"/>, on data already held.
+    /// </remarks>
+    MatchedOnEmployerAts = 3,
 }
 
 /// <summary>
@@ -85,6 +141,17 @@ public readonly record struct ClusterMember(
 /// page. The verdict is a judgement about the job and both rows are the same job, so it cannot
 /// separate them on anything that matters; the apply URL is the one difference between them that
 /// changes what can be done next. The score is not ignored, it is second.
+///
+/// <b>The strength ladder has four rungs and the argument is entirely about the middle two.</b>
+/// A link the advert's own board published outranks one read off the employer's applicant
+/// tracking system, which outranks one borrowed from a listing that resembles this one, which
+/// outranks having no link at all. The ends are obvious; the pair in the middle are both
+/// inferences and look interchangeable. What separates them is who was asked and whether anybody
+/// checked: <see cref="ApplyUrlSource.MatchedOnEmployerAts"/> comes from the employer's own
+/// register of its own vacancies, through a board token confirmed against a posting before it is
+/// used, while <see cref="ApplyUrlSource.MatchedOnAnotherBoard"/> is a third party's row that
+/// agreed on three normalised strings and was never confirmed at all. Both can be wrong; only one
+/// of them had a chance to be caught.
 ///
 /// <b>Generated documents do not decide.</b> They sit on <see cref="ClusterMember"/> because the
 /// queue reports them per row, and they are absent from the ordering because letting them in
@@ -198,13 +265,26 @@ public sealed record PostingCluster(
     /// <summary>How much an apply URL of this provenance is worth, largest first.</summary>
     /// <remarks>
     /// Written out rather than cast, because <see cref="ApplyUrlSource"/>'s own numbering is a
-    /// different order: comparing the values would rank
-    /// <see cref="ApplyUrlSource.MatchedOnAnotherBoard"/>, an inference, above
-    /// <see cref="ApplyUrlSource.Posting"/>, a link the board published.
+    /// different order and no reading of it is rescuable: comparing the values ascending puts
+    /// <see cref="ApplyUrlSource.BoardPosting"/>, which is the absence of a link, at the top, and
+    /// comparing them descending ranks <see cref="ApplyUrlSource.MatchedOnEmployerAts"/> and
+    /// <see cref="ApplyUrlSource.MatchedOnAnotherBoard"/> - both inferences - above
+    /// <see cref="ApplyUrlSource.Posting"/>, a link the board published outright.
+    ///
+    /// <b>The catch-all is the floor rather than a throw, and that is a trade with a cost worth
+    /// naming.</b> An exhaustive switch would fail on a member nobody had ranked here, and this
+    /// runs inside a projection over a whole queue, where one exception loses every other row
+    /// with it. So an unranked member ranks as though no link were known - the safe direction,
+    /// since it demotes a real link rather than promoting a bad one, but silent, and nothing else
+    /// in the build would notice. Adding a member to <see cref="ApplyUrlSource"/> means editing
+    /// this switch in the same commit;
+    /// <c>Every_provenance_the_enum_declares_has_its_own_rung_in_the_ranking</c> is what makes
+    /// forgetting a red test rather than a quiet demotion.
     /// </remarks>
     private static int Strength(ApplyUrlSource source) => source switch
     {
-        ApplyUrlSource.Posting => 2,
+        ApplyUrlSource.Posting => 3,
+        ApplyUrlSource.MatchedOnEmployerAts => 2,
         ApplyUrlSource.MatchedOnAnotherBoard => 1,
         _ => 0,
     };
