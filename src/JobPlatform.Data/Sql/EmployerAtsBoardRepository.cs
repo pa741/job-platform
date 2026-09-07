@@ -1,4 +1,4 @@
-using System.Linq.Expressions;
+﻿using System.Linq.Expressions;
 using JobPlatform.Core.Applications;
 using JobPlatform.Data.Sql.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -749,6 +749,23 @@ public sealed class EmployerAtsBoardRepository(JobsDbContext db)
             }
         }
 
+        // Through the execution strategy, because this context is configured with
+        // EnableRetryOnFailure and that strategy REFUSES a user-initiated transaction outright.
+        //
+        // <b>Without this the feature does nothing and says nothing.</b> The first board read of the
+        // first nightly pass reaches the first ExecuteUpdateAsync inside the transaction below and
+        // throws InvalidOperationException - not a DbUpdateException, which is the only thing the
+        // pass catches - so it escapes the whole invocation before the summary is logged. No posting
+        // is ever stamped, no link is ever recovered, and the only symptom is a function that failed
+        // at night. CvVariantRepository states this same rule and avoids the transaction entirely by
+        // needing only one SaveChanges; here there are two statements that must land together, so
+        // the transaction is real and the strategy has to own it.
+        //
+        // The whole body is the retriable unit: a retry that replayed the commit without the updates
+        // would report a success that wrote nothing, which is the failure this method exists to make
+        // impossible.
+        return await db.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+        {
         var joined = db.Database.CurrentTransaction is not null;
         var transaction = joined ? null : await db.Database.BeginTransactionAsync(ct);
 
@@ -792,6 +809,7 @@ public sealed class EmployerAtsBoardRepository(JobsDbContext db)
                 await transaction.DisposeAsync();
             }
         }
+        });
     }
 
     /// <summary>The apply URL, refused rather than truncated where it will not fit its column.</summary>

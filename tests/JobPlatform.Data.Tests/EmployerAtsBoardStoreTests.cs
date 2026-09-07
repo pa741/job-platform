@@ -1,9 +1,10 @@
-using System.Reflection;
+﻿using System.Reflection;
 using JobPlatform.Core.Applications;
 using JobPlatform.Data.Sql;
 using JobPlatform.Data.Sql.Entities;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Xunit;
 
 namespace JobPlatform.Data.Tests;
@@ -905,4 +906,84 @@ public sealed class EmployerAtsBoardStoreTests : IDisposable
         // bytes that were already fetched.
         Assert.Empty(scoped);
     }
+
+    /// <summary>
+    /// A recovery is recorded under the retry policy the Functions host actually configures.
+    /// </summary>
+    /// <remarks>
+    /// <b>Written because the suite could not see the fault it is about.</b> Both hosts register
+    /// the context with <c>EnableRetryOnFailure</c>, and that execution strategy REFUSES a
+    /// user-initiated transaction - it throws <see cref="InvalidOperationException"/> the moment a
+    /// statement runs inside one. <c>RecordMatchesAsync</c> needs a transaction, because the
+    /// no-match stamp and the matched rows must land together, so it has to open one THROUGH the
+    /// strategy rather than beside it.
+    ///
+    /// <b>The failure it prevents is silent and total.</b> The first board read of the first nightly
+    /// pass would throw before anything was stamped; the pass catches <c>DbUpdateException</c> and
+    /// not this, so it escapes the whole invocation before the summary is logged. No link is ever
+    /// recovered, all 309 link-less postings stay link-less every night, and the only symptom is a
+    /// function that failed in the dark.
+    ///
+    /// These tests otherwise build a context with no execution strategy at all, which is how the
+    /// fault hid - the same shape as the host's global NoTracking, which four repositories were
+    /// silently saving nothing under until a fixture stopped reproducing the fault and started
+    /// catching it. So this one configures the strategy on purpose.
+    /// </remarks>
+    [Fact]
+    public async Task A_recovery_is_recorded_under_the_hosts_own_retry_policy()
+    {
+        var retrying = new DbContextOptionsBuilder<JobsDbContext>()
+            .UseSqlite(
+                _connection,
+                sqlite => sqlite.ExecutionStrategy(d => new TestRetryingExecutionStrategy(d)))
+            .Options;
+
+        var postings = await AddPostingsAsync(Acme, 2);
+
+        await using (var db = new JobsDbContext(retrying))
+        {
+            var stamped = await new EmployerAtsBoardRepository(db).RecordMatchesAsync(
+                [
+                    new AtsPostingMatch(
+                        postings[0],
+                        AtsListingMatch.For(
+                            Listing("https://boards.greenhouse.io/acme/jobs/1"),
+                            AtsMatchConfidence.TitleAndPlace)),
+
+                    // The posting the board had nothing for. It shares the write, which is the
+                    // whole reason a transaction is here at all.
+                    new AtsPostingMatch(postings[1], AtsListingMatch.None),
+                ],
+                Now);
+
+            Assert.Equal(2, stamped);
+        }
+
+        // Read back through a second context, so the assertion is about what reached the database
+        // rather than about what the change tracker remembers.
+        Assert.Equal(
+            "https://boards.greenhouse.io/acme/jobs/1",
+            (await PostingAsync(postings[0])).EmployerAtsApplyUrl);
+
+        // And the posting nothing matched is stamped as asked, which is what stops the pass
+        // re-reading the same employer every night.
+        var unmatched = await PostingAsync(postings[1]);
+
+        Assert.Null(unmatched.EmployerAtsApplyUrl);
+        Assert.Equal(Now, unmatched.EmployerAtsCheckedUtc);
+    }
+
+    /// <summary>A strategy that retries, so the refusal this suite is about is reachable on SQLite.</summary>
+    /// <remarks>
+    /// <c>SqlServerRetryingExecutionStrategy</c> cannot be used against SQLite, and the property
+    /// that matters is not which errors it retries but that <c>RetriesOnFailure</c> is true - that
+    /// alone is what makes EF refuse a user-initiated transaction. Nothing here needs a retry to
+    /// actually happen.
+    /// </remarks>
+    private sealed class TestRetryingExecutionStrategy(ExecutionStrategyDependencies dependencies)
+        : ExecutionStrategy(dependencies, maxRetryCount: 3, maxRetryDelay: TimeSpan.FromMilliseconds(1))
+    {
+        protected override bool ShouldRetryOn(Exception exception) => false;
+    }
+
 }
