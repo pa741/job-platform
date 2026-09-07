@@ -7,28 +7,28 @@ lives in [`HANDOFF.md`](HANDOFF.md). This file is one feature, and **the open wo
 because that is what someone picking this up needs. What was built, and what was verified, is
 below it.
 
-**Built on `feat/apply-loop`: fourteen tools - seven reads and seven writes - over an answer
-store, a resolver that runs server-side, parking, cross-board clustering and stored document
-packs.** The surface was six tools and read-mostly. A queue that says what to apply to and a pack
-that hands over the documents still leaves the loop unable to write down what happened, and an
-application that exists in the world and not in the log is the one state this pipeline cannot
-recover from - every later decision reads the log rather than the world. Section 2 says what each
-piece is.
+**Built and deployed: fifteen tools over an answer store, a server-side resolver, parking, cross-board
+clustering, a candidate-authored CV library and stored document packs.** The surface was six tools
+and read-mostly. Section 2 says what each piece is; sections 2.9 and 2.10 are the two features added
+after the apply loop itself.
 
-**Nothing here has been driven by a real MCP client yet.** The previous version of this file said
-that of six tools. It is true of fourteen: every one of them has been called by tests and by
-nothing else, and the write path in particular has never met a client that retries, crashes,
-resumes or gets an argument wrong. Section 1.3 is what to watch the first time it does.
+**Deployed on `main`, and the schema went first every time.** Four migrations have been applied by
+hand - `AddApplyLoop`, `AwaitingQuestion`, `CvLibrary` and, when it lands, `ApplyLinkRecovery`. The
+order matters and is not interchangeable: `deploy.yml` runs its migrate job *after* the container
+swap, so a dispatch would start the new image against a schema without the columns it selects. Both
+blob containers exist - `application-packs` and `profile-cvs`.
 
-**Nothing on this branch is deployed either.** Deploy runs on `main`, `AddApplyLoop` has never
-been applied to the live database, and the `application-packs` container does not exist in the
-subscription. That is section 1.1, and it comes before the client.
+**Nothing here has still been driven by a real MCP client.** The first version of this file said that
+of six tools; it was true of fourteen and it is true of fifteen. Every one has been called by tests
+and by hand over curl, and by nothing that retries, crashes, resumes or gets an argument wrong.
+Section 1.3 is what to watch the first time one does.
 
-**And the measurement that reordered the build: `ApplicationDocuments` holds exactly one row for
-the entire system.** Composing the filters the loop is meant to run on - `documentsReady: true`
-and `applyUrlSource: 'Posting'` and `minAssessmentScore: 80` - returns **zero** postings against
-7,368 in the corpus. **Document generation, not the tool surface, is what the loop is blocked
-on.** Section 3 has the numbers; section 1.2 is what to do about it.
+**What was the blocking measurement is no longer blocking.** `ApplicationDocuments` held one row for
+the entire system, which is why the nightly generation pass exists; it holds ten now and fills on its
+own. The constraint moved: of 382 postings worth applying to, **73 carry an employer apply link and
+all 309 that do not are LinkedIn**. Eight applications are complete and unsent. Section 3 has the
+numbers, 3.2a is what is being done about the link, and the only thing between eight ready packs and
+eight sent applications is a browser client that lives outside this repository on purpose.
 
 ---
 
@@ -167,34 +167,28 @@ and each is a place where a first real session says something a test cannot:
 - **Read `mcpDisclosures` back afterwards.** The field reads should be there, one record per field
   for the batch tool exactly as for the singular one, and **no value should be**.
 
-### 1.4 The candidate's half of the loop does not exist yet
+### 1.4 The candidate can answer now, but has to go and look
 
-The surface can put a question to the candidate. The candidate has nowhere to answer it.
+**Built on 2026-09-04.** `GET /api/v1/questions` and `POST /api/v1/questions/{id}/answer` exist, the
+dashboard has a Questions page, and the answer route is the one write in this system that may stamp
+an answer as the candidate's own - the source comes from the token and there is deliberately no
+field for it in the body. `Applications.tsx` was taught about parking in the same change; it had
+been counting any row with a non-null phase as sent, which would have counted a parked application
+as one that went out and then rendered it nowhere.
 
-- **There is no dashboard page for open questions and no HTTP route for answers.** `FormAnswers` is
-  reachable only through `record_form_answer`, which writes `Client` by design - only the dashboard
-  can say a person typed something. So the store can hold no candidate-asserted answer at all
-  today, and a `MissingAnswer` park is released by an agent typing the answer back through the same
-  client that asked for it.
-- **`web/src/pages/Applications.tsx:85,92` counts any row with a non-null phase as sent**, and
-  knows nothing about parking. The tools already project `parked`, `parkedReason`, `parkedAtUtc`
-  and `unparkedAtUtc`; the page does not read them, so a parked row is about to start reading as an
-  application that was made.
-- **An apply run has no HTTP surface.** `/api/v1/runs` is scrape runs. What an unattended pass
-  considered, sent and parked is readable only through the tools that wrote it - so the one account
-  of the loop nobody can see is the loop's own.
-- **The questions channel still carries the defect the original plan had.** `ask_candidate` was to
-  persist and return immediately, with the dashboard rendering the question; a tool that blocks
-  until a human answers holds a client session open for hours and loses the question when that
-  session dies. That shape is right and the *transport* named for it is wrong.
-  `IRealtimeFeed.PublishAsync` **broadcasts to every connected client**, which is correct for an AI
-  failure - that is a fact about the system - and would deliver one candidate's question to every
-  signed-in dashboard. `NegotiateAsync` already takes a `subjectId` and passes it through unused,
-  so a per-user send is an addition rather than a redesign - but it *is* work this plan never
-  costed. The queue half is now built (`OpenQuestions`, `list_open_questions`, and the park that
-  opens one); what is missing is the person's end and that send.
+**What is still missing is the push, and it is what "unattended" turns on.** A parked application
+waits until somebody opens the page. The realtime feed cannot be reused as it stands: `PublishAsync`
+broadcasts, which is right for an AI-failure notice and wrong for one candidate's question, so
+sending one down it would show that question to every signed-in dashboard. `NegotiateAsync` already
+takes a `subjectId` and passes it through unused, so a per-user send is an addition rather than a
+redesign - but it is an addition, and until it exists the loop's escalation channel is a page
+somebody has to remember to visit.
 
----
+**Two things about answering are worth knowing before the first real question arrives.** An answer
+is superseded rather than overwritten, so the store can still say what was submitted last year; and
+a sensitive answer - salary, right to work, every EEO question - can only ever exist because a
+person typed it, because nothing derived from the profile is allowed into that namespace at all.
+Section 2.4 is the split.
 
 ## 2. What is built
 
@@ -383,6 +377,79 @@ are what a change here turns red:
 token, no MCP client, no browser, no employer.
 
 ---
+
+### 2.9 The CV library, which took the model out of the CV
+
+**Why it exists is a sentence that shipped.** Asked what else an employer should know, the writer
+gave the candidate's citizenship - correctly, from their own summary - and then added *"I am an AI
+and they should have seen this."* It was stored, served through the pack, and would have been typed
+into Cloudflare's form under a person's name. A guard drops that class of sentence now, but a guard
+is a net under a trapeze: a curated CV takes the model out of the document that matters most,
+because it cannot invent a claim about work it is not writing about.
+
+The candidate authors up to **six** markdown variants; the writer no longer produces a CV at all,
+and keeps the cover letter and the posting-specific free text, which are short, genuinely
+per-posting and cheap where the advert is already in hand. `get_submission_pack` **chooses**:
+scoring every sendable variant over the shared concept graph, taking a winner only where it clears a
+floor of 50 and beats the runner-up by 10, handing a genuine tie to the model among the top few, and
+otherwise abstaining. Both constants are argued from `MatchScorer`'s own credit table rather than
+picked - every partial-credit relation is worth under half, so a CV answering every requirement by
+transferable ground alone tops out at 45 and cannot be sent on resemblance.
+
+**An abstention carries the gap rather than a refusal.** The posting parks as `NoCvVariant` with the
+concepts it wanted, `list_cv_gaps` and `/api/v1/cv-variants/gaps` pool those across everything
+blocked and rank them by how many applications each would release, and writing that CV brings them
+all back. Three things about it are easy to get wrong and are written down in the code: the park
+needs its **own** conditional retry class rather than joining the one that waits on an answer,
+because `ParkAsync` writes `AwaitingQuestionId` only for that class and a park with a null id falls
+through to the fallback that holds a posting until every question is answered; the release covers
+**any** recorded gap rather than all of them, because releasing sends nothing - selection re-runs and
+re-parks - while requiring all of them strands a posting whose candidate wrote a CV covering most of
+what was missing; and a `NoFit` carrying an empty gap set parks a posting **for ever**, so the
+selector names the whole demand set when the difference is empty and `ParkAsync` refuses the state
+outright.
+
+Every application uploads `Firstname_Surname_Curriculum_Vitae.pdf` whichever variant was sent. The
+variant's own name would tell an employer that a different CV is kept for other roles, and it
+arrives in the file list before anybody opens the document - so the stable name is the last path
+segment of the blob as well as the download header, because a client that saves a signed URL by its
+path and ignores the header would otherwise leak it.
+
+Variants live in their own container. A document id and a variant id are independent identity spaces
+that both start at one, so under one container document 34 and variant 34 for one candidate address
+the same directory - and since a chosen CV and a generated one now spell the filename identically,
+the same blob.
+
+### 2.10 Apply-link recovery, for the postings a board will not say
+
+Of 382 postings worth applying to, 73 carry an employer apply link and **all 309 that do not are
+LinkedIn**. Indeed and freehire publish one every time. Section 3.2a has the measurement and the
+decision behind this; the short version is that no account is used anywhere, and the employer's own
+applicant tracking system publishes the link on a documented, unauthenticated endpoint.
+
+A nightly pass **learns** a board token from any direct link an employer already published,
+**probes** a candidate from their name where none is held and **confirms** it before trusting it,
+then fetches each known board once and matches its listings to that employer's link-less postings by
+title and place. Greenhouse, Ashby, Lever and SmartRecruiters are verified live against real tokens
+from this corpus. The learn step is free - no network at all - and it is where 122 of the 309 are.
+
+**Three details carry the design.** Trust is `ConfirmedAtUtc`, a timestamp rather than a flag, so no
+value nobody set can read as permission - and a learned board is stamped as it is learned, because
+the link the employer published *is* the confirmation. The board's identity is vendor, token,
+**region** and employer, because Lever serves European tenants from a separate host and API: fold
+`jobs.eu.lever.co` into `jobs.lever.co` and the loser is asked of an endpoint that answers nothing,
+which reads as "not on Lever" and is indistinguishable from being absent. And a posting is stamped
+as checked even when nothing matched, or "no recovered link" means both *asked, nothing there* and
+*nobody has asked* - the same two-nulls-one-column fault `OffsiteApply` exists to undo.
+
+The recovered link sits beside `JobUrlDirect` and never over it, and reaches a client as a fourth
+provenance, `MatchedOnEmployerAts` - ranked between a link the board published and one borrowed from
+a stranger's listing. The link is real and the form opens either way, so nothing a browser sees
+separates a good recovery from a bad one; only the provenance can.
+
+**Workable is the one to expect least from.** Every Workable link in this corpus is
+`apply.workable.com/j/{code}`, which names no board, so those employers are reachable only through a
+probe - the weaker half of the feature.
 
 ## 3. Measured on the live database, 2026-09-02
 

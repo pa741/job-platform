@@ -1,4 +1,4 @@
-# job-platform
+﻿# job-platform
 
 The Azure side of a job-market data pipeline. A scraper
 ([`job-scrapper`](https://github.com/pa741/job-scrapper)) runs on a NAS and uploads
@@ -528,6 +528,37 @@ Roboto is embedded under the SIL Open Font License, and the resolver answers for
 because MigraDoc asks for "Courier New" whatever the document says. Installing fonts in the
 container was the alternative and was rejected: it renders differently on a developer's machine
 and turns a missing apt package into a 500 on somebody's CV download.
+
+## Apply links
+
+A posting is only worth anything to an automated run if there is somewhere to apply. Measured on
+the live corpus: of 382 postings judged worth applying to, **73 carry an employer apply link, and
+all 309 that do not are LinkedIn.** Indeed and freehire publish one every time. LinkedIn stopped
+publishing them to signed-out clients entirely, so four in five good matches name an employer and
+give a run nowhere to go.
+
+**No account is used to get them, and that is settled rather than unexplored.** Authenticated
+scraping breaches LinkedIn's User Agreement; the case that tested scraping ended with LinkedIn
+winning on contract, an injunction and the corpus destroyed; the 2026 enforcement wave targets
+browser automation specifically; and there is no sanctioned alternative, because LinkedIn's Job
+Posting API is write-only, for applicant tracking systems publishing *into* LinkedIn, and closed to
+new partners. Everything here reads what is published to anybody.
+
+**So the employer is asked instead.** Greenhouse, Ashby, Lever and SmartRecruiters all serve their
+board listings on documented, unauthenticated endpoints that exist to be read by job seekers. A
+nightly pass learns a board token from any direct link an employer already published, probes a
+candidate from their name where none is held and confirms it before trusting it, then fetches each
+board once and matches its listings to that employer's link-less postings by title and place. The
+learn step needs no network at all and covers 122 of the 309.
+
+Three things keep it honest. A recovered link never overwrites the one the board published — it
+arrives with its own provenance, ranked between a published link and one borrowed from a stranger's
+listing, because the recovered link is real and the form opens either way, so nothing a browser sees
+separates a good recovery from a bad one. A probed token is confirmed before use, since `Dex`,
+`Kernel` and `Orbital` are all real boards owned by *a* company and not necessarily the one on the
+advert. And the matcher abstains rather than guessing when several listings fit: a posting with no
+link is where it already was, while a posting with the wrong link is an application sent to the
+wrong vacancy.
 
 ## The dashboard
 

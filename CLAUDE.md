@@ -1,4 +1,4 @@
-# CLAUDE.md
+﻿# CLAUDE.md
 
 Guidance for Claude Code (or any assistant) working in this repository.
 
@@ -620,6 +620,53 @@ mechanism, and it is derived from the corpus rather than guessed at.
   `CallerIdentity.TryGetSubjectId`, which answers 401 when the token carries no `oid`, so swapping
   `AuthenticatedPolicy` for `PublicReadPolicy` left the read cases green. Defence in depth working,
   and a test measuring the second layer while describing the first.
+
+### Apply links, and where they come from
+
+- **No account is used to read any board, and that is a decision with a record rather than a
+  preference.** `mcp_handoff.md` 3.2 rejected authenticated LinkedIn and 3.2a says why the answer
+  did not change when its own reopening condition fired: hiQ ended with LinkedIn winning on
+  *contract* - an injunction, a judgment and the corpus destroyed - so a terms breach is actionable
+  even over public data; the 2026 enforcement wave targets browser automation specifically, which is
+  the shape an authenticated fetch takes; and there is no sanctioned route, because LinkedIn's Job
+  Posting API is write-only and closed to new partners. If a change here seems to need a cookie, a
+  session or a login, that is the signal the design is being worked around.
+- **The employer will tell you, and their ATS is a documented public endpoint.** Greenhouse, Ashby,
+  Lever and SmartRecruiters serve board listings unauthenticated, verified live against real tokens
+  from this corpus. That is a service to *their* customers rather than to us: one fetch per board per
+  pass rather than per posting - Cloudflare answers 333 jobs in one request - a descriptive
+  User-Agent, a timeout, and probes bounded to employers that actually have blocked postings.
+- **A 404 is an answer, not a fault.** It is how a probe fails, and logging it as an error makes the
+  log noise nobody reads.
+- **A board's identity is vendor, token, region *and* employer, and each part prevents a named
+  failure.** Lever serves European tenants from a separate host and API, so folding
+  `jobs.eu.lever.co` into `jobs.lever.co` asks the loser of an endpoint that answers nothing - which
+  reads as "not on Lever" and is indistinguishable from the employer genuinely not being there, with
+  no count that moves. Drop the employer and a token becomes globally unique, so one wrong probe of
+  `orbital` blocks the company that can prove that token from a link they published.
+- **A probed token is confirmed before it is trusted, and trust is a timestamp rather than a flag.**
+  `ConfirmedAtUtc` set is the whole test, so no value nobody set can read as permission - and a
+  learned board is stamped as it is learned, because the link the employer published *is* the
+  confirmation, which removes the "learned boards are exempt" branch somebody would forget. Probing
+  matters because slugs collide: `Dex`, `Kernel`, `Fin` and `Orbital` are all real boards owned by
+  *a* company, not necessarily the one on the advert.
+- **A recovered link never overwrites `JobUrlDirect`, and reaches a client as its own provenance.**
+  That column is what the board itself published, and the whole argument rests on the two being
+  distinguishable. `MatchedOnEmployerAts` ranks between a published link and one borrowed from a
+  stranger's listing: the recovered link is real and the form opens either way, so nothing a browser
+  sees separates a good recovery from a bad one - only the provenance can. Folded into `Posting`
+  both its failure modes become invisible.
+- **A posting is stamped as checked even when nothing matched.** Otherwise "no recovered link" means
+  both "asked, nothing there" and "nobody has asked", the pass re-asks the same employer every night,
+  and it is the same two-nulls-in-one-column fault `OffsiteApply` was added to undo.
+- **The matcher abstains rather than guessing, for the reason the cross-board key requires a city.**
+  An employer's board is a catalogue - several listings can match one title - and an abstention costs
+  a posting that stays where it already was, while a wrong match is an application sent to the wrong
+  vacancy. Title and employer alone matched 285 postings across boards and adding the city left 211;
+  the same failure is available here and is worse, because this link is the one an agent opens.
+- **Do not expect much from Workable.** Every Workable link in this corpus is
+  `apply.workable.com/j/{code}`, which names no board, so those employers are reachable only through
+  a probe. Workday has no clean public listing at all and is deliberately out of scope.
 
 ### Dashboard (`web/`)
 
