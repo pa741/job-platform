@@ -9,8 +9,9 @@ namespace JobPlatform.Core.Submissions;
 /// <b>The agent surface refuses <c>get_profile</c> because a tool result is transcript content
 /// wherever the client runs.</b> Two tools cross that line anyway, deliberately and narrowly:
 /// <c>get_form_field</c> answers one allowlisted question at a time, and
-/// <c>get_submission_pack</c> returns the tailored CV and cover letter, which is the profile
-/// rewritten in prose. Both are the right trade - an agent filling a form needs them - and both
+/// <c>get_submission_pack</c> returns the chosen CV and the cover letter, which is the profile
+/// rewritten in prose - the CV in the candidate's own words rather than a model's, which changes
+/// who wrote it and not what it discloses. Both are the right trade - an agent filling a form needs them - and both
 /// are exactly the kind of thing that should not happen without a record.
 ///
 /// <b>Never the value.</b> This says <i>that</i> the phone number was disclosed, when, to which

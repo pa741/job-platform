@@ -1,8 +1,10 @@
 using System.Security.Claims;
 using JobPlatform.Api.Endpoints;
 using JobPlatform.Api.Infrastructure;
+using JobPlatform.Core.Applications;
 using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Matching;
+using JobPlatform.Core.Model;
 using JobPlatform.Data.Sql;
 using Microsoft.AspNetCore.Mvc;
 
@@ -48,10 +50,103 @@ public sealed class MatchEndpoints : IEndpointGroup
             .WithName("SetMatchDismissed")
             .WithSummary("Marks a match as not interesting, or takes that back.");
 
+        group.MapGet("/{postingId:long}/cv", CurriculumVitaeAsync)
+            .WithName("GetMatchCurriculumVitae")
+            .WithSummary("Which of the candidate's own CVs goes with this posting, and why.");
+
         group.MapGet("/skill-gap", SkillGapAsync)
             .WithName("GetSkillGap")
             .WithSummary("What the candidate's matched band asks for that their profile lacks.");
     }
+
+    /// <summary>
+    /// Which CV goes with this posting, run as arithmetic and nothing else.
+    /// </summary>
+    /// <remarks>
+    /// <b>This exists because the dashboard was rendering a document that is no longer written.</b>
+    /// A draft's <c>curriculumVitaeMarkdown</c> is null for everything generated since the CV
+    /// library replaced per-posting generation, so the page showed an empty CV panel next to a
+    /// perfectly good cover letter - which reads as a failure rather than as the design.
+    ///
+    /// <b>It runs the selector and stops there.</b> <c>get_submission_pack</c> does two more
+    /// things with the same selection: it puts a genuine tie to a model, and it parks the posting
+    /// when nothing in the library fits. Neither may happen behind a page load - the first spends
+    /// money on a route a client can call repeatedly, and the second is a write that would put a
+    /// posting down because somebody expanded a row. So a tie is reported as a tie and an
+    /// abstention as an abstention, and the pack still decides at send time.
+    ///
+    /// <b>Read off the stored match, not off <c>PostingConcepts</c>.</b>
+    /// <c>CvVariantSelector.DemandsOf</c> is shared with the pack for exactly that reason: the CV
+    /// is chosen against the same requirement set the breakdown on the same page was computed
+    /// from, and a re-extraction cannot make the two disagree.
+    ///
+    /// Two queries, neither of which reads a document: the match row - which does not project the
+    /// advert - and the library as facts, which carries ids, labels and concept keys and never
+    /// markdown.
+    /// </remarks>
+    private static async Task<IResult> CurriculumVitaeAsync(
+        ClaimsPrincipal user,
+        long postingId,
+        [FromServices] CandidateProfileRepository profiles,
+        [FromServices] JobMatchRepository matches,
+        [FromServices] CvVariantRepository variants,
+        CancellationToken ct)
+    {
+        if (!user.TryGetSubjectId(out var subjectId, out var error))
+        {
+            return error;
+        }
+
+        var profileId = await profiles.GetIdAsync(subjectId, ct);
+
+        if (profileId is null)
+        {
+            return TypedResults.NotFound();
+        }
+
+        // The pair, not the posting. A posting this candidate was never scored against has no
+        // demands to choose a CV over, and answering anything for it would be answering about
+        // somebody else's shortlist.
+        var row = await matches.GetDetailAsync(profileId.Value, postingId, ct);
+
+        if (row is null)
+        {
+            return TypedResults.NotFound();
+        }
+
+        var library = await variants.ListSelectableFactsAsync(profileId.Value, ct);
+
+        var selection = CvVariantSelector.Select(
+            CvVariantSelector.DemandsOf(
+                row.Read<ConceptMatch>(row.MatchedJson),
+                row.Read<ConceptGap>(row.GapsJson)),
+            library);
+
+        return TypedResults.Ok(new CvChoiceResponse
+        {
+            PostingId = postingId,
+            Outcome = selection.Outcome.ToString(),
+            Chosen = selection.Chosen is { } chosen ? ToChoice(chosen) : null,
+            Tied = [.. selection.Tied.Select(ToChoice)],
+            Missing = [.. selection.Missing.Select(gap =>
+                new CvChoiceGap(gap.RequiredKey, GapLabel(gap.RequiredKey)))],
+            Rationale = selection.Rationale,
+            DecidedBy = selection.Outcome is CvSelectionOutcome.Chosen ? "arithmetic" : null,
+            Considered = library.Count,
+        });
+
+        static CvChoiceVariant ToChoice(CvVariantScore score)
+            => new(score.VariantId, score.Label, score.Score, score.Answered);
+    }
+
+    /// <summary>The vocabulary's name for a key, or the key where it knows none.</summary>
+    /// <remarks>
+    /// A raw key printed to a person is bad and a requirement silently dropped from a list of what
+    /// to write next is worse, so an unknown key prints as itself. The same fallback the selector's
+    /// own rationale uses.
+    /// </remarks>
+    private static string GapLabel(string key)
+        => ConceptGraph.Default.TryGet(key, out var concept) ? concept.Label : key;
 
     /// <summary>Default score floor for the gap. The band worth taking advice from.</summary>
     private const int GapMinimumScore = 40;
@@ -155,16 +250,30 @@ public sealed class MatchEndpoints : IEndpointGroup
         };
     }
 
+    /// <param name="postedWithinDays">
+    /// Only postings posted within this many days. Omitted for the whole scored corpus.
+    /// </param>
+    /// <remarks>
+    /// <b>A window in days rather than an instant, and the server holds the clock.</b> The
+    /// question this control asks is "what is new", which is relative to now; a client that
+    /// resolves it against its own clock asks a slightly different question from the one on the
+    /// screen, and a bookmarked filter asks yesterday's. Answered by <c>PostingAge</c>: the
+    /// board's stated posted date where there is one, first-seen where there is not, because two
+    /// postings in five state a date and a filter that believed only those would hide the rest of
+    /// the shortlist.
+    /// </remarks>
     private static async Task<IResult> ListAsync(
         ClaimsPrincipal user,
         [FromServices] CandidateProfileRepository profiles,
         [FromServices] JobMatchRepository matches,
+        TimeProvider clock,
         CancellationToken ct,
         int minScore = 0,
         bool assessedOnly = false,
         int limit = 25,
         int offset = 0,
-        bool dismissed = false)
+        bool dismissed = false,
+        int? postedWithinDays = null)
     {
         if (!user.TryGetSubjectId(out var subjectId, out var error))
         {
@@ -175,6 +284,13 @@ public sealed class MatchEndpoints : IEndpointGroup
         {
             return TypedResults.Problem(
                 detail: "offset must not be negative.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        if (postedWithinDays is < 0)
+        {
+            return TypedResults.Problem(
+                detail: "postedWithinDays must not be negative.",
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
@@ -196,6 +312,7 @@ public sealed class MatchEndpoints : IEndpointGroup
             Math.Clamp(limit, 1, MaxLimit),
             offset,
             dismissed,
+            postedWithinDays is { } days ? PostingAge.Cutoff(clock.GetUtcNow(), days) : null,
             ct);
 
         return TypedResults.Ok(new { items = rows.Select(ToSummary).ToList(), offset });

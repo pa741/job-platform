@@ -571,9 +571,55 @@ export interface ApplicationSummary {
 }
 
 export interface ApplicationDetail extends ApplicationSummary {
-  curriculumVitaeMarkdown: string;
+  /**
+   * The CV, for a draft old enough to have one. Null for everything written since.
+   *
+   * The CV stopped being written per posting when the library replaced it: it is chosen from the
+   * variants the candidate wrote themselves, and `GET /matches/{postingId}/cv` says which one.
+   * The field survives so an application made under the old rule stays explicable — "what exactly
+   * did we send them" is a question about a document somebody else received — and a page must
+   * branch on it rather than render it, because rendering null is a blank panel that reads as a
+   * failure.
+   */
+  curriculumVitaeMarkdown: string | null;
   coverLetterMarkdown: string;
   emphasised: string[];
+}
+
+/**
+ * Which of the candidate's own CVs goes with one posting, and why.
+ *
+ * The arithmetic's answer. The pack an agent assembles runs the same selector and can do two
+ * things this cannot — put a genuine tie to a model, and park a posting nothing fits — because
+ * neither belongs behind a page load. So `Ambiguous` is shown as a tie rather than as a choice.
+ */
+export interface CvChoice {
+  postingId: number;
+  outcome: 'Chosen' | 'Ambiguous' | 'NoFit';
+
+  /** The CV that would be sent. Null on every outcome but `Chosen`. */
+  chosen: CvChoiceVariant | null;
+
+  /** The variants nothing could separate. Only for `Ambiguous`. */
+  tied: CvChoiceVariant[];
+
+  /** What this posting asks for that no CV in the library answers. The brief for the next one. */
+  missing: { concept: string; label: string }[];
+
+  rationale: string;
+
+  /** `arithmetic` where one was chosen, otherwise null. Never `model` from this route. */
+  decidedBy: string | null;
+
+  /** How many CVs were eligible at all. Zero is "write one", not "write a different one". */
+  considered: number;
+}
+
+export interface CvChoiceVariant {
+  variantId: number;
+  label: string;
+  score: number;
+  answered: number;
 }
 
 // ---------------------------------------------------------------------------

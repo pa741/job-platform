@@ -1,5 +1,6 @@
 ﻿using JobPlatform.Core.Applications;
 using JobPlatform.Core.Dedup;
+using JobPlatform.Core.Model;
 using JobPlatform.Core.Submissions;
 using JobPlatform.Data.Sql;
 using JobPlatform.Documents;
@@ -69,6 +70,25 @@ public sealed class ApplicationGenerationOptions
     /// three because it happens to read 80 today.
     /// </remarks>
     public int MinAssessmentScore { get; set; } = 80;
+
+    /// <summary>
+    /// Only write for postings posted within this many days. Null for every age.
+    /// </summary>
+    /// <remarks>
+    /// <b>Settings for the same reason <see cref="MinAssessmentScore"/> is: it has to be able to
+    /// equal what the run asks for, without a deploy.</b> This pass writes for the set
+    /// <c>ApplyableQuery</c> returns and never for one of its own, and an unattended run that
+    /// pulls <c>postedWithinDays: 1</c> against a pass that wrote for every age gets a queue of
+    /// today's postings with no documents and a pile of drafts for adverts it will not ask about.
+    /// The floor already had this failure mode and this is the second axis of it.
+    ///
+    /// <b>Null by default, which is the behaviour this pass has always had.</b> A default of one
+    /// or three would be this file deciding the cadence for every deployment; the cadence belongs
+    /// to whoever configures the run. The nightly sweep's reservation is a different question - it
+    /// decides where a judgement budget goes and has to answer it every night whatever anyone
+    /// configured.
+    /// </remarks>
+    public int? PostedWithinDays { get; set; }
 }
 
 /// <summary>
@@ -430,6 +450,10 @@ public sealed class GenerateApplicationsFunction(
                 ApplyUrlSource = ApplyUrlSource.Posting,
                 MinAssessmentScore = floor,
 
+                // Whatever the run is configured to pull. Unset unless somebody says so - see
+                // ApplicationGenerationOptions.PostedWithinDays for why this is not a default.
+                PostedSince = AgeBound(),
+
                 // Left at the default deliberately. This is the ordering a run gets, and writing
                 // in a different order would mean the documents exist for the postings the run
                 // reaches last.
@@ -788,6 +812,19 @@ public sealed class GenerateApplicationsFunction(
     /// unbounded - a count is not worth an unbounded read against a database billed on wall-clock
     /// time, and "at least this many" answers the question a cap is set against.
     /// </remarks>
+    /// <summary>
+    /// The age bound both queries run under, resolved once per call from the clock.
+    /// </summary>
+    /// <remarks>
+    /// Written here rather than at the two call sites so the batch and the backlog count cannot
+    /// answer about different sets - the whole value of that figure is that it counts what this
+    /// pass would write for.
+    /// </remarks>
+    private DateTimeOffset? AgeBound()
+        => options.Value.PostedWithinDays is { } days
+            ? PostingAge.Cutoff(time.GetUtcNow(), days)
+            : null;
+
     private async Task<int> WaitingAsync(IReadOnlyList<long> profileIds, int floor, CancellationToken ct)
     {
         var waiting = 0;
@@ -801,6 +838,10 @@ public sealed class GenerateApplicationsFunction(
                     DocumentsReady = false,
                     ApplyUrlSource = ApplyUrlSource.Posting,
                     MinAssessmentScore = floor,
+                    // The same bound the batch was drawn under. A count over a wider set would
+                    // report a backlog this pass is not going to write for, which is the one thing
+                    // this figure exists not to do.
+                    PostedSince = AgeBound(),
                     Limit = WaitingCeiling,
                 },
                 ct);

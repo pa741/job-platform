@@ -7,7 +7,7 @@ import type {
   ScraperSearchRequest, ScraperSearchListResponse, ScraperSearchOptionsResponse,
   SkillGapResponse, Submission, SubmissionEvent,
   AnswerQuestionRequest, AnswerQuestionResponse, OpenQuestion,
-  CreateCvVariantRequest, CvGapBriefResponse, CvLibraryResponse, CvVariantDetail,
+  CreateCvVariantRequest, CvChoice, CvGapBriefResponse, CvLibraryResponse, CvVariantDetail,
 } from './types';
 
 /** Thrown for any non-2xx response, carrying the RFC 9457 detail the API returns. */
@@ -460,6 +460,16 @@ export class JobPlatformApi {
   match = (postingId: number) => this.request<MatchDetail>(`/api/v1/matches/${postingId}`);
 
   /**
+   * Which of the candidate's own CVs goes with one posting.
+   *
+   * A read, and deliberately a cheap one: it runs the selector's arithmetic and never a model,
+   * and it writes nothing. The CV is no longer written per posting, so this is what a page shows
+   * where it used to show generated markdown.
+   */
+  cvChoice = (postingId: number) =>
+    this.request<CvChoice>(`/api/v1/matches/${postingId}/cv`);
+
+  /**
    * Sets, or clears, "not interested" on one match.
    *
    * A PUT because it sets a state rather than appending to a log, so a client retrying one it
@@ -488,7 +498,7 @@ export class JobPlatformApi {
   application = (id: number) => this.request<ApplicationDetail>(`/api/v1/applications/${id}`);
 
   /**
-   * Writes a tailored CV and cover letter.
+   * Writes the cover letter and this advert's own questions. The CV is chosen, not written.
    *
    * The one call in this client that costs real money and takes tens of seconds, so it is
    * always driven by an explicit user action - never by a page opening.
@@ -571,6 +581,16 @@ export interface MatchQuery {
   offset?: number;
   /** The dismissed pile instead of the shortlist. Never both - see the repository. */
   dismissed?: boolean;
+  /**
+   * Only postings posted within this many days. 1 is today's and yesterday's.
+   *
+   * Days rather than a date, because the server holds the clock: a window resolved here would
+   * be resolved against a browser that may be minutes out and against a bookmarked filter that
+   * is a day out. Answered from the board's stated posted date where it published one and from
+   * first-seen where it did not - two postings in five state a date, and a filter believing only
+   * those would hide the rest of the shortlist.
+   */
+  postedWithinDays?: number;
 }
 
 export interface PostingQuery {
@@ -597,6 +617,9 @@ export interface PostingQuery {
   includeTextSalary?: boolean;
   securityClearance?: boolean;
   ir35?: string;
+
+  /** Only postings posted within this many days. See {@link MatchQuery.postedWithinDays}. */
+  postedWithinDays?: number;
 
   sort?: string;
   order?: string;

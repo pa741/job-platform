@@ -206,7 +206,7 @@ ingest function uses.
 
 | Route | |
 | --- | --- |
-| `GET /api/v1/postings` | Search: free text, site, company, job type, location, remote, salary, date ranges; five sort orders. Plus the structured axes below |
+| `GET /api/v1/postings` | Search: free text, site, company, job type, location, remote, salary, date ranges, `postedWithinDays`; five sort orders. Plus the structured axes below |
 | `GET /api/v1/postings/{id}` | One posting in full |
 | `GET /api/v1/postings/facets` | Filter vocabulary and totals, for building a filter UI in one round trip |
 | `GET /api/v1/search-terms` | The axis everything partitions on |
@@ -229,8 +229,9 @@ posting endpoints during development never reaches them.
 | `GET /api/v1/profile` | The caller's profile. 404 where they have not created one, which is a real state rather than an error |
 | `PUT /api/v1/profile` | Replaces it with the submitted form, and re-reads it for skills when the text actually changed |
 | `DELETE /api/v1/profile` | Erases the profile, every match, every generated document and the whole CV library |
-| `GET /api/v1/matches` | Scored matches, best first. `minScore`, `assessedOnly`, paging |
+| `GET /api/v1/matches` | Scored matches, best first. `minScore`, `assessedOnly`, `postedWithinDays`, paging |
 | `GET /api/v1/matches/{postingId}` | One match with the breakdown behind the number |
+| `GET /api/v1/matches/{postingId}/cv` | Which of your own CVs goes with this posting, and why. Arithmetic only: it never spends a model call and never parks anything |
 | `GET /api/v1/searches` | The caller's scraper searches, and when the scraper was last told about them |
 | `POST`, `PUT /{slug}`, `DELETE /{slug}` | Add, replace and remove one. Each rewrites the scraper's configuration |
 | `POST /api/v1/searches/publish` | Rewrites that configuration from what is stored. The repair path |
@@ -395,6 +396,29 @@ weighting scheme distinguishes them because the difference is in the prose.
 **Both verdicts are stored and neither overwrites the other.** They disagree fairly often, and
 the disagreement is the informative part: a 58 the model calls strong is precisely the posting
 worth surfacing, and collapsing the two into one column deletes the only signal that says so.
+
+**Two thirds of each night's judgements are reserved for postings from the last three days.** The
+whole system is built around a day — one scrape, one sweep, one apply run — and an application
+sent a week after the advert went up is competing against a shortlist the employer has already
+drawn. Spending the budget top-down by score alone does not deliver that: pairs above the
+threshold accumulate, the highest are judged first whatever their age, and a corpus with a backlog
+spends every night on the backlog.
+
+Sorting by age instead is the obvious fix and is worse. Age says nothing about whether the
+candidate fits — a fresh posting scoring 46 is not a better use of a judgement than a
+three-day-old one scoring 97 — and it is absorbing: once the daily arrivals exceed the budget,
+nothing older is ever judged again. So the budget splits rather than the question being decided,
+exactly as it already splits for the measurement sample. The recent draw is ordered by score like
+every other, it is capped, and whatever it cannot fill goes back to the draw over the whole
+corpus, so a quiet day costs nothing and the backlog still drains. **Recency is a claim on the
+budget and never on the match**: no score, ranking or threshold reads a date, and a fresh posting
+the arithmetic rejected stays rejected.
+
+How old a posting *is* has one definition and it is not obvious. The board's stated posted date
+where it published one — two postings in five — and when this system first read it where it did
+not. Believing only the stated date would hide most of the market; believing only first-seen would
+let a search term added this week deliver three-week-old adverts as today's work. The same rule
+answers the age filter on the shortlist, on the corpus search and on the agent's apply queue.
 
 All of it runs at 03:30 UTC, after the ingest and extraction queues have drained — never when
 somebody opens the page. A shortlist that costs model calls to look at is one nobody can afford

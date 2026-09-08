@@ -3,6 +3,7 @@ import { ApiError, type JobPlatformApi } from '../api/client';
 import type {
   ApplicationDetail, ApplicationSummary, OpenQuestion, Submission, SubmissionEvent,
 } from '../api/types';
+import { ChosenCv } from '../components/ChosenCv';
 import { ErrorNote } from '../components/Primitives';
 import { useApiResource } from '../components/useApiResource';
 import { WakingRegion, LoadingRegion } from '../components/WakingRegion';
@@ -502,9 +503,6 @@ function Draft({ api, draft, onSent }: {
           <button className="btn" onClick={() => detail ? setDetail(undefined) : void api.application(draft.id).then(setDetail).catch(setError)}>
             {detail ? 'Hide the draft' : 'Read the draft'}
           </button>
-          <button className="btn" disabled={downloading === 'cv'} onClick={() => download('cv', `CV-${draft.postingTitle}.pdf`)}>
-            {downloading === 'cv' ? 'Preparing…' : 'CV (PDF)'}
-          </button>
           <button
             className="btn" disabled={downloading === 'cover-letter'}
             onClick={() => download('cover-letter', `Cover-letter-${draft.postingTitle}.pdf`)}
@@ -531,8 +529,28 @@ function Draft({ api, draft, onSent }: {
               <ul className="tight">{detail.emphasised.map((x) => <li key={x}>{x}</li>)}</ul>
             </>
           )}
-          <h4 className="mini">CV</h4>
-          <pre className="markdown">{detail.curriculumVitaeMarkdown}</pre>
+
+          {/* The CV is chosen from the library rather than written for the posting, so a draft
+              carries no CV markdown and the head carries no CV download. Both appear only for a
+              draft written before that change, which stays readable because an application
+              somebody actually received has to stay explicable. */}
+          {detail.curriculumVitaeMarkdown
+            ? (
+              <>
+                <h4 className="mini">CV</h4>
+                <pre className="markdown">{detail.curriculumVitaeMarkdown}</pre>
+                <div className="row-actions">
+                  <button
+                    className="btn" disabled={downloading === 'cv'}
+                    onClick={() => download('cv', `CV-${draft.postingTitle}.pdf`)}
+                  >
+                    {downloading === 'cv' ? 'Preparing…' : 'CV (PDF)'}
+                  </button>
+                </div>
+              </>
+            )
+            : <ChosenCv api={api} postingId={draft.postingId} />}
+
           <h4 className="mini">Cover letter</h4>
           <pre className="markdown">{detail.coverLetterMarkdown}</pre>
         </>

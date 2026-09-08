@@ -82,6 +82,22 @@ public sealed record PostingSearchCriteria
     public DateTimeOffset? FirstSeenFrom { get; init; }
     public DateTimeOffset? FirstSeenTo { get; init; }
 
+    /// <summary>
+    /// Only postings posted at or after this instant, falling back to first-seen.
+    /// </summary>
+    /// <remarks>
+    /// <b>Not <see cref="PostedFrom"/> with the arithmetic done for you.</b> That one filters
+    /// <c>DatePosted</c> and nothing else, which is right for an analysis of what the boards
+    /// state and wrong for the question a person actually asks a list - "what is new" - because
+    /// three postings in five state no date and would silently vanish from the answer. This one
+    /// believes the stated date where there is one and falls back to when this system first read
+    /// the posting where there is not. <c>PostingAge</c> holds the rule and the reasoning.
+    ///
+    /// Both are kept because they answer different questions and a caller that wants the strict
+    /// one should not have to defeat this one to get it.
+    /// </remarks>
+    public DateTimeOffset? PostedSince { get; init; }
+
     public PostingSort Sort { get; init; } = PostingSort.LastSeen;
     public bool Descending { get; init; } = true;
 

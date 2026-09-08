@@ -97,7 +97,7 @@ public sealed record MatchRow(
 /// When the posting first entered the corpus, so a run can ask what is new since the last one.
 /// Not <c>LastSeenUtc</c>: a re-scrape moves that on every live posting there is.
 /// </param>
-/// <param name="HasDocuments">Whether a tailored CV and cover letter already exist for this pair.</param>
+/// <param name="HasDocuments">Whether a generated cover letter already exists for this pair.</param>
 /// <param name="DedupeKey">
 /// The cross-board identity every listing of this job shares, or null where the posting has
 /// none. Null is not an empty key - see <paramref name="AlternatePostings"/>.
@@ -199,6 +199,20 @@ public sealed record ApplyableQuery
     /// every time, which is an answer a run cannot act on.
     /// </remarks>
     public DateTimeOffset? Since { get; init; }
+
+    /// <summary>Only postings whose posted date is at or after this instant.</summary>
+    /// <remarks>
+    /// <b>A different question from <see cref="Since"/>, and a run that means "today's jobs"
+    /// wants this one.</b> <see cref="Since"/> asks when this system first read the posting;
+    /// this asks when the employer posted it, which is what an applicant is actually racing.
+    /// The two agree for most of the corpus and disagree exactly where it matters - a search
+    /// term added this week floods the pipeline with postings that are new to it and three
+    /// weeks old to the market, and only this bound rejects them.
+    ///
+    /// Answered by <see cref="PostingRecency.Matches"/>: the board's stated date where it
+    /// published one, first-seen where it did not. See <c>PostingAge</c> for why that way round.
+    /// </remarks>
+    public DateTimeOffset? PostedSince { get; init; }
 
     /// <summary>Only pairs the model judged at or after this instant.</summary>
     /// <remarks>
@@ -547,11 +561,25 @@ public sealed class JobMatchRepository(JobsDbContext db)
     /// the textbook shape of pooling bias. A band is what makes a stratified sample reachable,
     /// and a stratified sample is what makes those numbers statements about the corpus.
     /// </remarks>
+    /// <param name="postedSince">
+    /// Only postings posted at or after this instant, for the recent share of the nightly budget.
+    /// </param>
+    /// <remarks>
+    /// <b>The recent cohort is a second draw rather than a different order, and that is the
+    /// choice.</b> Sorting by age before score would hand a whole night to whatever arrived
+    /// today, however weakly it scored, and a backlog above it would never be judged again.
+    /// Drawing the recent rows separately and capping that draw gives them a reserved share of
+    /// the budget and leaves the rest top-down over everything - the same shape as the
+    /// measurement sample, for the same reason: two purposes that genuinely conflict get a split
+    /// rather than a winner. <c>MatchSweepFunction</c> holds the split; this only answers the
+    /// question it is asked.
+    /// </remarks>
     public async Task<IReadOnlyList<CandidacyRequest>> GetUnassessedAsync(
         long profileId,
         int minimumScore,
         int limit,
         int? maximumScore = null,
+        DateTimeOffset? postedSince = null,
         CancellationToken ct = default)
     {
         var query = db.JobMatches
@@ -583,6 +611,11 @@ public sealed class JobMatchRepository(JobsDbContext db)
         if (maximumScore is { } ceiling)
         {
             query = query.Where(m => m.Score <= ceiling);
+        }
+
+        if (postedSince is { } cutoff)
+        {
+            query = query.Where(PostingRecency.Matches(cutoff));
         }
 
         var ordered = maximumScore is null
@@ -692,6 +725,9 @@ public sealed class JobMatchRepository(JobsDbContext db)
     /// <c>(ProfileId, RankScore)</c> index precisely so that showing fifty matches does not read
     /// fifty unbounded text columns.
     /// </remarks>
+    /// <param name="postedSince">
+    /// Only postings posted at or after this instant. Null for the whole scored corpus.
+    /// </param>
     public async Task<IReadOnlyList<MatchRow>> ListAsync(
         long profileId,
         int minimumScore,
@@ -699,6 +735,7 @@ public sealed class JobMatchRepository(JobsDbContext db)
         int limit,
         int offset,
         bool dismissed = false,
+        DateTimeOffset? postedSince = null,
         CancellationToken ct = default)
     {
         var query = db.JobMatches
@@ -708,6 +745,14 @@ public sealed class JobMatchRepository(JobsDbContext db)
         if (assessedOnly)
         {
             query = query.Where(m => m.AssessedAtUtc != null);
+        }
+
+        // In the query rather than over the page, like every other filter on this path: applied
+        // after Skip and Take it would not be a filter at all, it would be a silent reduction of
+        // the page size, and the offset would step over rows the caller never saw.
+        if (postedSince is { } cutoff)
+        {
+            query = query.Where(PostingRecency.Matches(cutoff));
         }
 
         // Either the shortlist or the dismissed pile, never both. A list that mixes them puts
@@ -1093,6 +1138,11 @@ public sealed class JobMatchRepository(JobsDbContext db)
         if (query.Since is { } since)
         {
             matches = matches.Where(m => m.Posting!.FirstSeenUtc >= since);
+        }
+
+        if (query.PostedSince is { } postedSince)
+        {
+            matches = matches.Where(PostingRecency.Matches(postedSince));
         }
 
         if (query.AssessedSince is { } assessedSince)

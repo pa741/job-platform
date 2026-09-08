@@ -625,6 +625,42 @@ public sealed class ApplyQueueTests : IDisposable
     }
 
     [Fact]
+    public async Task The_posted_within_filter_asks_a_different_question_from_first_seen()
+    {
+        // Nothing in this fixture states a posted date, which is the corpus's own shape: three
+        // postings in five say nothing. With every board silent the two bounds agree, because the
+        // rule falls back to the one date this system holds first-hand.
+        var seen = await QueueAsync(new ApplyableQuery { Since = Day(4), Limit = 50 });
+        var posted = await QueueAsync(new ApplyableQuery { PostedSince = Day(4), Limit = 50 });
+
+        Assert.Equal(Ids(seen), Ids(posted));
+
+        // Now one of them says when it went up, and says it was weeks before this system first
+        // read it. That is what a search term added this week delivers by the hundred, and it is
+        // the whole reason these are two filters and not one: a run asking for today's jobs must
+        // not be handed a month-old advert because the scrape only just found it.
+        await using (var db = CreateContext())
+        {
+            await db.JobPostings
+                .Where(p => p.Id == 4)
+                .ExecuteUpdateAsync(p => p.SetProperty(x => x.DatePosted, new DateOnly(2026, 7, 1)));
+        }
+
+        var stillArrived = await QueueAsync(new ApplyableQuery { Since = Day(4), Limit = 50 });
+        var stillFresh = await QueueAsync(new ApplyableQuery { PostedSince = Day(4), Limit = 50 });
+
+        Assert.Equal([Applyable, 4, 5], Ids(stillArrived));
+        Assert.Equal([Applyable, 5], Ids(stillFresh));
+
+        // Before the bound, like every other filter on this queue. Posting 1 is the head of the
+        // unfiltered queue and states no date at all, so a bound applied first would return it and
+        // then drop it, and a run asking for one job would get none.
+        var bounded = await QueueAsync(new ApplyableQuery { PostedSince = Day(4), Limit = 1 });
+
+        Assert.Equal([Applyable], Ids(bounded));
+    }
+
+    [Fact]
     public async Task The_queue_can_be_ordered_by_either_score_instead_of_the_ranking_key()
     {
         var byScore = await QueueAsync(new ApplyableQuery { Sort = ApplyableSort.Score, Limit = 50 });

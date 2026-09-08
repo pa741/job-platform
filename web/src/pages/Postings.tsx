@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { JobPlatformApi, PostingQuery } from '../api/client';
 import type { FacetsResponse, PageResponse, PostingSummary } from '../api/types';
+import { PostedWithin } from '../components/PostedWithin';
 import { Card, ErrorNote } from '../components/Primitives';
 import { PostingInsightPanel } from './PostingInsightPanel';
 
@@ -149,6 +150,7 @@ export function Postings({ api, searchTerm, inspecting, onInspect }: {
   const [workArrangement, setWorkArrangement] = useState('');
   const [minAnnualSalary, setMinAnnualSalary] = useState('');
   const [hasSalary, setHasSalary] = useState('');
+  const [postedWithinDays, setPostedWithinDays] = useState<number>();
   const [sort, setSort] = useState('lastSeen');
 
   useEffect(() => {
@@ -172,6 +174,7 @@ export function Postings({ api, searchTerm, inspecting, onInspect }: {
       // means the same thing for both.
       minAnnualSalary: minAnnualSalary ? Number(minAnnualSalary) : undefined,
       hasSalary: hasSalary === '' ? undefined : hasSalary === 'true',
+      postedWithinDays,
       sort,
       limit: PAGE_SIZE,
       offset,
@@ -189,7 +192,7 @@ export function Postings({ api, searchTerm, inspecting, onInspect }: {
       setLoading(false);
     }
   }, [api, searchTerm, q, site, concept, minSeniority, workArrangement,
-      minAnnualSalary, hasSalary, sort, offset]);
+      minAnnualSalary, hasSalary, postedWithinDays, sort, offset]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -276,6 +279,12 @@ export function Postings({ api, searchTerm, inspecting, onInspect }: {
             <option value="false">Not disclosed</option>
           </select>
         </div>
+        <PostedWithin
+          id="postedWithin"
+          value={postedWithinDays}
+          onChange={onFilterChange(setPostedWithinDays)}
+        />
+
         <div>
           <label htmlFor="sort">Sort</label>
           <select id="sort" value={sort} onChange={(e) => onFilterChange(setSort)(e.target.value)}>

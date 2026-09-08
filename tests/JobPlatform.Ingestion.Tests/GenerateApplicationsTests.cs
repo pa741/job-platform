@@ -529,6 +529,37 @@ public sealed class GenerateApplicationsTests : IDisposable
         Assert.Null(request.Instructions);
     }
 
+    /// <summary>
+    /// A configured age bound writes for what the run will ask about, not for the head of the queue.
+    /// </summary>
+    /// <remarks>
+    /// The floor already had this failure mode and this is the second axis of it: a run pulling
+    /// only recent postings against a pass that wrote for every age gets a queue of today's jobs
+    /// with no documents and a pile of drafts for adverts it never asks about. <c>Best</c> is the
+    /// head of the queue and is dated a month ago here, so a pass ignoring the bound would spend
+    /// the night's one document on it.
+    ///
+    /// It is also the stated date beating first-seen on the pass's own path: every posting in this
+    /// fixture was first seen three days ago, so only <c>DatePosted</c> can move this one out.
+    /// </remarks>
+    [Fact]
+    public async Task A_configured_age_bound_writes_for_what_the_run_will_ask_about()
+    {
+        await using (var db = CreateContext())
+        {
+            await db.JobPostings
+                .Where(p => p.Id == Best)
+                .ExecuteUpdateAsync(p => p.SetProperty(
+                    x => x.DatePosted, DateOnly.FromDateTime(Now.AddDays(-30).UtcDateTime)));
+        }
+
+        await RunAsync(new StubWriter(), documentsPerNight: 1, postedWithinDays: 3);
+
+        var written = await DocumentedAsync();
+
+        Assert.Equal([Second], written);
+    }
+
     // -----------------------------------------------------------------------
     // Fixture
     // -----------------------------------------------------------------------
@@ -539,15 +570,20 @@ public sealed class GenerateApplicationsTests : IDisposable
         StubWriter? writer,
         StubPackStore? packs = null,
         int documentsPerNight = 10,
-        int minAssessmentScore = 80)
+        int minAssessmentScore = 80,
+        int? postedWithinDays = null)
     {
-        var function = Create(writer, packs, documentsPerNight, minAssessmentScore);
+        var function = Create(writer, packs, documentsPerNight, minAssessmentScore, postedWithinDays);
 
         return function.RunNightlyAsync(CancellationToken.None);
     }
 
     private GenerateApplicationsFunction Create(
-        StubWriter? writer, StubPackStore? packs, int documentsPerNight, int minAssessmentScore)
+        StubWriter? writer,
+        StubPackStore? packs,
+        int documentsPerNight,
+        int minAssessmentScore,
+        int? postedWithinDays = null)
     {
         var db = CreateContext();
 
@@ -560,6 +596,7 @@ public sealed class GenerateApplicationsTests : IDisposable
             {
                 DocumentsPerNight = documentsPerNight,
                 MinAssessmentScore = minAssessmentScore,
+                PostedWithinDays = postedWithinDays,
             }),
             new FakeTime(Now),
             NullLogger<GenerateApplicationsFunction>.Instance,

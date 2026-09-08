@@ -361,6 +361,69 @@ public static class CvVariantSelector
     private const int RationaleConceptLimit = 5;
 
     /// <summary>
+    /// What a posting asks for, reconstructed from the match already stored against it.
+    /// </summary>
+    /// <remarks>
+    /// <b>The stored match rather than a fresh read of <c>PostingConcepts</c>, and the reason is
+    /// agreement rather than a round trip saved.</b> <see cref="MatchResult.Matched"/> and
+    /// <see cref="MatchResult.Gaps"/> together are every requirement the scorer weighed, already
+    /// deduplicated, each carrying the polarity it was weighed at - so a CV is chosen against
+    /// exactly the requirement set the breakdown on the same page was computed from. A second read
+    /// of the posting's rows could disagree with it after a re-extraction, and the page would then
+    /// explain a choice with a list of demands that is not the list the choice was made on.
+    ///
+    /// <b>Here rather than at a call site, because there are now two.</b> The agent's pack chooses
+    /// a CV to send and the dashboard shows which CV would be sent; a second spelling of "what
+    /// this posting asks for" is how those two start disagreeing about the same posting on the
+    /// same day. The source is <see cref="AssertionSource.Taxonomy"/> for both halves: it is what
+    /// the scorer resolved, whatever the posting recorded it from.
+    /// </remarks>
+    public static IReadOnlyList<ConceptAssertion> DemandsOf(MatchResult match)
+    {
+        ArgumentNullException.ThrowIfNull(match);
+
+        return DemandsOf(match.Matched, match.Gaps);
+    }
+
+    /// <summary>
+    /// The same, from the two lists a stored match is read back as.
+    /// </summary>
+    /// <remarks>
+    /// The list read is the one the dashboard has: its match query deliberately never projects the
+    /// advert, so it holds the matched concepts and the gaps without a <see cref="MatchResult"/>
+    /// around them.
+    ///
+    /// <b>Matched plus gaps is every demand the scorer weighed.</b> It deduplicates the posting's
+    /// rows on the way in - the posting side stores one per source, so a concept the board tagged
+    /// and the description also named arrives twice by design - and then puts each demand in
+    /// exactly one of the two lists. Reading them back gives one assertion per concept, carrying
+    /// the polarity it was scored at, which is what the selector wants.
+    ///
+    /// <b><see cref="AssertionSource"/> is a positional the assertion type requires and the
+    /// selector never reads.</b> The stored match folded every source into one demand per concept,
+    /// so there is no true answer to give it; <see cref="AssertionSource.Taxonomy"/> is written
+    /// because it is the one value that claims nothing about a model having run. Nothing may read
+    /// it back off these.
+    ///
+    /// <b><c>YearsMin</c> survives on the gaps and not on the matches</b>, because
+    /// <see cref="ConceptMatch"/> does not carry it. It costs nothing that is read: the selector
+    /// uses it only to stamp a <see cref="ConceptGap"/> in <see cref="CvSelection.Missing"/>, and
+    /// the park and the gap brief both read the key alone.
+    /// </remarks>
+    public static IReadOnlyList<ConceptAssertion> DemandsOf(
+        IReadOnlyList<ConceptMatch> matched, IReadOnlyList<ConceptGap> gaps)
+    {
+        ArgumentNullException.ThrowIfNull(matched);
+        ArgumentNullException.ThrowIfNull(gaps);
+
+        return
+        [
+            .. matched.Select(m => new ConceptAssertion(m.RequiredKey, AssertionSource.Taxonomy, m.Demand)),
+            .. gaps.Select(g => new ConceptAssertion(g.RequiredKey, AssertionSource.Taxonomy, g.Demand, g.YearsMin)),
+        ];
+    }
+
+    /// <summary>
     /// Picks the variant to send with an application to this posting, or declines to pick one.
     /// </summary>
     /// <param name="demands">

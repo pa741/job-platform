@@ -37,7 +37,8 @@ public sealed class PostingEndpointTests : IAsyncLifetime
 
     private static JobPosting Posting(
         string site, string id, string title, string company,
-        bool remote = false, decimal? min = null, string description = "Some description text.")
+        bool remote = false, decimal? min = null, string description = "Some description text.",
+        DateOnly? datePosted = null)
         => new()
         {
             ExternalId = id,
@@ -49,7 +50,53 @@ public sealed class PostingEndpointTests : IAsyncLifetime
             MinAmount = min,
             Currency = min is null ? null : "GBP",
             Description = description,
+            DatePosted = datePosted,
         };
+
+    /// <summary>
+    /// The age filter narrows on the board's own posted date.
+    /// </summary>
+    /// <remarks>
+    /// <b>Both postings state a date, deliberately.</b> The rule falls back to first-seen where a
+    /// board says nothing, and first-seen here is whenever the fixture happened to ingest - so a
+    /// posting relying on the fallback would make this assert something about the clock the suite
+    /// ran under. Dating both of them means what is asserted is the filter.
+    ///
+    /// The window is served against the server's clock rather than a date the caller sends, which
+    /// is why the argument is a number of days.
+    /// </remarks>
+    [Fact]
+    public async Task The_age_filter_reads_the_posted_date_and_a_backwards_window_is_a_problem_response()
+    {
+        const string term = "aged-corpus";
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        await _factory.SeedAsync(
+            term, ScrapeDate,
+            Posting("indeed", "fresh", "Fresh Advert", "Northwind", datePosted: today),
+            Posting("indeed", "stale", "Stale Advert", "Contoso", datePosted: today.AddDays(-60)));
+
+        var page = await _client.GetFromJsonAsync<PageResponse<PostingSummary>>(
+            $"/api/v1/postings?searchTerm={term}&postedWithinDays=7", Json);
+
+        Assert.NotNull(page);
+        Assert.Equal(["Fresh Advert"], page.Items.Select(p => p.Title).ToArray());
+
+        // Unbounded is still unbounded: the filter is opt-in, and a corpus page that quietly
+        // showed only this week would read as a market that had gone quiet.
+        var everything = await _client.GetFromJsonAsync<PageResponse<PostingSummary>>(
+            $"/api/v1/postings?searchTerm={term}", Json);
+
+        Assert.Equal(2, everything!.Items.Count);
+
+        // Refused rather than ignored, like the unknown sort: a window that runs backwards would
+        // return the whole corpus and nothing in the response would say the argument was dropped.
+        var backwards = await _client.GetAsync(
+            $"/api/v1/postings?searchTerm={term}&postedWithinDays=-1");
+
+        Assert.Equal(HttpStatusCode.BadRequest, backwards.StatusCode);
+    }
 
     [Fact]
     public async Task Search_returns_every_seeded_posting()

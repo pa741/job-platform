@@ -1,6 +1,7 @@
 using JobPlatform.Api.Endpoints;
 using JobPlatform.Api.Infrastructure;
 using JobPlatform.Core.Enrichment;
+using JobPlatform.Core.Model;
 using JobPlatform.Data.Sql;
 using Microsoft.AspNetCore.Mvc;
 
@@ -47,6 +48,7 @@ public sealed class PostingEndpoints : IEndpointGroup
 
     private static async Task<IResult> SearchAsync(
         [FromServices] JobPostingQueryRepository repository,
+        [FromServices] TimeProvider clock,
         CancellationToken ct,
         string? searchTerm = null,
         string? q = null,
@@ -62,6 +64,7 @@ public sealed class PostingEndpoints : IEndpointGroup
         DateOnly? postedTo = null,
         DateTimeOffset? firstSeenFrom = null,
         DateTimeOffset? firstSeenTo = null,
+        int? postedWithinDays = null,
         string? concept = null,
         string? minSeniority = null,
         string? maxSeniority = null,
@@ -110,6 +113,18 @@ public sealed class PostingEndpoints : IEndpointGroup
             return TypedResults.Problem(arrangementError, statusCode: StatusCodes.Status400BadRequest);
         }
 
+        // Days rather than an instant, and it is not a convenience. The page's question is
+        // "what is new", which is relative to now, and a client that computes the instant itself
+        // computes it from its own clock - so a browser an hour out, or one that sent yesterday's
+        // value with a bookmarked filter, quietly asks a different question from the one on the
+        // screen. The server holds the clock; the client says how wide the window is.
+        if (postedWithinDays is < 0)
+        {
+            return TypedResults.Problem(
+                detail: "postedWithinDays must not be negative.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
         if (ir35 is not null and not "inside" and not "outside")
         {
             return TypedResults.Problem(
@@ -131,6 +146,9 @@ public sealed class PostingEndpoints : IEndpointGroup
             MinSalary = minSalary,
             PostedFrom = postedFrom,
             PostedTo = postedTo,
+            PostedSince = postedWithinDays is { } days
+                ? PostingAge.Cutoff(clock.GetUtcNow(), days)
+                : null,
             FirstSeenFrom = firstSeenFrom,
             FirstSeenTo = firstSeenTo,
             Concept = concept,

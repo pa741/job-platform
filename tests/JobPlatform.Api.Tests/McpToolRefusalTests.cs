@@ -401,6 +401,25 @@ public sealed class McpToolRefusalTests
         Assert.Contains("0", reason, StringComparison.Ordinal);
     }
 
+    /// <summary>A window that runs backwards is refused rather than read as no window.</summary>
+    /// <remarks>
+    /// Same reasoning as the floor above it, and the same failure: a negative window returns the
+    /// whole queue, which is exactly what a run asking for "today's postings" would then apply to
+    /// - a month-old advert sent as today's work, with nothing in the answer saying the argument
+    /// was ignored.
+    /// </remarks>
+    [Fact]
+    public async Task A_window_that_runs_backwards_is_refused_rather_than_read_as_no_window()
+    {
+        using var harness = await McpToolHarness.CreateAsync();
+
+        var (refused, reason) = McpToolHarness.Refusal(await harness.Tools()
+            .ListApplyableAsync(McpToolHarness.AsCandidate(), postedWithinDays: -1));
+
+        Assert.True(refused);
+        Assert.Contains("cannot run backwards", reason, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// An unreadable enum argument is refused rather than silently becoming a filter.
     /// </summary>

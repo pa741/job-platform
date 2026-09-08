@@ -114,7 +114,7 @@ public sealed class ApplicationEndpoints : IEndpointGroup
 
         group.MapPost("/{postingId:long}", GenerateAsync)
             .WithName("GenerateApplication")
-            .WithSummary("Writes a tailored CV and cover letter for one matched posting.");
+            .WithSummary("Writes the cover letter and this advert's own questions. The CV is chosen, not written.");
 
         group.MapGet("/{id:long}", GetAsync)
             .WithName("GetApplication")

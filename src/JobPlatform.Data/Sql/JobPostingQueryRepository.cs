@@ -494,6 +494,11 @@ public sealed class JobPostingQueryRepository(JobsDbContext db)
             query = query.Where(p => p.FirstSeenUtc <= firstSeenTo);
         }
 
+        if (criteria.PostedSince is { } postedSince)
+        {
+            query = query.Where(PostingRecency.Postings(postedSince));
+        }
+
         return ApplyStructuredFilters(query, criteria);
     }
 

@@ -24,7 +24,7 @@ internal static class AiPrompt
         AzureOpenAiOptions options, string reasoningEffort = "low")
         => Json(AzureOpenAiOptions.BulkServiceId, options.BulkMaxTokens, reasoningEffort);
 
-    /// <summary>Settings for the writing deployment: tailored CV and cover letter.</summary>
+    /// <summary>Settings for the writing deployment: the cover letter and the advert's own questions.</summary>
     public static AzureOpenAIPromptExecutionSettings Writing(
         AzureOpenAiOptions options, string reasoningEffort = "medium")
         => Json(AzureOpenAiOptions.WritingServiceId, options.WritingMaxTokens, reasoningEffort);

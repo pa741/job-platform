@@ -1,6 +1,7 @@
 using JobPlatform.Core.Ai;
 using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Matching;
+using JobPlatform.Core.Model;
 using JobPlatform.Data.Sql;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -119,6 +120,38 @@ public sealed class MatchSweepFunction(
     /// in which case judging the better one first was correct.
     /// </remarks>
     private const int MeasurementAssessments = 10;
+
+    /// <summary>
+    /// The share of the shortlist reserved for postings that arrived in the last few days.
+    /// </summary>
+    /// <remarks>
+    /// <b>Two thirds, and it is a reservation rather than an ordering.</b> The system exists to
+    /// answer a day's postings on the day they appear: an application sent a week after the
+    /// advert went up is competing against a shortlist the employer has already drawn, so a
+    /// judgement bought a week late has bought very little. Selecting top-down by score alone
+    /// does not deliver that. The pairs above the threshold accumulate, the highest of them are
+    /// judged first whatever their age, and a corpus with a backlog spends every night on the
+    /// backlog - which is exactly the state a first sweep over forty-five days of postings
+    /// starts in.
+    ///
+    /// <b>Ordering by age instead would be worse, and it is the obvious thing to reach for.</b>
+    /// Age says nothing about whether the candidate fits: a fresh posting scoring 46 is not a
+    /// better use of a judgement than a three-day-old one scoring 97, and sorting by age puts it
+    /// first anyway. Worse, it is absorbing - once the daily arrivals exceed the budget, nothing
+    /// older is ever judged again, and the rows above the threshold that were not reached the
+    /// first night are not reached on any night after it.
+    ///
+    /// So the budget splits, the way it already splits for the measurement sample. The recent
+    /// draw is ordered by score like every other, it is capped at this share, and whatever it
+    /// cannot fill goes back to the top-down draw over the whole corpus - so a quiet day costs
+    /// nothing and a backlog still drains at the remaining third a night. Neither the score nor
+    /// the ranking reads a date anywhere: recency is a claim on what gets judged, never on what
+    /// the judgement is.
+    /// </remarks>
+    private const int RecentShareNumerator = 2;
+
+    /// <summary>The denominator of <see cref="RecentShareNumerator"/>.</summary>
+    private const int RecentShareDenominator = 3;
 
     /// <summary>
     /// The bands the measurement sample is drawn from, below the shortlist's usual reach.
@@ -252,7 +285,7 @@ public sealed class MatchSweepFunction(
         foreach (var id in profileIds)
         {
             scored += await ScoreAsync(id, postings, vectors, now, ct);
-            assessed += await AssessAsync(id, assessmentLimit, minScore, maxScore, ct);
+            assessed += await AssessAsync(id, assessmentLimit, minScore, maxScore, now, ct);
         }
 
         // Requested is reported beside written, always, because the two diverging is the whole
@@ -442,23 +475,28 @@ public sealed class MatchSweepFunction(
     private const int DiscardedPostingsLogged = 20;
 
     /// <summary>
-    /// The pairs this pass will spend the model on: the shortlist, plus a stratified sample.
+    /// The pairs this pass will spend the model on: the recent ones, the shortlist behind them,
+    /// and a stratified sample.
     /// </summary>
     /// <remarks>
     /// <b>An explicit ceiling means the caller is already drawing a sample, so nothing is added.</b>
     /// That is the band-bounded HTTP route, which exists precisely to draw one by hand; stratifying
-    /// a stratified draw would silently return rows from outside the band that was asked for.
+    /// a stratified draw would silently return rows from outside the band that was asked for, and
+    /// reserving part of it for recent postings would do the same thing one dimension over.
     ///
-    /// Otherwise the budget splits. The merge is in <see cref="StratifiedShortlist"/> rather than
-    /// here, because interleaving with a deduplication is the part that is easy to get subtly
-    /// wrong and it is only assertable exactly while it needs nothing but lists.
+    /// Otherwise the budget splits twice, and the two splits are independent: a reserved share for
+    /// postings inside <see cref="PostingAge.DailyWindowDays"/>, so a day's arrivals are judged on
+    /// the day they arrive rather than behind a backlog, and a reserved share for the measurement
+    /// sample. Both merges are in <see cref="StratifiedShortlist"/> rather than here, because
+    /// interleaving with a deduplication is the part that is easy to get subtly wrong and it is
+    /// only assertable exactly while it needs nothing but lists.
     /// </remarks>
     private async Task<IReadOnlyList<CandidacyRequest>> BuildShortlistAsync(
-        long profileId, int limit, int minScore, int? maxScore, CancellationToken ct)
+        long profileId, int limit, int minScore, int? maxScore, DateTimeOffset now, CancellationToken ct)
     {
         if (maxScore is not null)
         {
-            return await matches.GetUnassessedAsync(profileId, minScore, limit, maxScore, ct);
+            return await matches.GetUnassessedAsync(profileId, minScore, limit, maxScore, ct: ct);
         }
 
         // Never more than a quarter of the budget. The nightly forty is unaffected - a quarter of
@@ -468,12 +506,38 @@ public sealed class MatchSweepFunction(
         // measurement sample would be taking the shortlist away from the only person it was for.
         var measurement = Math.Min(MeasurementAssessments, limit / 4);
 
+        var shortlistBudget = limit - measurement;
+        var recentBudget = shortlistBudget * RecentShareNumerator / RecentShareDenominator;
+
+        // Ordered by score inside the window, exactly like the draw below it. The window decides
+        // which rows are eligible for the reserved share; it never decides which of them is best.
+        var recent = recentBudget <= 0
+            ? []
+            : await matches.GetUnassessedAsync(
+                profileId,
+                minScore,
+                recentBudget,
+                maximumScore: null,
+                PostingAge.Cutoff(now, PostingAge.DailyWindowDays),
+                ct);
+
+        // The whole corpus, unbounded by date, and asked for the whole shortlist rather than for
+        // what the recent draw left. It has to overlap: a recent posting is also one of the
+        // highest-scoring unassessed pairs, and this draw not knowing that is what lets the merge
+        // fill the shortlist to its budget on a day when nothing new arrived.
         var topDown = await matches.GetUnassessedAsync(
-            profileId, minScore, limit - measurement, null, ct);
+            profileId, minScore, shortlistBudget, maximumScore: null, postedSince: null, ct);
+
+        // Recent first and the rest behind it, deduplicated. The merge is the same one the
+        // measurement sample goes through, for the same reason: an interleave with a
+        // deduplication in it is the part that is quietly wrong, and it is only assertable
+        // exactly while it needs nothing but lists.
+        var shortlist = StratifiedShortlist.Combine(
+            recent, [topDown], shortlistBudget, r => r.PostingId);
 
         if (measurement <= 0)
         {
-            return topDown;
+            return shortlist;
         }
 
         var bands = new List<IReadOnlyList<CandidacyRequest>>(MeasurementBands.Length);
@@ -488,14 +552,19 @@ public sealed class MatchSweepFunction(
             }
 
             bands.Add(await matches.GetUnassessedAsync(
-                profileId, Math.Max(low, minScore), MeasurementPerBand, high, ct));
+                profileId, Math.Max(low, minScore), MeasurementPerBand, high, ct: ct));
         }
 
-        return StratifiedShortlist.Combine(topDown, bands, limit, r => r.PostingId);
+        return StratifiedShortlist.Combine(shortlist, bands, limit, r => r.PostingId);
     }
 
     private async Task<AssessmentTally> AssessAsync(
-        long profileId, int assessmentLimit, int minScore, int? maxScore, CancellationToken ct)
+        long profileId,
+        int assessmentLimit,
+        int minScore,
+        int? maxScore,
+        DateTimeOffset now,
+        CancellationToken ct)
     {
         if (assessor is null)
         {
@@ -505,7 +574,8 @@ public sealed class MatchSweepFunction(
         // Bounded by the caller's budget rather than by the nightly ceiling. Anything left
         // over stays unassessed and is picked up next time - the shortlist query selects on
         // exactly that, so a partial pass resumes rather than restarting.
-        var shortlist = await BuildShortlistAsync(profileId, assessmentLimit, minScore, maxScore, ct);
+        var shortlist = await BuildShortlistAsync(
+            profileId, assessmentLimit, minScore, maxScore, now, ct);
 
         if (shortlist.Count == 0)
         {

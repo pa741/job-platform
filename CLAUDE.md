@@ -120,6 +120,10 @@ worked around.
 - `src/JobPlatform.Core/Matching/MatchRanker.cs` — what the matches page is *ordered* by, which
   is not the score. Pure and Azure-free for the same reason, and it carries the measurement that
   justifies every constant in it.
+- `src/JobPlatform.Core/Model/PostingAge.cs` — how old a posting is, as one rule: the board's
+  stated date where it published one, first-seen where it did not. Pure, and the two relational
+  spellings in `src/JobPlatform.Data/Sql/PostingRecency.cs` are transcriptions of it that
+  `PostingRecencyTests` holds to it. Every age filter in the system goes through one of the three.
 - `src/JobPlatform.Core/Profiles/CandidateProfile.cs` — the supply side of the match, and
   `ToDocument()`, which is the exact text the extractor reads and the hash is taken over.
 - `src/JobPlatform.Data/Sql/CandidateProfileRepository.cs` — every profile read and write.
@@ -723,6 +727,10 @@ mechanism, and it is derived from the corpus rather than guessed at.
 - **Never add a dual-axis chart.** Two y-scales on one plot is the single most misleading
   thing a dashboard can do. Two measures of different magnitude means two charts, or one
   chart and one stat tile.
+- **`PostedWithin` is one control shared by the shortlist and the corpus search.** Same option
+  list, same words, one place to change when the cadence does - and it defaults to "Any time",
+  because a list silently showing only today's postings reads as a quiet market rather than as a
+  filter.
 - **Never fetch metrics directly in a component.** Go through `MetricsFeed`. That interface
   is what lets the planned Web PubSub push replace polling without touching components; a
   component with its own timer is exactly the shape that cannot be converted.
@@ -859,6 +867,13 @@ Each of these cost a red CI run; none of them fail locally.
 - **SQLite cannot `ORDER BY` a `DateTimeOffset`.** `JobsDbContext.ConfigureConventions`
   converts to ticks under SQLite only, so the tests can exercise the real orderings; SQL
   Server keeps native `datetimeoffset`.
+- **An age filter is a window in days, never a date the caller sends.** `postedWithinDays` on
+  the shortlist, on the corpus search and on `list_applyable` is resolved against the server's
+  `TimeProvider`, because "what is new" is relative to now: a browser minutes out of step, a
+  bookmarked filter a day out, or a model client doing the subtraction itself all ask a different
+  question from the one on the screen. A negative window is a 400 - a refusal, never a clamp -
+  because it would otherwise return everything and nothing in the response would say the argument
+  was dropped. It filters in the query, before `Skip`/`Take`, like every other filter here.
 - **List responses must not carry `Description`.** It is unbounded `nvarchar(max)`; only
   `PostingDetail` returns it. `PostingEndpointTests` asserts this, because nothing else fails
   when it regresses.
@@ -1210,6 +1225,33 @@ Each of these cost a red CI run; none of them fail locally.
   band whose next row is already in the shortlist **advances rather than forfeiting its turn** -
   collisions land almost entirely on 80-89, because that is the band the shortlist is drawn from,
   so forfeiting would under-sample the band nearest where the ranking acts.
+- **Two thirds of the shortlist is reserved for postings from the last three days, and it is a
+  reservation rather than an ordering.** The whole pipeline is built around a day - one scrape,
+  one sweep, one apply run - and an application sent a week after the advert went up is competing
+  against a shortlist the employer has already drawn. Top-down by score alone does not deliver
+  that: pairs above the threshold accumulate, the highest are judged first whatever their age, and
+  a corpus with a backlog spends every night on the backlog. That is the state a first sweep over
+  forty-five days of postings begins in.
+  **Sorting by age instead is the obvious fix and is worse.** Age says nothing about whether the
+  candidate fits, so a fresh posting scoring 46 would outrank a three-day-old one scoring 97; and
+  it is absorbing - once the daily arrivals exceed the budget, nothing older is judged again,
+  ever. So the budget splits, exactly as it already splits for the measurement sample: the recent
+  draw is ordered by score like every other, it is capped, and whatever it cannot fill goes back
+  to the top-down draw over the whole corpus. A quiet day costs nothing and the backlog still
+  drains at the remaining third a night. `MatchSweepShortlistTests` pins all four of those.
+- **Recency is a claim on the budget and never on the match.** No score, ranking, threshold or
+  fusion floor reads a date; the arithmetic cannot tell a posting's age and is not meant to. A
+  recency term in `MatchScorer` would also clear every stored assessment the moment it moved, for
+  the reason the embedding is kept out of `Score`. The window decides which rows are *eligible*
+  for the reserved share - it is not a way past `AssessmentThreshold`, and a fresh posting the
+  arithmetic rejected stays rejected.
+- **How old a posting is has exactly one definition, and it is `PostingAge`.** The board's stated
+  `DatePosted` where it published one - two postings in five - and `FirstSeenUtc` where it did
+  not. Believing only the stated date would hide most of the market; believing only first-seen
+  would let a search term added this week deliver three-week-old adverts as today's work. Never
+  `LastSeenUtc`: a re-scrape moves it on every live posting, so a window over it returns
+  everything, every day. The rule is written out twice more, over postings and over matches, for
+  EF to translate, and `PostingRecencyTests` asserts both against the pure one.
 - **The sweep is a timer, not a page load.** `MatchSweepFunction` runs at 03:30 UTC, after the
   ingest and extraction queues have drained. A shortlist that costs model calls to look at is one
   nobody can afford to browse. `run-match-sweep` exists for the case the timer cannot serve -
@@ -1339,6 +1381,23 @@ that is not writing the CV cannot invent a claim in it.
   `CvSelection` carries a concept a *variant* asserted - the missing set is what the **posting**
   asked for. A convenience returning a `DocumentExtraction` from the variant path undoes all four
   at once, and nothing would fail.
+- **A page shows the CV that was *chosen*, and asking which one is a route of its own.**
+  `ApplicationDetail.CurriculumVitaeMarkdown` is null for every draft written since the library
+  replaced per-posting generation, and the dashboard went on rendering it - so the shortlist showed
+  an empty box under a "CV" heading beside a perfectly good cover letter, which reads as a document
+  that failed to write rather than as the design. `GET /matches/{postingId}/cv` answers instead,
+  and the client branches on the null rather than rendering it: a draft old enough to carry its own
+  CV still shows it, because an application somebody received has to stay explicable.
+  **That route runs the selector and stops there.** `get_submission_pack` does two more things with
+  the same selection - it puts a genuine tie to a model, and it parks a posting nothing fits -
+  and neither may happen because somebody expanded a row: one spends money on a route a client can
+  call repeatedly, the other puts a posting down without anybody deciding to. So a tie is reported
+  as a tie, `decidedBy` is never `model` from the dashboard, and `CvChoiceEndpointTests` asserts
+  that a NoFit writes no submission row at all.
+  The demands both surfaces choose against come from `CvVariantSelector.DemandsOf` rather than from
+  a second read of `PostingConcepts`, so the CV is chosen against exactly the requirement set the
+  breakdown on the same page was computed from - and the two surfaces cannot disagree about the
+  same posting on the same day.
 - **No route, tool or scheduled pass may rewrite a variant's markdown with a model.** The prose in
   `CvVariants.Markdown` is the candidate's, and that is the whole of what this feature buys.
   Staleness is the pressure that will come for this rule - a variant is a file that ages while the

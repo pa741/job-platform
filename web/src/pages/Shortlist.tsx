@@ -1,6 +1,8 @@
 import { useCallback, useState } from 'react';
 import { ApiError, type JobPlatformApi } from '../api/client';
 import type { ApplicationDetail, MatchDetail, MatchSummary, Submission } from '../api/types';
+import { ChosenCv } from '../components/ChosenCv';
+import { PostedWithin } from '../components/PostedWithin';
 import { ErrorNote } from '../components/Primitives';
 import { useApiResource } from '../components/useApiResource';
 import { WakingRegion, LoadingRegion } from '../components/WakingRegion';
@@ -36,6 +38,13 @@ const ARRANGEMENT: Record<string, string> = {
 /** Recent enough to be "since you last looked" on a nightly sweep, without a clock to sync. */
 const OVERNIGHT_HOURS = 20;
 
+/** The age filter, in the words the empty state needs. Empty where it is off. */
+function age(days: number | undefined): string {
+  if (!days) return '';
+
+  return days === 1 ? ' posted today or yesterday' : ` posted in the last ${days} days`;
+}
+
 function isRecent(iso: string | null): boolean {
   return iso !== null && (Date.now() - new Date(iso).getTime()) / 3_600_000 < OVERNIGHT_HOURS;
 }
@@ -58,6 +67,7 @@ function isRecent(iso: string | null): boolean {
 export function Shortlist({ api, go }: { api: JobPlatformApi; go: (page: PageId) => void }) {
   const [minScore, setMinScore] = useState(40);
   const [assessedOnly, setAssessedOnly] = useState(false);
+  const [postedWithinDays, setPostedWithinDays] = useState<number>();
   const [showDismissed, setShowDismissed] = useState(false);
   const [offset, setOffset] = useState(0);
 
@@ -69,7 +79,8 @@ export function Shortlist({ api, go }: { api: JobPlatformApi; go: (page: PageId)
   const load = useCallback(async () => {
     try {
       const result = await api.matches({
-        minScore, assessedOnly, limit: PAGE_SIZE, offset, dismissed: showDismissed,
+        minScore, assessedOnly, postedWithinDays, limit: PAGE_SIZE, offset,
+        dismissed: showDismissed,
       });
       setNoProfile(false);
       return result.items;
@@ -82,7 +93,7 @@ export function Shortlist({ api, go }: { api: JobPlatformApi; go: (page: PageId)
       }
       throw cause;
     }
-  }, [api, minScore, assessedOnly, offset, showDismissed]);
+  }, [api, minScore, assessedOnly, postedWithinDays, offset, showDismissed]);
 
   const matches = useApiResource(load);
 
@@ -200,6 +211,16 @@ export function Shortlist({ api, go }: { api: JobPlatformApi; go: (page: PageId)
           Only roles the model has judged
         </label>
 
+        {/* Narrowing to the last day or two is how this page is read on a morning: the sweep
+            reserves most of its judgement budget for postings that age, so that is where
+            tonight's verdicts are. Any time is still the default - a shortlist silently showing
+            only today would read as a quiet market rather than as a filter. */}
+        <PostedWithin
+          id="postedWithin"
+          value={postedWithinDays}
+          onChange={(days) => { setOffset(0); setPostedWithinDays(days); }}
+        />
+
         <button
           className="btn"
           aria-pressed={showDismissed}
@@ -211,9 +232,13 @@ export function Shortlist({ api, go }: { api: JobPlatformApi; go: (page: PageId)
 
       {items.length === 0 && (
         <div className="empty">
+          {/* The message names every filter that is on. "Nothing above 40" while an age filter
+              is quietly narrowing the page reads as a market that has gone quiet. */}
           {showDismissed
             ? 'Nothing set aside yet.'
-            : `Nothing above ${minScore}${assessedOnly ? ' that the model has judged' : ''}.`}
+            : `Nothing above ${minScore}`
+              + `${assessedOnly ? ' that the model has judged' : ''}`
+              + `${age(postedWithinDays)}.`}
         </div>
       )}
 
@@ -410,15 +435,18 @@ function Detail({ api, postingId }: { api: JobPlatformApi; postingId: number }) 
             </>
           ) : (
             <p className="quote">
-              Not judged yet. Each night the budget is split thirty from the top of the ranking
-              and ten drawn evenly across the score bands, so a mid-scoring advert is reached on
-              its own account rather than waiting behind every higher number.
+              Not judged yet. Each night the budget goes twenty to postings from the last few
+              days, ten to the top of the ranking, and ten drawn evenly across the score bands —
+              so a fresh advert is judged on the day it arrives, and a mid-scoring one is reached
+              on its own account rather than waiting behind every higher number.
             </p>
           )}
 
           <h4 className="mini">Tailored application</h4>
           <p className="note">
-            Costs a call to the writing model, and the gaps above are handed to it as the
+            The cover letter and this advert's own questions, written for this posting. The CV is
+            not written: it is chosen from the ones you wrote yourself, and which one is shown
+            below. Costs a call to the writing model, and the gaps above are handed to it as the
             claims it must not make.
           </p>
 
@@ -429,9 +457,16 @@ function Detail({ api, postingId }: { api: JobPlatformApi; postingId: number }) 
               onChange={(e) => setInstructions(e.target.value)}
             />
             <button className="btn primary" disabled={generating} onClick={generate}>
-              {generating ? 'Writing…' : 'Write CV and cover letter'}
+              {generating ? 'Writing…' : 'Write cover letter'}
             </button>
           </div>
+
+          {/* Which CV would go with this posting, whether or not anything has been written for it
+              yet. It belongs here rather than under the draft because it is a fact about the
+              posting and the library, it costs no model call to ask, and the useful moment to
+              know that nothing in the library fits is before pressing the button that spends
+              one. */}
+          <ChosenCv api={api} postingId={postingId} />
         </div>
       </div>
 
@@ -502,12 +537,19 @@ function DraftView({ api, draft }: { api: JobPlatformApi; draft: ApplicationDeta
 
       <div className="row-actions">
         <span className="stamp">Draft {draft.revision}</span>
-        <button
-          className="btn" disabled={downloading === 'cv'}
-          onClick={() => download('cv', `CV-${draft.postingTitle}.pdf`)}
-        >
-          {downloading === 'cv' ? 'Preparing…' : 'Download CV (PDF)'}
-        </button>
+
+        {/* The CV download lives with the CV, which for anything written since the library
+            replaced per-posting generation is the chosen variant's own file rather than this
+            draft's. Only a draft old enough to carry its own CV downloads one from here. */}
+        {draft.curriculumVitaeMarkdown && (
+          <button
+            className="btn" disabled={downloading === 'cv'}
+            onClick={() => download('cv', `CV-${draft.postingTitle}.pdf`)}
+          >
+            {downloading === 'cv' ? 'Preparing…' : 'Download CV (PDF)'}
+          </button>
+        )}
+
         <button
           className="btn" disabled={downloading === 'cover-letter'}
           onClick={() => download('cover-letter', `Cover-letter-${draft.postingTitle}.pdf`)}
@@ -523,11 +565,21 @@ function DraftView({ api, draft }: { api: JobPlatformApi; draft: ApplicationDeta
         </>
       )}
 
+      {/* Null for every draft written since the CV stopped being generated per posting, so this
+          branches rather than rendering: an empty box under a "CV" heading reads as a document
+          that failed to write. Which CV was chosen is shown above, against the posting, because
+          that is what it is a fact about - here there is only the CV a draft carried itself, back
+          when one was written, kept because an application somebody received has to stay
+          explicable. */}
+      {draft.curriculumVitaeMarkdown && (
+        <>
+          <h4 className="mini">CV as it was written for this draft</h4>
+          <pre className="markdown">{draft.curriculumVitaeMarkdown}</pre>
+        </>
+      )}
+
       {/* Preformatted, never rendered as markup. The PDF is the artefact; this is a preview,
           and model output has no business being interpreted as HTML in the browser. */}
-      <h4 className="mini">CV</h4>
-      <pre className="markdown">{draft.curriculumVitaeMarkdown}</pre>
-
       <h4 className="mini">Cover letter</h4>
       <pre className="markdown">{draft.coverLetterMarkdown}</pre>
     </div>

@@ -156,9 +156,11 @@ public sealed class AuthorizationTests
             .Where(e => e.RoutePattern.RawText?.StartsWith("/api/v1/matches", StringComparison.Ordinal) == true)
             .ToList();
 
-        // List, detail, the dismissal, and the skills gap. Counted so this cannot pass
-        // vacuously - and so a new route on this group is a decision rather than a default.
-        Assert.Equal(4, routes.Count);
+        // List, detail, the dismissal, the skills gap, and which CV goes with a posting. Counted
+        // so this cannot pass vacuously - and so a new route on this group is a decision rather
+        // than a default. The CV choice belongs behind the same policy as the rest: it names a
+        // document out of somebody's own library and reads the match it was chosen against.
+        Assert.Equal(5, routes.Count);
 
         Assert.All(routes, route =>
         {

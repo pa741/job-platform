@@ -263,7 +263,7 @@ it is documentation that changes behaviour.
 
 | Read | |
 | --- | --- |
-| `list_applyable` | The queue. Gated on the model's verdict; filtered by `since`, `assessedSince`, `documentsReady`, `minAssessmentScore`, `applyUrlSource` and `channel`; ordered by `Rank`, `Score` or `AssessmentScore`. Collapses duplicate listings into one row with the rest in `alternatePostings`, and carries the quota block. |
+| `list_applyable` | The queue. Gated on the model's verdict; filtered by `since`, `postedWithinDays`, `assessedSince`, `documentsReady`, `minAssessmentScore`, `applyUrlSource` and `channel`; ordered by `Rank`, `Score` or `AssessmentScore`. Collapses duplicate listings into one row with the rest in `alternatePostings`, and carries the quota block. |
 | `get_submission_pack` | Advert text, apply URL and its provenance, the CV and cover letter as markdown, short-lived links to the rendered PDF and DOCX, the drafted answers, and the allowlisted profile entries. |
 | `get_form_field` | One allowlisted answer. Call with no name to list what may be asked for. |
 | `get_form_fields` | Several named ones in a round trip, refused name by name. One disclosure per field, exactly as if each had been asked for alone. |
@@ -279,6 +279,14 @@ it is documentation that changes behaviour.
 | `park_application` | Puts a posting down and says why, and opens a question for `MissingAnswer`. |
 | `start_run`, `finish_run` | Attribution for an unattended pass, and its account of itself. |
 | `match_email_to_submission` | Which application a recruiter message is about. **It stores nothing** - it sits with the writes because it is the step before one and its failure mode is a write's. |
+
+**`since` and `postedWithinDays` are different questions and a daily run wants the second.** The
+first is when this system first read the posting - "what has arrived since my last run". The second
+is when the employer posted it, read from the board's stated date where there is one and from
+first-seen where there is not. They agree for most of the corpus and disagree exactly where it
+matters: a search term added this week delivers hundreds of postings that are new here and three
+weeks old to the market, and only the second rejects them. A negative window is refused rather than
+ignored, for the reason the assessment floor is.
 
 **`minAssessmentScore` is enforced server-side**, so a prompt-level bug cannot fire applications at
 bad matches. **The quota block is planning and never a reservation** - nothing is held back, and

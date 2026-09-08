@@ -243,3 +243,84 @@ public sealed record SkillGapItem
     /// <summary>What that relation is worth before the candidate's own strength, 0-1.</summary>
     public double Credit { get; init; }
 }
+
+/// <summary>
+/// Which of the candidate's own CVs goes with one posting, and why.
+/// </summary>
+/// <remarks>
+/// <b>The CV is not written for a posting any more, it is chosen from a library the candidate
+/// authored - and this is how a page says which one.</b> Before this, the dashboard rendered the
+/// draft's <c>curriculumVitaeMarkdown</c>, which is null for everything written since the library
+/// replaced per-posting generation: the panel was simply blank, and a blank panel says "the CV
+/// failed" rather than "the CV is one you already wrote".
+///
+/// <b>It is the arithmetic's answer and it says so.</b> The pack an agent reads runs the same
+/// selector and then does two things this cannot: it puts a genuine tie to a model, and it parks
+/// the posting when nothing fits. Neither belongs behind a page load - one spends money and the
+/// other is a write - so an <c>Ambiguous</c> outcome here reports the tie as a tie rather than
+/// pre-empting a choice that is made at send time. <see cref="DecidedBy"/> carries that
+/// distinction rather than leaving a reader to infer it.
+/// </remarks>
+public sealed record CvChoiceResponse
+{
+    public required long PostingId { get; init; }
+
+    /// <summary><c>Chosen</c>, <c>Ambiguous</c> or <c>NoFit</c>.</summary>
+    public required string Outcome { get; init; }
+
+    /// <summary>
+    /// The CV that would be sent. Null on every outcome but <c>Chosen</c>.
+    /// </summary>
+    /// <remarks>
+    /// Null rather than the leader of a losing field, exactly as <c>CvSelection.Chosen</c> is: a
+    /// field holding the best of a bad set is a field somebody eventually sends.
+    /// </remarks>
+    public CvChoiceVariant? Chosen { get; init; }
+
+    /// <summary>The variants the arithmetic could not separate. Only for <c>Ambiguous</c>.</summary>
+    public IReadOnlyList<CvChoiceVariant> Tied { get; init; } = [];
+
+    /// <summary>
+    /// What this posting asks for that no CV in the library answers.
+    /// </summary>
+    /// <remarks>
+    /// Carried on every outcome, because what the library does not cover is a fact about the
+    /// library rather than about this posting's luck. It is the same list the gap brief ranks
+    /// across every blocked posting, which is what turns "nothing fits" into a brief for the next
+    /// CV rather than a refusal.
+    /// </remarks>
+    public IReadOnlyList<CvChoiceGap> Missing { get; init; } = [];
+
+    /// <summary>The selector's own sentence, naming the numbers it decided on.</summary>
+    public required string Rationale { get; init; }
+
+    /// <summary>
+    /// <c>arithmetic</c> where a CV was chosen, otherwise null.
+    /// </summary>
+    /// <remarks>
+    /// Never <c>model</c> from this route, and that is the honest thing rather than a limitation:
+    /// a page load must not spend a model call, so a tie is shown as a tie. The pack decides it
+    /// when an application is actually assembled, and records which of the two decided.
+    /// </remarks>
+    public string? DecidedBy { get; init; }
+
+    /// <summary>
+    /// How many CVs were eligible to be scored at all.
+    /// </summary>
+    /// <remarks>
+    /// Zero and "none of your four fit" are the same outcome and completely different advice -
+    /// one is "write a CV", the other is "write a different one" - and no other field here tells
+    /// them apart.
+    /// </remarks>
+    public required int Considered { get; init; }
+}
+
+/// <summary>One CV in the running, as a page shows it.</summary>
+/// <param name="VariantId">Its id in the candidate's library, so the page can link and download.</param>
+/// <param name="Label">What the candidate called it.</param>
+/// <param name="Score">What it scored against this posting, 0-100.</param>
+/// <param name="Answered">How many of the posting's stated requirements it answers outright.</param>
+public sealed record CvChoiceVariant(long VariantId, string Label, int Score, int Answered);
+
+/// <summary>One requirement no CV in the library answers.</summary>
+public sealed record CvChoiceGap(string Concept, string Label);

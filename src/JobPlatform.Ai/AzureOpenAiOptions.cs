@@ -56,7 +56,7 @@ public sealed class AzureOpenAiOptions
     public string BulkDeployment { get; set; } = "bulk";
 
     /// <summary>
-    /// Deployment name for the writing pass: tailored CV and cover letter.
+    /// Deployment name for the writing pass: the cover letter and the advert's own questions.
     /// </summary>
     /// <remarks>
     /// Named for the job rather than the model, as above. <c>gpt-5.6-sol</c> where quota

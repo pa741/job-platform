@@ -7,6 +7,7 @@ using JobPlatform.Core.Applications;
 using JobPlatform.Core.Dedup;
 using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Matching;
+using JobPlatform.Core.Model;
 using JobPlatform.Core.Submissions;
 using JobPlatform.Data.Sql;
 using Microsoft.Extensions.Options;
@@ -218,6 +219,7 @@ public sealed class SubmissionTools(
         [Description("Restrict to 'Ats', 'Board' or 'Unknown'. Omit for all.")] string? channel = null,
         [Description("How many jobs to return, 1-100. Default 20. Jobs, not rows: duplicate listings collapse.")] int limit = 20,
         [Description("Only postings first seen at or after this UTC instant - 'what has arrived since my last run'.")] DateTimeOffset? since = null,
+        [Description("Only postings posted within this many days - 1 for today's and yesterday's. Different from 'since', which is when this system first read the posting: a search added last week delivers postings that are new here and three weeks old to the employer, and only this rejects them. Uses the board's stated posted date where it published one and first-seen where it did not, so it never hides the three postings in five that state no date.")] int? postedWithinDays = null,
         [Description("Only pairs judged at or after this UTC instant. Different from 'since': the nightly pass judges postings that arrived weeks ago.")] DateTimeOffset? assessedSince = null,
         [Description("true for postings that already have a generated CV and cover letter, false for those still waiting on one. Omit for both.")] bool? documentsReady = null,
         [Description("A floor on the model's assessment score, 0-100. Enforced here: a pair the model scored no number for never clears it.")] int? minAssessmentScore = null,
@@ -266,11 +268,24 @@ public sealed class SubmissionTools(
                 + "to 100. Omit it for no floor.");
         }
 
+        // Refused rather than clamped, on the reasoning above it: a negative window would return
+        // the same rows as no window at all, and a run cannot tell that from a market that has
+        // nothing older in it.
+        if (postedWithinDays is < 0)
+        {
+            return Refused(
+                $"postedWithinDays is {postedWithinDays}, and a window cannot run backwards. Pass "
+                + "1 for today's and yesterday's postings, or omit it for every age.");
+        }
+
         var query = new ApplyableQuery
         {
             Channel = parsedChannel,
             ApplyUrlSource = parsedSource,
             Since = since,
+            PostedSince = postedWithinDays is { } days
+                ? PostingAge.Cutoff(time.GetUtcNow(), days)
+                : null,
             AssessedSince = assessedSince,
             DocumentsReady = documentsReady,
             MinAssessmentScore = minAssessmentScore,
@@ -819,7 +834,7 @@ public sealed class SubmissionTools(
         CancellationToken ct)
     {
         var library = await variants.ListSelectableFactsAsync(profileId, ct);
-        var selection = CvVariantSelector.Select(Demands(match), library);
+        var selection = CvVariantSelector.Select(CvVariantSelector.DemandsOf(match), library);
 
         if (selection.Outcome is CvSelectionOutcome.Chosen && selection.Chosen is { } winner)
         {
@@ -986,35 +1001,6 @@ public sealed class SubmissionTools(
 
         return true;
     }
-
-    /// <summary>
-    /// The posting's requirements, rebuilt from the match that was stored for this pair.
-    /// </summary>
-    /// <remarks>
-    /// <c>Matched</c> plus <c>Gaps</c> is every demand <c>MatchScorer</c> weighed: it deduplicates
-    /// the posting's rows on the way in - the posting side stores one per source, so a concept the
-    /// board tagged and the description also named arrives twice by design - and then puts each
-    /// demand in exactly one of the two lists. Reading them back gives one assertion per concept,
-    /// carrying the polarity it was scored at, which is what the selector wants.
-    ///
-    /// <b><c>AssertionSource</c> is a positional this type requires and the selector never
-    /// reads.</b> The stored match folded every source into one demand per concept, so there is no
-    /// true answer to give it; <c>Taxonomy</c> is written because it is the one value that claims
-    /// nothing about a model having run. Nothing may read it back off these.
-    ///
-    /// <b><c>YearsMin</c> survives on the gaps and not on the matches</b>, because
-    /// <c>ConceptMatch</c> does not carry it. It costs nothing that is read: the selector uses it
-    /// only to stamp a <c>ConceptGap</c> in <c>Missing</c>, and the park and the gap brief both
-    /// read the key alone.
-    /// </remarks>
-    private static IReadOnlyList<ConceptAssertion> Demands(MatchResult match)
-        =>
-        [
-            .. match.Matched.Select(matched =>
-                new ConceptAssertion(matched.RequiredKey, AssertionSource.Taxonomy, matched.Demand)),
-            .. match.Gaps.Select(gap =>
-                new ConceptAssertion(gap.RequiredKey, AssertionSource.Taxonomy, gap.Demand, gap.YearsMin)),
-        ];
 
     /// <summary>The vocabulary's preferred name for a key, or the key where it knows none.</summary>
     /// <remarks>
