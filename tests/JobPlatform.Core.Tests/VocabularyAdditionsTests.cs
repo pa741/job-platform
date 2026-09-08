@@ -218,6 +218,61 @@ public sealed class VocabularyAdditionsTests
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Unit testing, added because its absence was asserting something else
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// A test framework resolves to unit testing, and never to TDD.
+    /// </summary>
+    /// <remarks>
+    /// <b>This is a vocabulary bug caught from the other end.</b> The extraction pass is handed
+    /// the vocabulary as its allowed output set, and with no concept for unit testing the nearest
+    /// key to "wrote xUnit suites" was <c>skill.tdd</c> - so a profile that claimed a test suite
+    /// came back asserting test-driven development at Expert, a practice nobody had claimed. The
+    /// deterministic resolver would never have made that mapping: <c>skill.tdd</c>'s aliases are
+    /// the two spellings of "test driven development" and nothing else. The model had nowhere
+    /// accurate to land.
+    ///
+    /// The fix is a concept rather than a prompt, for the reason the scorer's own rules give: a
+    /// bad assertion is a vocabulary bug, and rewording the prose to dodge it was tried first and
+    /// made the reading stronger rather than weaker.
+    ///
+    /// Both directions are asserted. The frameworks must reach the new concept, and TDD must
+    /// still mean only what it says, or this has swapped one over-broad mapping for another.
+    /// </remarks>
+    [Theory]
+    [InlineData("xUnit")]
+    [InlineData("NUnit")]
+    [InlineData("MSTest")]
+    [InlineData("unit tests")]
+    public void A_test_framework_is_unit_testing_rather_than_test_driven_development(string form)
+        => Assert.Equal("skill.unit-testing", Resolve(form));
+
+    [Theory]
+    [InlineData("TDD")]
+    [InlineData("test-driven development")]
+    public void Test_driven_development_still_resolves_to_itself(string form)
+        => Assert.Equal("skill.tdd", Resolve(form));
+
+    [Fact]
+    public void Unit_testing_can_carry_a_match_on_its_own()
+    {
+        // Not tagOnly, following its two nearest neighbours: TDD and BDD are both discriminating,
+        // and a posting whose stated requirement is a named test framework has said something
+        // concrete about the job. It is a judgement call rather than a measurement - if the
+        // corpus later shows adverts matching on this alone the way they once did on "agile",
+        // tagOnly is the flag to reach for.
+        Assert.True(Graph.TryGet("skill.unit-testing", out var concept));
+        Assert.Equal(ConceptKind.Skill, concept.Kind);
+        Assert.True(concept.IsDiscriminating);
+
+        var types = Graph.Ancestors("skill.unit-testing").Keys
+            .Count(k => k.StartsWith("type.", StringComparison.Ordinal));
+
+        Assert.True(types == 1, $"expected exactly 1 type.* parent, found {types}");
+    }
+
     [Fact]
     public void The_entailments_hold()
     {

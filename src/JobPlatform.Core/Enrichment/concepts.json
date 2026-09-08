@@ -1,5 +1,5 @@
 {
-  "version": 7,
+  "version": 8,
   "notes": [
     "The concept key is the identity; the label is an attribute. Renaming a label is an",
     "edit, renaming a key is a data migration.",
@@ -2097,6 +2097,23 @@
       "broader": [
         "type.practice",
         "area.delivery"
+      ]
+    },
+    {
+      "key": "skill.unit-testing",
+      "kind": "skill",
+      "label": "Unit testing",
+      "aliases": [
+        "unit test",
+        "unit tests",
+        "xunit",
+        "nunit",
+        "mstest"
+      ],
+      "broader": [
+        "type.practice",
+        "area.quality",
+        "area.software-development"
       ]
     },
     {
