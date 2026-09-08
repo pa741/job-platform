@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using JobPlatform.Documents;
 using PdfSharp.Pdf.IO;
 using Xunit;
@@ -144,4 +144,51 @@ public sealed class MarkdownPdfRendererTests
 
         Assert.NotEmpty(MarkdownPdfRenderer.Render("# Still fine", "Repeat"));
     }
+
+    /// <summary>No inline reaches the page as the name of the class that represents it.</summary>
+    /// <remarks>
+    /// <b>Every one of these shipped, and the suite could not see any of them.</b> The walkers'
+    /// fallback was written as "anything unmapped keeps its text" and called
+    /// <c>Inline.ToString()</c> to do it - but Markdig overrides <c>ToString</c> on
+    /// <see cref="LiteralInline"/> alone, so every other node answered with its .NET type name.
+    /// Rendered and read out of the content stream, <c>R&amp;amp;D</c> came out
+    /// <c>R Markdig.Syntax.Inlines.HtmlEntityInline D</c>.
+    ///
+    /// It survived because <b>every existing assertion here is about the document not throwing</b>,
+    /// and a PDF full of type names is a perfectly valid PDF. So this one reads the text back.
+    /// Three separate holes are covered: an HTML entity anywhere, a code span nested inside
+    /// emphasis (the top-level walker handled <c>CodeInline</c>, the two nested walkers did not),
+    /// and a hard break inside emphasis. The DOCX renderer handled all three from the start, which
+    /// is why comparing the two outputs would not have found it either - only reading one would.
+    /// </remarks>
+    [Fact]
+    public void No_inline_renders_as_its_type_name()
+    {
+        var bytes = MarkdownPdfRenderer.Render(
+            "Research &amp; Development at **R&amp;D**, and **bold `code` here**.\n",
+            "entities");
+
+        var text = ContentText(bytes);
+
+        Assert.DoesNotContain("Markdig", text, StringComparison.Ordinal);
+        Assert.Contains("&", text, StringComparison.Ordinal);
+        Assert.Contains("code", text, StringComparison.Ordinal);
+    }
+
+    /// <summary>The text drawn on the page, out of the content streams.</summary>
+    private static string ContentText(byte[] bytes)
+    {
+        using var document = Read(bytes);
+
+        var builder = new StringBuilder();
+
+        foreach (var page in document.Pages)
+        {
+            builder.Append(Encoding.Latin1.GetString(
+                page.Contents.CreateSingleContent().Stream.UnfilteredValue));
+        }
+
+        return builder.ToString();
+    }
+
 }

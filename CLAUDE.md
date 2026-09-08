@@ -1278,6 +1278,34 @@ Each of these cost a red CI run; none of them fail locally.
   no HTML step and nothing the model returns is ever interpreted as markup. An unmapped node
   renders as its plain text rather than being dropped - silently losing a node would take content
   out of a document somebody is about to send to an employer.
+- **An embedded font file is only what its `name` table says it is, and all four were wrong.**
+  `Roboto-Regular.ttf` held Roboto **Bold**, `Roboto-Bold.ttf` held Regular, and the italic pair was
+  swapped the same way - verified by reading the `name` table out of each file. `EmbeddedFontResolver`
+  maps a face to a *file name*, so every CV this system rendered set its body text in bold and its
+  bold headings in regular, and moved every line break with it. **Nothing downstream could see it**:
+  PDFsharp embeds whatever bytes come back and MigraDoc measures them, so the document is correctly
+  typeset in the wrong font - self-consistent, valid, the right length, the right words.
+  `EmbeddedFontResolverTests` asserts each face's own `name` table rather than a filename, a byte
+  length or a hash, because the only authority on what a face is, is the face.
+- **`Inline.ToString()` is not the text of an inline, and the fallback that assumed it was put
+  framework internals on people's CVs.** Markdig overrides `ToString` on `LiteralInline` alone, so
+  the walkers' documented "anything unmapped keeps its text" default emitted a .NET *type name* for
+  everything else: a CV writing `R&amp;D` rendered `R Markdig.Syntax.Inlines.HtmlEntityInline D`, and
+  a code span inside `**bold**` rendered `Markdig.Syntax.Inlines.CodeInline`. The nested walkers -
+  the `FormattedText` and `Hyperlink` overloads - are the ones to check when adding an inline type,
+  because the top-level switch handled `CodeInline` and `LineBreakInline` and neither of the other
+  two did. **An unmapped node now emits nothing**: the content-bearing inlines are all handled, and
+  a type name in a document somebody sends to an employer is worse than a gap. The DOCX renderer
+  handled all three correctly from the start, which is why comparing the two outputs would not have
+  found it - only reading one back would, and every test here asserted that rendering did not throw.
+- **The PDF draws H2's grey rule under H3 and H4 as well, and the DOCX draws it only under H2.**
+  MigraDoc's built-in `Heading3` is based on `Heading2`, and `Heading4Local` is based on `Heading3`,
+  so the border set at one style inherits down the chain - confirmed by decompressing a probe
+  render's content stream and counting three stroked lines for one H2, one H3 and one H4. The DOCX
+  writes `ParagraphBorders` inside the Heading2 style alone. **This is a live divergence, not a
+  fixed one**: it is a visible design decision about what a CV looks like, so it is written down
+  rather than changed. It costs roughly 4.7pt per third- and fourth-level heading, which is where
+  PDF and DOCX page counts drift apart even when both machines have Roboto installed.
 - **PDFsharp's platform-independent build resolves no fonts at all** and throws on its first call
   without a resolver, including for its own internal error font. `EmbeddedFontResolver` embeds
   Roboto (SIL OFL 1.1) and resolves *any* family name, because MigraDoc asks for "Courier New"

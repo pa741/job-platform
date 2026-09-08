@@ -1,4 +1,4 @@
-using Markdig.Extensions.Tables;
+﻿using Markdig.Extensions.Tables;
 using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
 using MigraDoc.DocumentObjectModel;
@@ -387,6 +387,10 @@ public static class MarkdownPdfRenderer
 
                 break;
 
+            case HtmlEntityInline entity:
+                paragraph.AddText(entity.Transcoded.ToString());
+                break;
+
             case ContainerInline nested:
                 foreach (var child in nested)
                 {
@@ -396,9 +400,19 @@ public static class MarkdownPdfRenderer
                 break;
 
             default:
-                // Anything unmapped keeps its text. Silently dropping a node would take
-                // content out of a document somebody is about to send to an employer.
-                paragraph.AddText(inline.ToString() ?? string.Empty);
+                // Nothing, and the rule this replaces was worse than the gap it feared.
+                //
+                // It read "anything unmapped keeps its text", which is what ToString() looks like
+                // it does and does not: Markdig overrides ToString on LiteralInline alone, so
+                // every other node answered with its .NET type name. Measured in the content
+                // stream of a real render, a CV writing "R&amp;D" came out
+                // "R Markdig.Syntax.Inlines.HtmlEntityInline D" - 39 characters of framework
+                // internals in a document somebody sends to an employer, and 39 characters is
+                // about a third of a line, so it moved the page breaks too.
+                //
+                // Every inline that carries text is handled above. What reaches here cannot yield
+                // text generically, and the DOCX renderer - which has always handled these - is
+                // the reference for what the document should say.
                 break;
         }
     }
@@ -432,6 +446,31 @@ public static class MarkdownPdfRenderer
                 break;
             }
 
+            case HtmlEntityInline entity:
+                parent.AddText(entity.Transcoded.ToString());
+                break;
+
+            case CodeInline code:
+            {
+                // Reached by `code` inside **bold** or _italic_, which the top-level switch never
+                // sees. Without it the span rendered as "Markdig.Syntax.Inlines.CodeInline".
+                var formatted = parent.AddFormattedText(code.Content);
+                formatted.Font.Name = EmbeddedFontResolver.MonoFamily;
+                break;
+            }
+
+            case LineBreakInline lineBreak:
+                if (lineBreak.IsHard)
+                {
+                    parent.AddLineBreak();
+                }
+                else
+                {
+                    parent.AddSpace(1);
+                }
+
+                break;
+
             case ContainerInline nested:
                 foreach (var child in nested)
                 {
@@ -441,7 +480,7 @@ public static class MarkdownPdfRenderer
                 break;
 
             default:
-                parent.AddText(inline.ToString() ?? string.Empty);
+                // See the top-level walker: emitting a type name is worse than emitting nothing.
                 break;
         }
     }
@@ -454,6 +493,40 @@ public static class MarkdownPdfRenderer
                 parent.AddText(literal.ToString());
                 break;
 
+            case HtmlEntityInline entity:
+                parent.AddText(entity.Transcoded.ToString());
+                break;
+
+            case CodeInline code:
+            {
+                var formatted = parent.AddFormattedText(code.Content);
+                formatted.Font.Name = EmbeddedFontResolver.MonoFamily;
+                break;
+            }
+
+            case EmphasisInline emphasis:
+            {
+                // Bold and italic inside a link used to be dropped: LinkInline's children arrive
+                // as ContainerInline, so emphasis was recursed through with its formatting lost.
+                var formatted = parent.AddFormattedText();
+
+                if (emphasis.DelimiterCount >= 2)
+                {
+                    formatted.Bold = true;
+                }
+                else
+                {
+                    formatted.Italic = true;
+                }
+
+                foreach (var child in emphasis)
+                {
+                    WriteInline(formatted, child);
+                }
+
+                break;
+            }
+
             case ContainerInline nested:
                 foreach (var child in nested)
                 {
@@ -463,7 +536,7 @@ public static class MarkdownPdfRenderer
                 break;
 
             default:
-                parent.AddText(inline.ToString() ?? string.Empty);
+                // See the top-level walker: emitting a type name is worse than emitting nothing.
                 break;
         }
     }
