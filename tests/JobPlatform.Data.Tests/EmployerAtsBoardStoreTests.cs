@@ -3,6 +3,7 @@ using JobPlatform.Core.Applications;
 using JobPlatform.Data.Sql;
 using JobPlatform.Data.Sql.Entities;
 using Microsoft.Data.Sqlite;
+using JobPlatform.Core.Matching;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Xunit;
@@ -985,5 +986,122 @@ public sealed class EmployerAtsBoardStoreTests : IDisposable
     {
         protected override bool ShouldRetryOn(Exception exception) => false;
     }
+
+    /// <summary>Makes a posting one somebody would actually apply to.</summary>
+    /// <remarks>
+    /// The liveness triple <c>ListApplyableAsync</c> uses: assessed, judged at least
+    /// <see cref="CandidacyVerdict.Possible"/>, and not dismissed.
+    /// </remarks>
+    private async Task WantAsync(params long[] postingIds)
+    {
+        await using var db = CreateContext();
+
+        if (!await db.CandidateProfiles.AnyAsync())
+        {
+            db.CandidateProfiles.Add(new CandidateProfileEntity
+            {
+                Id = 1,
+                SubjectId = "subject",
+                CreatedUtc = Now,
+                UpdatedUtc = Now,
+            });
+
+            await db.SaveChangesAsync();
+        }
+
+        foreach (var postingId in postingIds)
+        {
+            db.JobMatches.Add(new JobMatchEntity
+            {
+                ProfileId = 1,
+                PostingId = postingId,
+                Score = 90,
+                ScoredAtUtc = Now,
+                Verdict = CandidacyVerdict.Strong,
+                AssessedAtUtc = Now,
+            });
+        }
+
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// A board blocking one posting somebody would apply to outranks one blocking more postings
+    /// nobody would.
+    /// </summary>
+    /// <remarks>
+    /// <b>Written from a measurement rather than from a reading of the code, and the code read
+    /// fine.</b> The first pass ordered by how many blocked postings an employer had in the corpus,
+    /// which is a different question from the one the feature exists to answer. Measured on the
+    /// 2026-09-08 run: of 45 boards fetched, <b>5</b> were among the 22 that would have unblocked a
+    /// posting the candidate could apply to; corpus-wide recoveries went 29 to 175 while the
+    /// applyable queue moved by 9. A bounded nightly budget spent top-down on the wrong ranking
+    /// spends almost all of itself on employers nobody is applying to.
+    ///
+    /// Nothing failed and nothing could have: every count was correct, every board was eligible,
+    /// and the pass reported exactly what it had done. **A ranking cannot be wrong in a way a unit
+    /// test notices unless the test says what the ranking is for**, so this one is written in those
+    /// terms - Contoso holds a third of Acme's blocked postings and comes first because its one
+    /// posting is the one an application is waiting on.
+    ///
+    /// The sibling assertion is the load-bearing half: Acme is still returned. This is a sort key
+    /// and not a filter, so a link is still recovered for a posting no profile has matched - after
+    /// the ones somebody is waiting on rather than instead of them.
+    /// </remarks>
+    [Fact]
+    public async Task A_board_blocking_an_application_somebody_wants_comes_first()
+    {
+        await AddPostingsAsync(Acme, 3);
+        var wanted = await AddPostingsAsync(Contoso, 1);
+
+        await WantAsync(wanted[0]);
+
+        await AddBoardAsync(Acme, AtsVendor.Greenhouse, "acme", AtsBoardDiscovery.Learned, Now.AddDays(-30));
+        await AddBoardAsync(Contoso, AtsVendor.Ashby, "contoso", AtsBoardDiscovery.Learned, Now.AddDays(-30));
+
+        await using var db = CreateContext();
+
+        var boards = await CreateRepository(db).ListBoardsToFetchAsync(Now, TimeSpan.FromDays(1), limit: 10);
+
+        Assert.Equal([Contoso, Acme], boards.Select(b => b.CompanyId));
+    }
+
+    /// <summary>A dismissed posting is not one somebody is waiting on.</summary>
+    /// <remarks>
+    /// The one part of the liveness triple that is a person's own decision rather than the model's,
+    /// and the one this repository has already got wrong once: <c>ListApplyableAsync</c> was the
+    /// only match query that did not honour <c>DismissedAtUtc</c>, so a posting the candidate had
+    /// refused came back to the agent on every run. Spending a request on the employer behind it
+    /// is the cheaper version of the same fault, and it fails the same silent way - <b>a board
+    /// ranked too high looks exactly like a board ranked correctly</b>.
+    /// </remarks>
+    [Fact]
+    public async Task A_dismissed_posting_does_not_promote_its_employer()
+    {
+        await AddPostingsAsync(Acme, 3);
+        var dismissed = await AddPostingsAsync(Contoso, 1);
+
+        await WantAsync(dismissed[0]);
+        await DismissAsync(dismissed[0]);
+
+        await AddBoardAsync(Acme, AtsVendor.Greenhouse, "acme", AtsBoardDiscovery.Learned, Now.AddDays(-30));
+        await AddBoardAsync(Contoso, AtsVendor.Ashby, "contoso", AtsBoardDiscovery.Learned, Now.AddDays(-30));
+
+        await using var db = CreateContext();
+
+        var boards = await CreateRepository(db).ListBoardsToFetchAsync(Now, TimeSpan.FromDays(1), limit: 10);
+
+        Assert.Equal([Acme, Contoso], boards.Select(b => b.CompanyId));
+    }
+
+    private async Task DismissAsync(long postingId)
+    {
+        await using var db = CreateContext();
+
+        await db.JobMatches
+            .Where(m => m.PostingId == postingId)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(m => m.DismissedAtUtc, Now));
+    }
+
 
 }

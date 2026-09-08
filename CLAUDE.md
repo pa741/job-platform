@@ -664,6 +664,34 @@ mechanism, and it is derived from the corpus rather than guessed at.
   a posting that stays where it already was, while a wrong match is an application sent to the wrong
   vacancy. Title and employer alone matched 285 postings across boards and adding the city left 211;
   the same failure is available here and is worse, because this link is the one an agent opens.
+- **Boards are ranked by the postings somebody is waiting on, not by the postings that exist.**
+  The first pass ordered by how many blocked postings an employer had in the corpus, which sounds
+  like the same question and is not. Measured on the 2026-09-08 run: 45 boards fetched, of which
+  **5** were among the 22 that would have unblocked an applyable posting - corpus-wide recoveries
+  went 29 to 175 while the applyable queue moved by 9. Nothing failed and nothing could have; every
+  count was right and the pass reported exactly what it did. **A bounded budget spent top-down on
+  the wrong ranking is a budget spent on employers nobody is applying to.** `BlockedForSomebody` is
+  a sort key and never a filter: eligibility stays corpus-wide, so a link is still recovered for a
+  posting no profile has matched - after the ones somebody is waiting on rather than instead of
+  them. With 22 such boards against a 40-board pass, both happen.
+- **SmartRecruiters has no 404, so "it answered" is not evidence there.** Verified live on
+  2026-09-08: `api.smartrecruiters.com/v1/companies/{token}/postings` returns 200 with
+  `{"totalFound":0,"content":[]}` for `jackandjill`, for `hunterbond` and for
+  `definitely-not-a-real-company-xyz99` alike. `AtsBoardReadOutcome.NotABoard` is therefore
+  unreachable for that vendor and every guess "answers" - which is why all twelve probed rows in
+  the corpus are SmartRecruiters and none confirmed. An empty answer is still *recorded*, because
+  the request was spent and the row is the memory that stops it being spent again, but it no longer
+  counts as `Answered`: confirmation reads the company name off a listing, so an empty board cannot
+  confirm however often it is asked, and counting it would put the Answered-to-Confirmed distance -
+  the figure that argues for a name-bearing endpoint - permanently wrong.
+- **The remaining backlog is recruitment agencies, and no ATS recovery reaches it.** Measured
+  2026-09-08, the employers holding the most link-less applyable postings are Jack & Jill 29,
+  VirtueTech 17, Noir 14, Client Server 7, Harnham 6, Saragossa 5, Harrington Starr 4, Hunter Bond
+  4, Oho Group 4 - agencies advertising a client's vacancy under their own name. The employer on
+  the advert is not the employer with the board, so probing them is sound and finds nothing, which
+  is exactly what it did. **Quote the ceiling before promising a number**: the recoverable share is
+  roughly the non-agency share of the queue, and in this corpus that is small. Dex (14) and AVEVA
+  (4) are the real employers in that list.
 - **Do not expect much from Workable.** Every Workable link in this corpus is
   `apply.workable.com/j/{code}`, which names no board, so those employers are reachable only through
   a probe. Workday has no clean public listing at all and is deliberately out of scope.

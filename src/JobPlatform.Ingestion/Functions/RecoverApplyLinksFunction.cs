@@ -1,4 +1,4 @@
-using System.Linq.Expressions;
+﻿using System.Linq.Expressions;
 using JobPlatform.Core.Applications;
 using JobPlatform.Data.Sql;
 using JobPlatform.Data.Sql.Entities;
@@ -723,6 +723,26 @@ public sealed class RecoverApplyLinksFunction(
                     // The ordinary answer, and how a guess is meant to fail: 99 of 120 employers
                     // landed here in the measurement. Counted through Probed and never logged as a
                     // fault, or the pass becomes a log nobody reads.
+                    continue;
+                }
+
+                // An answer carrying no listings proves nothing, and one vendor proves it for
+                // every token there is. Verified live on 2026-09-08: SmartRecruiters answers
+                // 200 with {"totalFound":0,"content":[]} for `jackandjill`, for `hunterbond`
+                // and for `definitely-not-a-real-company-xyz99` alike - it has no 404 for a
+                // company that does not exist, so AtsBoardReadOutcome.NotABoard is unreachable
+                // there and every guess "answers". All twelve probed rows in the corpus were
+                // SmartRecruiters for exactly this reason.
+                //
+                // It is still recorded, because the request was spent and the row is how the
+                // next pass knows not to spend it again - see the campaign's remarks. What it
+                // must not do is count as evidence: confirmation reads the company name off a
+                // listing, so an empty board cannot confirm however long it is asked, and
+                // counting it in Answered puts the distance between Answered and Confirmed -
+                // the figure that argues for a name-bearing endpoint - permanently wrong.
+                if (read.Listings.Count == 0)
+                {
+                    await boards.RecordProbeAsync(employer.CompanyId, board, now, ct);
                     continue;
                 }
 

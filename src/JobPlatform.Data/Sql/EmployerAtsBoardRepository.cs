@@ -1,5 +1,6 @@
 ﻿using System.Linq.Expressions;
 using JobPlatform.Core.Applications;
+using JobPlatform.Core.Matching;
 using JobPlatform.Data.Sql.Entities;
 using Microsoft.EntityFrameworkCore;
 
@@ -461,6 +462,7 @@ public sealed class EmployerAtsBoardRepository(JobsDbContext db)
         }
 
         var blocked = Blocked(seenSince);
+        var wanted = BlockedForSomebody(seenSince);
         var cutoff = asOf - refetchAfter;
 
         var rows = await db.EmployerAtsBoards
@@ -472,7 +474,11 @@ public sealed class EmployerAtsBoardRepository(JobsDbContext db)
             // translate an ORDER BY over a member of a projected record - it compiles and throws
             // "could not be translated" on the first run - while this form is one SELECT carrying
             // its own ORDER BY, so the page is chosen and returned in the same order.
-            .OrderByDescending(b => blocked.Count(p => p.CompanyId == b.CompanyId))
+            // Boards blocking an application somebody is waiting on come first, and only then the
+            // ones blocking the most postings at large. See BlockedForSomebody for the night that
+            // established the difference.
+            .OrderByDescending(b => wanted.Count(p => p.CompanyId == b.CompanyId))
+            .ThenByDescending(b => blocked.Count(p => p.CompanyId == b.CompanyId))
             .ThenBy(b => b.LastFetchedUtc == null ? 0 : 1)
             .ThenBy(b => b.LastFetchedUtc)
             .ThenBy(b => b.CompanyId)
@@ -551,13 +557,16 @@ public sealed class EmployerAtsBoardRepository(JobsDbContext db)
         }
 
         var blocked = Blocked(seenSince);
+        var wanted = BlockedForSomebody(seenSince);
 
         return await db.Companies
             .AsNoTracking()
             .Where(c => !db.EmployerAtsBoards.Any(b => b.CompanyId == c.Id)
                 && blocked.Any(p => p.CompanyId == c.Id))
-            // Ordered before it is projected, for the reason ListBoardsToFetchAsync gives.
-            .OrderByDescending(c => blocked.Count(p => p.CompanyId == c.Id))
+            // Ordered before it is projected, for the reason ListBoardsToFetchAsync gives, and
+            // prioritised the way that method is: a probe is the scarcer request of the two.
+            .OrderByDescending(c => wanted.Count(p => p.CompanyId == c.Id))
+            .ThenByDescending(c => blocked.Count(p => p.CompanyId == c.Id))
             .ThenBy(c => c.Id)
             .Take(limit)
             .Select(c => new AtsEmployerToProbe(
@@ -860,6 +869,36 @@ public sealed class EmployerAtsBoardRepository(JobsDbContext db)
 
         return seenSince is { } since ? postings.Where(p => p.LastSeenUtc >= since) : postings;
     }
+
+    /// <summary>The blocked postings somebody would actually apply to.</summary>
+    /// <remarks>
+    /// <b>Written after a night measured this, rather than from the outset.</b> The first pass
+    /// ordered boards by how many blocked postings each employer had anywhere in the corpus, which
+    /// sounds like the same question and is not. Measured on the 2026-09-08 run: 45 boards fetched,
+    /// of which <b>5</b> were among the 22 that would have unblocked a posting the candidate could
+    /// apply to. Corpus-wide recoveries went 29 to 175 and the applyable queue moved by 9, because
+    /// a bounded budget spent top-down on the wrong ranking is a budget spent on employers nobody
+    /// is applying to.
+    ///
+    /// It is a <i>sort key</i> and not a filter, which is the whole of the fix: eligibility stays
+    /// corpus-wide, so a link is still recovered for a posting no profile has matched yet - it is
+    /// simply recovered after the ones somebody is waiting on. With 22 such boards against a
+    /// 40-board pass, the queue is served <i>and</i> the remainder of the budget still does the
+    /// opportunistic work it was doing before. Nothing is given up.
+    ///
+    /// The liveness triple is <see cref="JobMatchRepository.ListApplyableAsync"/>'s own - assessed,
+    /// judged at least <see cref="CandidacyVerdict.Possible"/>, not dismissed - and it is repeated
+    /// here rather than shared because the two are different questions that happen to agree today:
+    /// that one decides what an agent may apply to, this one only decides what to ask an employer
+    /// first. A board fetched for a posting the candidate later dismisses has still cost one
+    /// request and left a real link behind.
+    /// </remarks>
+    private IQueryable<JobPostingEntity> BlockedForSomebody(DateTimeOffset? seenSince)
+        => Blocked(seenSince).Where(p => db.JobMatches.Any(m =>
+            m.PostingId == p.Id
+            && m.Verdict != null
+            && m.Verdict >= CandidacyVerdict.Possible
+            && m.DismissedAtUtc == null));
 
     /// <summary>
     /// The stored row for one board, tracked because every caller of this is about to change it.
