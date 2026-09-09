@@ -29,6 +29,26 @@ public static class MarkdownPdfRenderer
     /// <summary>Body text, in points. Small enough that a CV fits, large enough to read.</summary>
     private const double BodySize = 10;
 
+    /// <summary>
+    /// The page and its margins, named once because two things now need them.
+    /// </summary>
+    /// <remarks>
+    /// <b><c>PageFormat.A4</c> does not fill in <c>PageSetup.PageWidth</c>, which is the trap this
+    /// exists to close.</b> The format is resolved when the document is rendered, so reading the
+    /// width back off the section during the build answers zero - and a table sizing its columns
+    /// against "zero minus two margins" got a negative width, which MigraDoc quietly turned into
+    /// columns a single word wide. The failure looked like a layout opinion rather than a bug,
+    /// which is the kind that survives review.
+    /// </remarks>
+    private static readonly Unit PageWidth = Unit.FromCentimeter(21.0);
+
+    private static readonly Unit SideMargin = Unit.FromCentimeter(2.0);
+
+    private static readonly Unit VerticalMargin = Unit.FromCentimeter(1.8);
+
+    /// <summary>What a full-width element may occupy.</summary>
+    private static Unit TextWidth => Unit.FromPoint(PageWidth.Point - (2 * SideMargin.Point));
+
     public static byte[] Render(string markdown, string title)
     {
         // Idempotent, and called here rather than left to a caller: the resolver is
@@ -43,10 +63,10 @@ public static class MarkdownPdfRenderer
 
         var section = document.AddSection();
         section.PageSetup.PageFormat = PageFormat.A4;
-        section.PageSetup.TopMargin = Unit.FromCentimeter(1.8);
-        section.PageSetup.BottomMargin = Unit.FromCentimeter(1.8);
-        section.PageSetup.LeftMargin = Unit.FromCentimeter(2.0);
-        section.PageSetup.RightMargin = Unit.FromCentimeter(2.0);
+        section.PageSetup.TopMargin = VerticalMargin;
+        section.PageSetup.BottomMargin = VerticalMargin;
+        section.PageSetup.LeftMargin = SideMargin;
+        section.PageSetup.RightMargin = SideMargin;
 
         // The pipeline lives in MarkdownAst because the DOCX renderer walks the same tree, and
         // two builders would eventually disagree about what the markdown means.
@@ -253,42 +273,164 @@ public static class MarkdownPdfRenderer
         }
     }
 
+    /// <summary>
+    /// A pipe table, as a table.
+    /// </summary>
+    /// <remarks>
+    /// <b>This used to flatten every row into one paragraph with an em dash between the
+    /// cells</b>, which was the honest thing to write when the parser did not produce tables at
+    /// all: it could not be reached, and if it ever were, a row read as a sentence rather than as
+    /// syntax. Now that a table parses, a table is what somebody typed and a table is what they
+    /// should get - an education section flattened into "BSc (Hons) — University of Northampton —
+    /// September 2025 — 2:1" is legible and is not what the document said.
+    ///
+    /// <b>Columns are sized half evenly and half by their longest cell, and the blend is the whole
+    /// of the layout thinking here.</b> MigraDoc cannot size a column from its content, so
+    /// something has to guess. Even columns were tried first and are visibly wrong on a real CV:
+    /// an education table is one long qualification against an institution, a date range and a
+    /// grade of three characters, and a quarter of the page each wraps the first cell to one word
+    /// per line while "2:1" sits in four centimetres of white. Purely proportional is worse in the
+    /// other direction - the grade column collapses to a few millimetres and wraps a date. Half of
+    /// the width shared equally and half shared by the longest cell in each column gives the long
+    /// column roughly twice its share and never starves the short one, and both failure modes stay
+    /// mild.
+    ///
+    /// Characters rather than measured text, deliberately: a real measurement needs the font, the
+    /// size and a graphics context, and would still be an estimate of how a cell wraps. This is an
+    /// estimate that is a line of arithmetic and fails predictably.
+    ///
+    /// <b>The header row is the parser's, not the first row's.</b> Markdig marks it from the
+    /// delimiter line, so a table written without one has no header and is rendered as all body -
+    /// which is right, and is the case a "first row is always the header" rule would get wrong
+    /// every time somebody pasted a table's middle.
+    ///
+    /// <b>Borders are one hairline under the header and nothing else.</b> A CV is read by a person
+    /// in a hurry and parsed by software that does better with less; a full grid is heavier on the
+    /// page and no clearer, and a table with no rule at all loses the header the moment it wraps.
+    /// </remarks>
     private static void WriteTable(Section section, Table table)
     {
-        foreach (var row in table)
+        var rows = table.OfType<TableRow>().ToList();
+
+        if (rows.Count == 0)
         {
-            if (row is not TableRow tableRow)
+            return;
+        }
+
+        // The widest row decides, so a short row cannot cut a column off the ones below it: a
+        // table whose header names four things and whose last row states three is malformed and
+        // still has to render everything it holds.
+        var columns = rows.Max(row => row.OfType<TableCell>().Count());
+
+        if (columns == 0)
+        {
+            return;
+        }
+
+        var rendered = section.AddTable();
+        rendered.Borders.Width = 0;
+        rendered.TopPadding = Unit.FromPoint(2);
+        rendered.BottomPadding = Unit.FromPoint(2);
+
+        var widths = ColumnWidths(rows, columns, TextWidth);
+
+        for (var index = 0; index < columns; index++)
+        {
+            var column = rendered.AddColumn(widths[index]);
+            column.Format.Alignment = ParagraphAlignment.Left;
+
+            // The cell keeps its own right margin so two columns of prose do not touch. Applied
+            // to the column rather than to every cell, for the reason the styles are set once on
+            // the document: a per-cell assignment is a loop nobody remembers to extend.
+            column.RightPadding = Unit.FromPoint(6);
+        }
+
+        foreach (var row in rows)
+        {
+            var target = rendered.AddRow();
+
+            // Repeated at the top of a page where the table breaks, which is the whole value of
+            // the parser knowing which row is the header.
+            target.HeadingFormat = row.IsHeader;
+            target.Format.Font.Bold = row.IsHeader;
+
+            if (row.IsHeader)
             {
-                continue;
+                target.Borders.Bottom.Width = 0.75;
+                target.Borders.Bottom.Color = Colors.Gray;
             }
 
-            var paragraph = section.AddParagraph();
-            var first = true;
+            var cells = row.OfType<TableCell>().ToList();
 
-            foreach (var cell in tableRow)
+            for (var index = 0; index < cells.Count && index < columns; index++)
             {
-                if (cell is not TableCell tableCell)
-                {
-                    continue;
-                }
+                var paragraph = target.Cells[index].AddParagraph();
 
-                if (!first)
-                {
-                    paragraph.AddText("  —  ");
-                }
+                // Cells hold blocks, and a cell of two paragraphs is one paragraph here with a
+                // break between them: a nested paragraph in a table cell is the same content and
+                // MigraDoc's own spacing between them reads as a gap in the row.
+                var written = false;
 
-                foreach (var child in tableCell)
+                foreach (var child in cells[index])
                 {
-                    if (child is ParagraphBlock content)
+                    if (child is not ParagraphBlock content)
                     {
-                        WriteInlines(paragraph, content.Inline);
+                        continue;
                     }
-                }
 
-                first = false;
+                    if (written)
+                    {
+                        paragraph.AddLineBreak();
+                    }
+
+                    WriteInlines(paragraph, content.Inline);
+                    written = true;
+                }
             }
         }
     }
+
+    /// <summary>
+    /// How wide each column gets: half the page shared evenly, half shared by content.
+    /// </summary>
+    /// <remarks>
+    /// The weight is the longest cell in the column rather than the average, because what decides
+    /// whether a column is too narrow is its worst row - an average over four short rows and one
+    /// long one sizes the column for text that is not the problem.
+    /// </remarks>
+    private static Unit[] ColumnWidths(List<TableRow> rows, int columns, Unit available)
+    {
+        var longest = new int[columns];
+
+        foreach (var row in rows)
+        {
+            var cells = row.OfType<TableCell>().ToList();
+
+            for (var index = 0; index < cells.Count && index < columns; index++)
+            {
+                longest[index] = Math.Max(longest[index], Length(cells[index]));
+            }
+        }
+
+        var total = longest.Sum();
+        var widths = new Unit[columns];
+
+        for (var index = 0; index < columns; index++)
+        {
+            var even = 1d / columns;
+            var byContent = total == 0 ? even : (double)longest[index] / total;
+
+            widths[index] = Unit.FromPoint(available.Point * ((even + byContent) / 2));
+        }
+
+        return widths;
+    }
+
+    /// <summary>How much text one cell holds, for sizing rather than for layout.</summary>
+    private static int Length(TableCell cell)
+        => cell.OfType<ParagraphBlock>()
+            .Sum(block => block.Inline?.Descendants<LiteralInline>()
+                .Sum(literal => literal.Content.Length) ?? 0);
 
     /// <summary>
     /// Walks the inline tree, carrying emphasis down as formatting rather than as markup.

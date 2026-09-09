@@ -1,4 +1,4 @@
-using Markdig;
+﻿using Markdig;
 using Markdig.Syntax;
 
 namespace JobPlatform.Documents;
@@ -16,12 +16,27 @@ namespace JobPlatform.Documents;
 /// somebody to keep two builders in step.
 ///
 /// Deliberately close to plain CommonMark. Every extension enabled is a construct both renderers
-/// then have to handle, and a CV needs headings, emphasis, lists and links - not footnotes, task
-/// lists or custom containers. The prompt asks for the same subset, so this is the second half of
-/// one agreement rather than an independent guess. Note what follows from that: a pipe table in
-/// the markdown is not parsed as a table at all, because the table extension is off; both
-/// renderers still carry a mapping for one, so enabling the extension changes the output rather
-/// than breaking a render.
+/// then have to handle, and a CV needs headings, emphasis, lists, links and a table - not
+/// footnotes, task lists or custom containers. The prompt asks for the same subset, so this is the
+/// second half of one agreement rather than an independent guess.
+///
+/// <b>Pipe tables are on, and they were off for one release too long.</b> The argument for leaving
+/// them off was that a CV needs no tables; candidates write them anyway, because an education
+/// section is a table - qualification, institution, dates, grade - and so is a skills matrix. What
+/// an unparsed table renders as is not a plain paragraph but the pipes themselves, run together
+/// into prose: <c>| BSc (Hons) | University of Northampton | 2025 | 2:1 |</c> arriving at an
+/// employer as a sentence. A construct people will type has to be handled or refused, and the one
+/// thing it must not do is reach a PDF as its own syntax.
+///
+/// <b>A single newline is a line break here, which is a deliberate departure from CommonMark.</b>
+/// The specification folds one into a space, so a skills list typed as one line per group
+/// - <c>**Languages**: C#, TypeScript</c> and the next on the line below - renders as one long
+/// paragraph with the bold runs buried in it. That is correct CommonMark and wrong for this
+/// product: these documents are typed into a plain textarea by a person who expects the lines they
+/// typed, which is the same bargain every comment box on the internet strikes. The cost is bounded
+/// because the other author here is a model told to write prose in paragraphs separated by blank
+/// lines: a wrapped line would break early rather than lose text, and the markdown remains the
+/// record either way.
 ///
 /// <b>There is no HTML step anywhere downstream of this.</b> The tree is walked into document
 /// primitives directly; nothing that comes back from a language model is ever handed to a markup
@@ -32,6 +47,8 @@ internal static class MarkdownAst
 {
     private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder()
         .UseAutoLinks()
+        .UsePipeTables()
+        .UseSoftlineBreakAsHardlineBreak()
         .Build();
 
     /// <summary>Parses model output into the syntax tree the renderers map.</summary>

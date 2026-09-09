@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text;
 using System.Xml;
 using DocumentFormat.OpenXml;
@@ -607,42 +607,175 @@ public static class MarkdownDocxRenderer
             }
         }
 
+        /// <summary>
+        /// A pipe table, as a table Word will lay out and an ATS can walk.
+        /// </summary>
+        /// <remarks>
+        /// <b>This flattened every row into one paragraph with an em dash between the cells until
+        /// the parser started producing tables at all.</b> That was defensible while unreachable
+        /// and is not now: an education section written as a table and delivered as
+        /// "BSc (Hons) - University of Northampton - September 2025 - 2:1" has lost the structure
+        /// the candidate typed, and the DOCX is the copy several large vendors parse.
+        ///
+        /// <b>Fixed layout with explicit widths rather than automatic sizing.</b> Word measures
+        /// content and would produce a different table from the PDF's, which is the one thing
+        /// these two renderers exist to avoid - a recruiter opening either file has to see the
+        /// same document. The widths are the same halves-and-halves blend the PDF computes, from
+        /// the same character counts, so the two agree by construction rather than by coincidence.
+        ///
+        /// <b>A single rule under the header and no other borders</b>, matching the PDF, and
+        /// a repeated header row so Word carries it onto a second page.
+        ///
+        /// <b>An empty paragraph follows the table.</b> Word requires a paragraph between two
+        /// tables and after the last one before the section properties; without it two adjacent
+        /// tables merge into one, and a document ending in a table is repaired on open.
+        /// </remarks>
         private void WriteTable(Body body, MdTable table)
         {
-            foreach (var row in table)
+            var rows = table.OfType<MdTableRow>().ToList();
+            var columns = rows.Count == 0 ? 0 : rows.Max(row => row.OfType<MdTableCell>().Count());
+
+            if (columns == 0)
             {
-                if (row is not MdTableRow tableRow)
+                return;
+            }
+
+            var widths = ColumnWidths(rows, columns);
+            var rendered = body.AppendChild(new Table());
+
+            rendered.AppendChild(new TableProperties(
+                new TableWidth
                 {
-                    continue;
+                    Width = widths.Sum().ToString(CultureInfo.InvariantCulture),
+                    Type = TableWidthUnitValues.Dxa,
+                },
+                new TableLayout { Type = TableLayoutValues.Fixed },
+                new TableCellMarginDefault(
+                    new TableCellLeftMargin { Width = 0, Type = TableWidthValues.Dxa },
+                    new TableCellRightMargin { Width = 120, Type = TableWidthValues.Dxa })));
+
+            var grid = rendered.AppendChild(new TableGrid());
+
+            foreach (var width in widths)
+            {
+                grid.AppendChild(new GridColumn
+                {
+                    Width = width.ToString(CultureInfo.InvariantCulture),
+                });
+            }
+
+            foreach (var row in rows)
+            {
+                var target = rendered.AppendChild(new TableRow());
+
+                if (row.IsHeader)
+                {
+                    target.AppendChild(new TableRowProperties(new TableHeader()));
                 }
 
-                var paragraph = body.AppendChild(new Paragraph());
-                var first = true;
+                var cells = row.OfType<MdTableCell>().ToList();
 
-                foreach (var cell in tableRow)
+                for (var index = 0; index < columns; index++)
                 {
-                    if (cell is not MdTableCell tableCell)
+                    var cell = target.AppendChild(new TableCell());
+
+                    var properties = new TableCellProperties(
+                        new TableCellWidth
+                        {
+                            Width = widths[index].ToString(CultureInfo.InvariantCulture),
+                            Type = TableWidthUnitValues.Dxa,
+                        });
+
+                    if (row.IsHeader)
+                    {
+                        properties.AppendChild(new TableCellBorders(
+                            new BottomBorder
+                            {
+                                Val = BorderValues.Single,
+                                Size = 6U,
+                                Color = "808080",
+                            }));
+                    }
+
+                    cell.AppendChild(properties);
+
+                    // Every cell needs a paragraph, including an empty one: a cell with none is
+                    // the shape Word repairs on open, and a real CV has empty cells in it - two
+                    // of the qualifications on this candidate's own table state no grade.
+                    var paragraph = cell.AppendChild(new Paragraph());
+
+                    if (index >= cells.Count)
                     {
                         continue;
                     }
 
-                    if (!first)
-                    {
-                        AddText(paragraph, CellSeparator, default);
-                    }
+                    var format = new InlineFormat(Bold: row.IsHeader, Italic: false, Mono: false, Link: false);
+                    var written = false;
 
-                    foreach (var child in tableCell)
+                    foreach (var child in cells[index])
                     {
-                        if (child is ParagraphBlock content)
+                        if (child is not ParagraphBlock content)
                         {
-                            WriteInlines(paragraph, content.Inline, default);
+                            continue;
                         }
-                    }
 
-                    first = false;
+                        if (written)
+                        {
+                            paragraph.AppendChild(NewRun(format)).AppendChild(new Break());
+                        }
+
+                        WriteInlines(paragraph, content.Inline, format);
+                        written = true;
+                    }
                 }
             }
+
+            body.AppendChild(new Paragraph());
         }
+
+        /// <summary>
+        /// Each column's width in twips: half the text width shared evenly, half by content.
+        /// </summary>
+        /// <remarks>
+        /// The same arithmetic as <c>MarkdownPdfRenderer.ColumnWidths</c>, over the same character
+        /// counts, because the two files have to lay a table out the same way. It is written twice
+        /// rather than shared for the reason the whole of this class is: one emits MigraDoc objects
+        /// in centimetres and the other OOXML in twips, and what they share is the tree they walk.
+        /// </remarks>
+        private static int[] ColumnWidths(List<MdTableRow> rows, int columns)
+        {
+            var longest = new int[columns];
+
+            foreach (var row in rows)
+            {
+                var cells = row.OfType<MdTableCell>().ToList();
+
+                for (var index = 0; index < cells.Count && index < columns; index++)
+                {
+                    longest[index] = Math.Max(longest[index], CellLength(cells[index]));
+                }
+            }
+
+            var total = longest.Sum();
+            var available = Twips(21.0 - 2.0 - 2.0);
+            var widths = new int[columns];
+
+            for (var index = 0; index < columns; index++)
+            {
+                var even = 1d / columns;
+                var byContent = total == 0 ? even : (double)longest[index] / total;
+
+                widths[index] = (int)Math.Round(available * ((even + byContent) / 2));
+            }
+
+            return widths;
+        }
+
+        /// <summary>How much text one cell holds, for sizing rather than for layout.</summary>
+        private static int CellLength(MdTableCell cell)
+            => cell.OfType<ParagraphBlock>()
+                .Sum(block => block.Inline?.Descendants<LiteralInline>()
+                    .Sum(literal => literal.Content.Length) ?? 0);
 
         /// <summary>
         /// Walks the inline tree, carrying emphasis down as run formatting rather than as markup.
@@ -869,7 +1002,6 @@ public static class MarkdownDocxRenderer
 
     /// <summary>The bullet the PDF draws, U+2022, and the em dash it separates table cells with.</summary>
     private const string BulletGlyph = "•";
-    private const string CellSeparator = "  —  ";
 
     private static void AddText(OpenXmlCompositeElement target, string? value, InlineFormat format)
     {

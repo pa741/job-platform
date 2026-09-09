@@ -1,4 +1,4 @@
-using System.IO.Compression;
+﻿using System.IO.Compression;
 using System.Text;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
@@ -74,6 +74,130 @@ public sealed class MarkdownDocxRendererTests
         using var reader = new StreamReader(stream, Encoding.UTF8);
 
         return reader.ReadToEnd();
+    }
+
+    /// <summary>The markdown a real CV is written in: a table, and one line per skills group.</summary>
+    private const string Tabular = """
+        # Ada Lovelace
+
+        ## Education
+
+        | Qualification | Institution | Dates | Grade |
+        |---|---|---|---|
+        | BSc (Hons) Computer Science, final-year top-up, alongside a 25-hour week | University of Northampton | September 2025 to June 2026 | 2:1 |
+        | Foundation Degree, Applied Computing | MSMK, Madrid | September 2023 to June 2025 | |
+
+        ## Skills
+        **AI / LLM engineering**: Claude API, RAG, Semantic Kernel
+        **Languages**: C#, TypeScript, Rust
+        """;
+
+    /// <summary>
+    /// A pipe table arrives as a table rather than as its own syntax.
+    /// </summary>
+    /// <remarks>
+    /// <b>The failure this closes was visible in a real document.</b> The pipeline had tables off,
+    /// on the argument that a CV needs none, so a candidate's education section reached the
+    /// renderer as ordinary text and left it as a paragraph of pipes -
+    /// <c>| BSc (Hons) | University of Northampton | 2:1 |</c> - in the file an employer opens.
+    /// A construct people will type has to be handled or refused; what it must not do is render
+    /// as the markup they typed.
+    /// </remarks>
+    [Fact]
+    public void A_pipe_table_is_written_as_a_table()
+    {
+        using var document = Read(MarkdownDocxRenderer.Render(Tabular, "CV"));
+
+        var table = Assert.Single(BodyOf(document).Elements<Table>());
+        var rows = table.Elements<TableRow>().ToList();
+
+        // The header and both qualifications.
+        Assert.Equal(3, rows.Count);
+
+        // The header repeats when the table breaks across a page, which is the fact the parser
+        // knows and a "first row wins" rule would get wrong on a pasted fragment.
+        Assert.NotNull(rows[0].TableRowProperties?.GetFirstChild<TableHeader>());
+
+        Assert.Equal(4, rows[0].Elements<TableCell>().Count());
+
+        // The pipes themselves are gone from the document, which is the whole point.
+        Assert.DoesNotContain("|---|", BodyOf(document).InnerText, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Every cell holds a paragraph, including the ones with nothing in them.
+    /// </summary>
+    /// <remarks>
+    /// A cell with no paragraph is the shape Word repairs on open, and a real CV has empty cells:
+    /// two of this candidate's qualifications state no grade. The table is also followed by a
+    /// paragraph, because a document ending in a table is repaired the same way.
+    /// </remarks>
+    [Fact]
+    public void Empty_cells_and_the_end_of_the_table_are_still_well_formed()
+    {
+        using var document = Read(MarkdownDocxRenderer.Render(Tabular, "CV"));
+
+        var body = BodyOf(document);
+        var table = Assert.Single(body.Elements<Table>());
+
+        Assert.All(
+            table.Elements<TableRow>().SelectMany(row => row.Elements<TableCell>()),
+            cell => Assert.NotEmpty(cell.Elements<Paragraph>()));
+
+        Assert.IsType<Paragraph>(table.NextSibling());
+    }
+
+    /// <summary>
+    /// Columns are sized from their content, so a long cell is not squeezed into a quarter.
+    /// </summary>
+    /// <remarks>
+    /// Equal columns were the first attempt and are visibly wrong on a real CV: a seventy-character
+    /// qualification against a grade of three characters wraps to roughly one word per line while
+    /// "2:1" sits in a quarter of the page. Asserted as an ordering rather than as exact widths -
+    /// what matters is that the long column wins, not the arithmetic that decides by how much.
+    /// </remarks>
+    [Fact]
+    public void The_widest_column_gets_the_most_room()
+    {
+        using var document = Read(MarkdownDocxRenderer.Render(Tabular, "CV"));
+
+        var grid = Assert.Single(BodyOf(document).Elements<Table>()).Elements<TableGrid>().Single();
+
+        var widths = grid.Elements<GridColumn>()
+            .Select(column => int.Parse(column.Width!.Value!, System.Globalization.CultureInfo.InvariantCulture))
+            .ToList();
+
+        Assert.Equal(4, widths.Count);
+
+        // Qualification is the longest column and Grade the shortest.
+        Assert.Equal(widths.Max(), widths[0]);
+        Assert.Equal(widths.Min(), widths[3]);
+
+        // And the table fits the text width rather than overflowing the margins.
+        Assert.InRange(widths.Sum(), 9_000, 9_700);
+    }
+
+    /// <summary>
+    /// A newline inside a paragraph is a line break, which is not what CommonMark says.
+    /// </summary>
+    /// <remarks>
+    /// <b>A deliberate departure, and the reason is who types these.</b> The specification folds a
+    /// single newline into a space, so a skills list written one group per line arrives as one
+    /// paragraph with the bold runs buried in it. These documents are typed into a plain textarea
+    /// by a person who expects the lines they typed - the bargain every comment box on the
+    /// internet strikes - and the other author is a model told to write paragraphs separated by
+    /// blank lines, so nothing here is wrapped prose that would break early.
+    /// </remarks>
+    [Fact]
+    public void A_single_newline_breaks_the_line()
+    {
+        using var document = Read(MarkdownDocxRenderer.Render(Tabular, "CV"));
+
+        var skills = BodyOf(document).Elements<Paragraph>()
+            .Single(paragraph => paragraph.InnerText.Contains("Claude API", StringComparison.Ordinal));
+
+        Assert.Contains("Languages", skills.InnerText, StringComparison.Ordinal);
+        Assert.NotEmpty(skills.Descendants<Break>());
     }
 
     [Fact]

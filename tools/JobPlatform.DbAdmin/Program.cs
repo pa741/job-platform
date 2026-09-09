@@ -40,6 +40,7 @@ internal static class Program
                   dbadmin coverage        "<connection-string>" [top-mentions]
                   dbadmin apply-links     "<connection-string>" [days]
                   dbadmin delete-submissions "<connection-string>" <id> [<id>...] [--confirm]
+                  dbadmin delete-applications "<connection-string>" (<id>... | --all) [--confirm]
                   dbadmin metrics         "<cosmos-account-endpoint>" [search-term]
 
                 The connection string must authenticate as the server's Entra admin, e.g.
@@ -71,6 +72,17 @@ internal static class Program
                 "apply-links" => await ApplyLinksAsync(
                     connectionString,
                     args.Length >= 3 && int.TryParse(args[2], out var days) ? days : 7),
+                // Dry run unless --confirm, like the submissions command below and for a
+                // related reason: these rows cost model calls to produce and nothing regenerates
+                // them on demand except another pass over the same postings.
+                "delete-applications" => await DeleteApplicationsAsync(
+                    connectionString,
+                    [.. args.Skip(2)
+                        .Where(a => !a.StartsWith("--", StringComparison.Ordinal))
+                        .Select(a => long.TryParse(a, out var id) ? id : -1)
+                        .Where(id => id > 0)],
+                    args.Contains("--all", StringComparer.Ordinal),
+                    args.Contains("--confirm", StringComparer.Ordinal)),
                 // Dry run unless --confirm. The ids are typed by a person from a list, and
                 // the cost of a typo here is somebody's real application history.
                 "delete-submissions" => await DeleteSubmissionsAsync(
@@ -561,6 +573,99 @@ internal static class Program
     /// Dry run unless <c>--confirm</c> is passed. It prints exactly what would go, because the
     /// ids come from a human reading a list and the cost of a typo is somebody's real history.
     /// </remarks>
+    /// <summary>
+    /// Removes generated drafts - the cover letter, the emphasis list and the drafted free text.
+    /// </summary>
+    /// <remarks>
+    /// <b>Deleting a draft deletes work somebody paid for.</b> Each row is a call to the writing
+    /// deployment, which is roughly twenty-five times the bulk model per token, so this is a dry
+    /// run unless <c>--confirm</c> and it prints what it would remove either way. Regenerating one
+    /// is a POST away and costs that again.
+    ///
+    /// <b>It takes ids or <c>--all</c>, and never an empty argument list as "everything".</b> The
+    /// destructive reading of a forgotten argument is the one that must not be reachable by
+    /// accident, which is the same reason <c>ParkAsync</c> refuses an empty gap set rather than
+    /// treating it as "nothing missing".
+    ///
+    /// <b>Nothing references these rows</b> - a submission names a posting rather than a draft, so
+    /// deleting one cannot orphan an application record or a park. What it does leave behind is
+    /// the rendered files in blob storage, which are addressed by path from the row that is going
+    /// away; they are small and they cost pennies, and a delete that reached into storage from a
+    /// database tool would be a second thing this command could get wrong.
+    /// </remarks>
+    private static async Task<int> DeleteApplicationsAsync(
+        string connectionString, IReadOnlyList<long> ids, bool all, bool confirm)
+    {
+        if (ids.Count == 0 && !all)
+        {
+            return Fail("delete-applications needs ids, or --all for every draft.");
+        }
+
+        if (ids.Count > 0 && all)
+        {
+            return Fail("delete-applications takes ids or --all, not both.");
+        }
+
+        await using var db = new JobsDbContext(Options(connectionString));
+
+        var query = all
+            ? db.ApplicationDocuments
+            : db.ApplicationDocuments.Where(d => ids.Contains(d.Id));
+
+        var rows = await query
+            .Select(d => new
+            {
+                d.Id,
+                d.PostingId,
+                d.Posting!.Title,
+                d.Revision,
+                d.CreatedAtUtc,
+                // Named so the operator can see whose rows these are before removing them.
+                d.Profile!.SubjectId,
+            })
+            .OrderBy(d => d.Id)
+            .ToListAsync();
+
+        if (rows.Count == 0)
+        {
+            Console.WriteLine("Nothing to delete.");
+            return all ? 0 : 1;
+        }
+
+        Console.WriteLine(confirm ? "Deleting:" : "Would delete (dry run):");
+        Console.WriteLine($"  {"id",6} {"posting",8} {"rev",4}  {"created",-20} title");
+
+        foreach (var row in rows)
+        {
+            Console.WriteLine(
+                $"  {row.Id,6} {row.PostingId,8} {row.Revision,4}  "
+                + $"{row.CreatedAtUtc:yyyy-MM-dd HH:mm:ss}  {Truncate(row.Title, 46)}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"  drafts: {rows.Count}");
+        Console.WriteLine($"  postings affected: {rows.Select(r => r.PostingId).Distinct().Count()}");
+        Console.WriteLine($"  subjects affected: {rows.Select(r => r.SubjectId).Distinct().Count()}");
+        Console.WriteLine("  rendered files in blob storage are left where they are.");
+
+        if (!confirm)
+        {
+            Console.WriteLine();
+            Console.WriteLine("  Dry run. Re-run with --confirm to delete. Nothing was changed.");
+            return 0;
+        }
+
+        db.ApplicationDocuments.RemoveRange(
+            rows.Select(r => new ApplicationDocumentEntity { Id = r.Id }).ToList());
+
+        var deleted = await db.SaveChangesAsync();
+
+        Console.WriteLine();
+        Console.WriteLine($"  Deleted. {deleted} draft(s) removed.");
+
+        return 0;
+    }
+
     private static async Task<int> DeleteSubmissionsAsync(
         string connectionString, IReadOnlyList<long> ids, bool confirm)
     {

@@ -51,6 +51,68 @@ public sealed class MarkdownPdfRendererTests
     private static PdfSharp.Pdf.PdfDocument Read(byte[] bytes)
         => PdfReader.Open(new MemoryStream(bytes), PdfDocumentOpenMode.Import);
 
+    /// <summary>The markdown a real CV is written in: a table, and one line per skills group.</summary>
+    private const string Tabular = """
+        # Ada Lovelace
+
+        ## Education
+
+        | Qualification | Institution | Dates | Grade |
+        |---|---|---|---|
+        | BSc (Hons) Computer Science, final-year top-up, alongside a 25-hour week | University of Northampton | September 2025 to June 2026 | 2:1 |
+        | Foundation Degree, Applied Computing | MSMK, Madrid | September 2023 to June 2025 | |
+
+        ## Skills
+        **AI / LLM engineering**: Claude API, RAG, Semantic Kernel
+        **Languages**: C#, TypeScript, Rust
+        """;
+
+    /// <summary>
+    /// A table renders as a table, and its own syntax never reaches the page.
+    /// </summary>
+    /// <remarks>
+    /// <b>Found in a real document rather than in a fixture.</b> With pipe tables off, a
+    /// candidate's education section left this renderer as a paragraph of pipes in the file an
+    /// employer opens. The pipes are what this asserts against: a layout assertion would pin the
+    /// arithmetic, where what matters is that the markup is gone and the cells are on the page.
+    /// </remarks>
+    [Fact]
+    public void A_pipe_table_renders_as_a_table_and_not_as_pipes()
+    {
+        var text = ContentText(MarkdownPdfRenderer.Render(Tabular, "CV"));
+
+        Assert.DoesNotContain("|---|", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("| BSc", text, StringComparison.Ordinal);
+
+        // Every cell is still in the document, header included. Asserted a word at a time
+        // because a cell wraps inside its column and each line is drawn separately - the text of
+        // a wrapped cell never appears in one piece in a content stream, which is a fact about
+        // PDF rather than about this table.
+        Assert.Contains("Qualification", text, StringComparison.Ordinal);
+        Assert.Contains("Northampton", text, StringComparison.Ordinal);
+        Assert.Contains("2:1", text, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A table of one long column and three short ones still fits on the page.
+    /// </summary>
+    /// <remarks>
+    /// <b>The bug this pins was invisible and looked like a layout opinion.</b>
+    /// <c>PageFormat.A4</c> does not fill in <c>PageSetup.PageWidth</c> - the format is resolved
+    /// at render time - so a table sizing its columns from the section read zero, subtracted two
+    /// margins, and got a negative width. MigraDoc turned that into columns one word wide, which
+    /// reads as a bad choice rather than as arithmetic on an unset property. The geometry is now
+    /// stated once and this is the assertion that would have caught it: one-word columns turn two
+    /// table rows into most of a page.
+    /// </remarks>
+    [Fact]
+    public void A_table_does_not_blow_the_page_out()
+    {
+        using var document = Read(MarkdownPdfRenderer.Render(Tabular, "CV"));
+
+        Assert.Equal(1, document.PageCount);
+    }
+
     [Fact]
     public void A_cv_renders_to_a_valid_pdf()
     {
