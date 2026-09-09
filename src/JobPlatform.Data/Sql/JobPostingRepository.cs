@@ -398,6 +398,20 @@ public sealed class JobPostingRepository(JobsDbContext db, ILogger<JobPostingRep
         entity.PostingAgeDays = posting.PostingAgeDays;
         entity.RepostCount = posting.RepostCount;
         entity.FakeFreshness = posting.FakeFreshness;
+
+        // After the three link columns above rather than beside JobUrlDirect, because it reads
+        // all of them - and EmployerAtsApplyUrl off the entity rather than off the posting,
+        // because the scraper knows nothing about it. A board that starts publishing an apply URL
+        // for a posting the recovery pass had already answered about moves the vendor to the
+        // published link's, which is the ladder's own precedence and not a special case.
+        //
+        // Written on every posting the scraper sees rather than only on a material change: the
+        // vendor is a fact about a link and HasMaterialChange does not watch JobUrlDirect, so a
+        // board quietly swapping an aggregator link for an employer one would otherwise never
+        // reach the column. It costs one string parse per row of a batch that has already parsed
+        // the location and hashed the title twice.
+        entity.ApplyVendor = JobPostingEntity.VendorOf(
+            entity.JobUrlDirect, entity.EmployerAtsApplyUrl, entity.JobUrl);
     }
 
     /// <summary>

@@ -296,7 +296,21 @@ public sealed class MatchEndpoints : IEndpointGroup
     /// board's stated posted date where there is one, first-seen where there is not, because two
     /// postings in five state a date and a filter that believed only those would hide the rest of
     /// the shortlist.
+    ///
+    /// <b><paramref name="excludeAggregators"/> hides the postings whose apply link leads to
+    /// another job board rather than to an employer.</b> It is the same rule the apply loop
+    /// already skips on - <c>AtsVendor.Aggregator</c>, read off the link - offered here because a
+    /// row an agent will never act on is still taking up the page a person reads to decide what to
+    /// do today. Off by default, like every other filter on this route and for the reason
+    /// <c>PostedWithin</c> defaults to "any time": a list quietly showing a subset reads as a
+    /// market that has gone quiet.
+    ///
+    /// It does not hide what it has not judged. A posting nothing has derived a vendor for comes
+    /// back either way - see the repository.
     /// </remarks>
+    /// <param name="excludeAggregators">
+    /// Drop the postings whose apply link leads to another job board. False for the whole list.
+    /// </param>
     private static async Task<IResult> ListAsync(
         ClaimsPrincipal user,
         [FromServices] CandidateProfileRepository profiles,
@@ -308,7 +322,8 @@ public sealed class MatchEndpoints : IEndpointGroup
         int limit = 25,
         int offset = 0,
         bool dismissed = false,
-        int? postedWithinDays = null)
+        int? postedWithinDays = null,
+        bool excludeAggregators = false)
     {
         if (!user.TryGetSubjectId(out var subjectId, out var error))
         {
@@ -348,6 +363,7 @@ public sealed class MatchEndpoints : IEndpointGroup
             offset,
             dismissed,
             postedWithinDays is { } days ? PostingAge.Cutoff(clock.GetUtcNow(), days) : null,
+            excludeAggregators,
             ct);
 
         return TypedResults.Ok(new { items = rows.Select(ToSummary).ToList(), offset });
@@ -544,6 +560,12 @@ public sealed class MatchEndpoints : IEndpointGroup
             Seniority = row.Seniority.ToString(),
             DatePosted = row.DatePosted,
             RequiredGapCount = row.RequiredGapCount,
+
+            // Null rather than "Unknown" where nothing has derived it, on the reasoning the
+            // verdict below is written out for: "nobody has looked at this link" and "there is
+            // nothing at the end of this link" are different facts, and a default enum name
+            // collapses them into the second.
+            ApplyVendor = row.ApplyVendor?.ToString(),
 
             // Null rather than "Unknown" where the sweep has not been here. A client has to be
             // able to tell "the model has not looked at this yet" from "the model looked and

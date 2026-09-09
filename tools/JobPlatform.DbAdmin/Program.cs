@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using JobPlatform.Core.Applications;
 using JobPlatform.Core.Dedup;
 using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Model;
@@ -39,6 +40,7 @@ internal static class Program
                   dbadmin status          "<connection-string>"
                   dbadmin coverage        "<connection-string>" [top-mentions]
                   dbadmin apply-links     "<connection-string>" [days]
+                  dbadmin backfill-apply-vendor "<connection-string>" [--confirm]
                   dbadmin delete-submissions "<connection-string>" <id> [<id>...] [--confirm]
                   dbadmin delete-applications "<connection-string>" (<id>... | --all) [--confirm]
                   dbadmin metrics         "<cosmos-account-endpoint>" [search-term]
@@ -67,6 +69,9 @@ internal static class Program
                     connectionString,
                     args.Length >= 3 && int.TryParse(args[2], out var top) ? top : 40),
                 "backfill-crossboard" => await BackfillCrossBoardAsync(
+                    connectionString,
+                    args.Contains("--confirm", StringComparer.Ordinal)),
+                "backfill-apply-vendor" => await BackfillApplyVendorAsync(
                     connectionString,
                     args.Contains("--confirm", StringComparer.Ordinal)),
                 "apply-links" => await ApplyLinksAsync(
@@ -958,6 +963,127 @@ internal static class Program
         Console.WriteLine($"Scanned      : {scanned}");
         Console.WriteLine($"Keyable      : {keyed}");
         Console.WriteLine($"No key       : {unkeyable}  (no city or no employer - clusters with nothing)");
+        Console.WriteLine($"Out of date  : {changed}");
+        Console.WriteLine(confirm
+            ? $"Written      : {changed}"
+            : "Dry run. Nothing was written - pass --confirm to write.");
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Derives <c>JobPostings.ApplyVendor</c> for the postings nothing has rewritten since the
+    /// column was added.
+    /// </summary>
+    /// <remarks>
+    /// <b>A console command rather than a step in the migration, for the reason
+    /// <see cref="BackfillCrossBoardAsync"/> is one.</b> <c>AtsVendorDetector.Detect</c> parses a
+    /// host, walks it to a label boundary and reads the query parameters, because Greenhouse and
+    /// Ashby embed their forms under the employer's own domain and 1,259 of 2,006 direct apply
+    /// URLs in this corpus match no bare host at all. Rewriting that in T-SQL would be a second
+    /// implementation of the one rule the aggregator facet rests on, and the two would disagree on
+    /// the first URL either spelled differently - silently, in the direction of hiding a job.
+    ///
+    /// <b>It is not only for the deploy.</b> <c>JobPostingRepository.Apply</c> refreshes the
+    /// column on every posting the scraper sees, so the live corpus re-derives itself nightly and
+    /// this is needed for two things: the postings that have stopped being scraped and are still
+    /// on somebody's shortlist, and re-running the whole corpus after a change to the vendor
+    /// tables - which is how a newly recognised aggregator domain reaches rows that were read
+    /// before it was listed.
+    ///
+    /// It writes only where the value differs, so it is idempotent and a second run says so. Dry
+    /// run unless <c>--confirm</c>, like every other command here that writes.
+    /// </remarks>
+    private static async Task<int> BackfillApplyVendorAsync(string connectionString, bool confirm)
+    {
+        await using var db = new JobsDbContext(Options(connectionString));
+
+        const int BatchSize = 500;
+
+        var scanned = 0;
+        var changed = 0;
+        var aggregators = 0;
+        var lastId = 0L;
+
+        while (true)
+        {
+            // Keyset paging on the primary key rather than Skip/Take, like the cross-board
+            // backfill: the rows are rewritten as they are read, so an offset would walk over a
+            // shifting result set.
+            //
+            // Four narrow columns and never the entity. A posting row carries an unbounded
+            // description, and dragging 7,000 of those across the wire to write one integer each
+            // is the shape the cost model forbids on a database billed by the second.
+            var batch = await db.JobPostings
+                .Where(p => p.Id > lastId)
+                .OrderBy(p => p.Id)
+                .Take(BatchSize)
+                .Select(p => new
+                {
+                    p.Id,
+                    p.JobUrlDirect,
+                    p.EmployerAtsApplyUrl,
+                    p.JobUrl,
+                    p.ApplyVendor,
+                })
+                .ToListAsync();
+
+            if (batch.Count == 0)
+            {
+                break;
+            }
+
+            lastId = batch[^1].Id;
+            scanned += batch.Count;
+
+            foreach (var row in batch)
+            {
+                // The same call the ingest makes, over the same ladder, which is the whole reason
+                // this is a console command.
+                var vendor = JobPostingEntity.VendorOf(
+                    row.JobUrlDirect, row.EmployerAtsApplyUrl, row.JobUrl);
+
+                if (vendor == AtsVendor.Aggregator)
+                {
+                    aggregators++;
+                }
+
+                if (row.ApplyVendor == vendor)
+                {
+                    continue;
+                }
+
+                changed++;
+
+                if (confirm)
+                {
+                    // Attached by key alone, for the reason the cross-board backfill gives:
+                    // loading the entity would fetch a description to write four bytes.
+                    var stub = new JobPostingEntity
+                    {
+                        Id = row.Id,
+                        SourceKey = string.Empty,
+                        Site = string.Empty,
+                        ExternalId = string.Empty,
+                        ContentHash = string.Empty,
+                        Title = string.Empty,
+                        ApplyVendor = vendor,
+                    };
+
+                    db.JobPostings.Attach(stub);
+                    db.Entry(stub).Property(e => e.ApplyVendor).IsModified = true;
+                }
+            }
+
+            if (confirm)
+            {
+                await db.SaveChangesAsync();
+                db.ChangeTracker.Clear();
+            }
+        }
+
+        Console.WriteLine($"Scanned      : {scanned}");
+        Console.WriteLine($"Aggregators  : {aggregators}  (apply link leads to another job board)");
         Console.WriteLine($"Out of date  : {changed}");
         Console.WriteLine(confirm
             ? $"Written      : {changed}"

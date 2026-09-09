@@ -109,7 +109,8 @@ public sealed class EmployerAtsBoardStoreTests : IDisposable
         string? jobUrlDirect = null,
         bool? offsiteApply = null,
         string? employerAtsApplyUrl = null,
-        DateTimeOffset? lastSeenUtc = null)
+        DateTimeOffset? lastSeenUtc = null,
+        AtsVendor? applyVendor = null)
     {
         await using var db = CreateContext();
 
@@ -136,6 +137,7 @@ public sealed class EmployerAtsBoardStoreTests : IDisposable
                 JobUrlDirect = jobUrlDirect,
                 OffsiteApply = offsiteApply,
                 EmployerAtsApplyUrl = employerAtsApplyUrl,
+                ApplyVendor = applyVendor,
                 FirstSeenUtc = Now,
                 LastSeenUtc = lastSeenUtc ?? Now,
             });
@@ -641,6 +643,53 @@ public sealed class EmployerAtsBoardStoreTests : IDisposable
         Assert.Equal(published, withLink.JobUrlDirect);
         Assert.Equal(recovered, withLink.EmployerAtsApplyUrl);
         Assert.Equal(AtsMatchConfidence.TitleOnly, withLink.EmployerAtsMatchConfidence);
+    }
+
+    /// <summary>
+    /// The vendor column moves with the link, because that is what recovering one is worth.
+    /// </summary>
+    /// <remarks>
+    /// <b>A recovered link is exactly the event that changes the answer.</b> The row was a
+    /// LinkedIn posting page - which <c>AtsVendorDetector</c> reads as <c>Aggregator</c>, because
+    /// LinkedIn is another job board whatever else it is - and it is now an employer's own form.
+    /// The shortlist's facet hides aggregators, so a recovery that left the column alone would be
+    /// invisible on the page it was built for: the posting would stay hidden behind the facet
+    /// while carrying a perfectly good employer link.
+    ///
+    /// <b>And it must not move where the advert's own board published a link.</b> That is the top
+    /// rung of the ladder, so <c>EmployerAtsApplyUrl</c> is not the link such a posting hands
+    /// over and its vendor is not the one to write. The guard is in SQL rather than assumed from
+    /// the work list: the list is built one board fetch earlier and a scrape in between may have
+    /// filled the column.
+    /// </remarks>
+    [Fact]
+    public async Task A_recovered_link_moves_the_vendor_only_where_the_board_published_none()
+    {
+        const string published = "https://jobs.lever.co/acme/9f3c";
+        const string recovered = "https://boards.greenhouse.io/acme/jobs/4012999";
+
+        var quiet = (await AddPostingsAsync(Acme, 1, applyVendor: AtsVendor.Aggregator))[0];
+
+        var loud = (await AddPostingsAsync(
+            Acme, 1, jobUrlDirect: published, applyVendor: AtsVendor.Lever))[0];
+
+        await using (var db = CreateContext())
+        {
+            Assert.Equal(2, await CreateRepository(db).RecordMatchesAsync(
+                [
+                    new AtsPostingMatch(quiet, AtsListingMatch.For(Listing(recovered), AtsMatchConfidence.TitleAndPlace)),
+                    new AtsPostingMatch(loud, AtsListingMatch.For(Listing(recovered), AtsMatchConfidence.TitleOnly)),
+                ],
+                Now));
+        }
+
+        // The link-less posting stops being an aggregator row, which is the whole point of the
+        // recovery pass reaching the dashboard.
+        Assert.Equal(AtsVendor.Greenhouse, (await PostingAsync(quiet)).ApplyVendor);
+
+        // The one whose own board published a link keeps that link's vendor. Its stored apply URL
+        // is still the published one; the recovered column beside it is not what it hands over.
+        Assert.Equal(AtsVendor.Lever, (await PostingAsync(loud)).ApplyVendor);
     }
 
     [Fact]

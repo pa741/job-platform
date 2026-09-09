@@ -263,6 +263,18 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
             // that wants only the stronger matches can name the member instead of a digit.
             entity.Property(e => e.EmployerAtsMatchConfidence).HasConversion<int?>();
 
+            // AtsVendor? rather than AtsVendor, and mapped as the enum for the same two reasons
+            // as the line above: null keeps meaning "nobody has derived this yet", which is a
+            // different claim from AtsVendor.Unknown - "there is no destination to reason about" -
+            // and a query that wants only the aggregator rows can name the member rather than 13.
+            //
+            // Not indexed, on the terms the three columns above are not: JobPostings is rewritten
+            // on every ingest upsert, so an index nobody has measured is a write cost on the hot
+            // path. The shortlist's facet reads this as a residual predicate on a row the
+            // (ProfileId, RankScore) index has already found, which is a column read rather than
+            // a scan.
+            entity.Property(e => e.ApplyVendor).HasConversion<int?>();
+
             // Descriptions run to several KB and are stored intact, so no MaxLength is
             // set. EF already maps an unbounded string to nvarchar(max) on SQL Server;
             // spelling that type out explicitly would also make the model unbuildable on

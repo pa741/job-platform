@@ -53,6 +53,28 @@ public record MatchSummary
     /// <summary>How many requirements the posting marked essential and the profile does not meet.</summary>
     public int RequiredGapCount { get; init; }
 
+    /// <summary>
+    /// Whose application system sits at the end of this posting's apply link, or null where
+    /// nothing has derived it yet.
+    /// </summary>
+    /// <remarks>
+    /// <b><c>Aggregator</c> is the value worth acting on, and it is what the facet hides.</b> It
+    /// means the link leads to another job board rather than to an employer - a LinkedIn posting
+    /// page, or a "direct" link that turns out to re-list the advert somewhere else - so an agent
+    /// following it spends a slot of the day's cap arriving at a second search results page. The
+    /// apply loop already skips these; the shortlist returns the value so a person can see why a
+    /// row is thin, and <c>excludeAggregators</c> so they can stop seeing the row at all.
+    ///
+    /// <b>Null is not <c>Unknown</c>.</b> <c>Unknown</c> is a verdict - there is no address to
+    /// open - and null means nobody has derived one, which is the state of any posting nothing has
+    /// rescraped since the column was added. Rendering the two the same way is what the null is
+    /// here to prevent, and it is why the facet keeps a null row rather than hiding it.
+    ///
+    /// It answers about <i>this</i> posting. The apply queue may borrow a link from the same job
+    /// on another board; that listing is a row of its own here, with its own vendor.
+    /// </remarks>
+    public string? ApplyVendor { get; init; }
+
     /// <summary>Null until the nightly sweep has reached this row.</summary>
     public string? Verdict { get; init; }
 

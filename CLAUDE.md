@@ -758,6 +758,24 @@ mechanism, and it is derived from the corpus rather than guessed at.
 - **Do not expect much from Workable.** Every Workable link in this corpus is
   `apply.workable.com/j/{code}`, which names no board, so those employers are reachable only through
   a probe. Workday has no clean public listing at all and is deliberately out of scope.
+- **`JobPostings.ApplyVendor` is a stored derivation, and it is stored because the rule has no
+  SQL.** `AtsVendorDetector.Detect` parses a host, walks it to a label boundary and reads the query
+  parameters - Greenhouse and Ashby embed under the employer's own domain, and 1,259 of 2,006
+  direct apply URLs match no bare host at all - so it runs after materialisation everywhere it is
+  computed on the fly. That is fine for the apply queue, which computes it over the page it already
+  holds, and wrong for the shortlist's aggregator facet, which is a *filter* on a `Skip`/`Take`
+  paged query: applied after the bound it is a silent reduction of the page size with an offset
+  that steps over rows nobody saw. Same argument as `Seniority` and `AnnualSalaryMin`, which are
+  columns for the same reason.
+- **Both writers of the three link columns must rewrite the vendor, and null is not `Unknown`.**
+  `JobPostingRepository.Apply` runs on every posting the scraper sees - on every posting, not only
+  on a material change, because `HasMaterialChange` does not watch `JobUrlDirect` - so the live
+  corpus re-derives itself nightly. `EmployerAtsBoardRepository.RecordMatchesAsync` rewrites it
+  beside a recovered link, guarded in SQL on `JobUrlDirect IS NULL` rather than assumed from the
+  work list, because that list is built a board fetch earlier. Null means nobody has derived one;
+  `AtsVendor.Unknown` means there is nothing at the end of the link. The facet keeps null rows, or
+  it would empty the shortlist on the morning of a deploy. Rows nothing scrapes any more are
+  reached by `dbadmin backfill-apply-vendor`.
 
 ### Dashboard (`web/`)
 
@@ -790,6 +808,12 @@ mechanism, and it is derived from the corpus rather than guessed at.
   list, same words, one place to change when the cadence does - and it defaults to "Any time",
   because a list silently showing only today's postings reads as a quiet market rather than as a
   filter.
+- **The shortlist's "hide roles that only link to a job board" facet is off by default**, like
+  `PostedWithin` and for the same reason. It sends `excludeAggregators` and the server does the
+  hiding; the row's own `applyVendor` is what the `job board only` stamp reads, so a person can see
+  which rows the facet would take before they take them. **Never render a null `applyVendor` as
+  `Unknown`** - null is "nobody has derived one" and `Unknown` is "there is nothing to open", and
+  collapsing them tells somebody a link is dead when nothing has looked at it.
 - **Never fetch metrics directly in a component.** Go through `MetricsFeed`. That interface
   is what lets the planned Web PubSub push replace polling without touching components; a
   component with its own timer is exactly the shape that cannot be converted.
@@ -1637,6 +1661,15 @@ dotnet run --project tools/JobPlatform.DbAdmin -- seed-concepts "<connection-str
 # normalisation, which has already happened once to the other fingerprint. Dry run unless
 # --confirm, and required once after the apply-loop migration or the queue clusters nothing.
 dotnet run --project tools/JobPlatform.DbAdmin -- backfill-crossboard "<connection-string>" --confirm
+
+# Derive JobPostings.ApplyVendor for the postings nothing has rewritten since the column was
+# added, so the shortlist's "hide roles that only link to a job board" facet can see them. A
+# console command rather than a migration step for the reason backfill-crossboard is one: the rule
+# is C#, and a second implementation of it in T-SQL would disagree on the first URL either spelled
+# differently - silently, in the direction of hiding a job. Idempotent, and not a one-off: re-run
+# it after a change to the vendor tables, which is how a newly listed aggregator domain reaches
+# rows read before it was listed. Dry run unless --confirm.
+dotnet run --project tools/JobPlatform.DbAdmin -- backfill-apply-vendor "<connection-string>" --confirm
 
 # Remove submissions that never described a real application - a test of the write path, a
 # client that misfired. The one eraser in an otherwise append-only pipeline, and deliberately a

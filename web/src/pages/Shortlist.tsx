@@ -70,6 +70,7 @@ export function Shortlist({ api, go }: { api: JobPlatformApi; go: (page: PageId)
   const [assessedOnly, setAssessedOnly] = useState(false);
   const [postedWithinDays, setPostedWithinDays] = useState<number>();
   const [showDismissed, setShowDismissed] = useState(false);
+  const [excludeAggregators, setExcludeAggregators] = useState(false);
   const [offset, setOffset] = useState(0);
 
   const [open, setOpen] = useState<number>();
@@ -81,7 +82,7 @@ export function Shortlist({ api, go }: { api: JobPlatformApi; go: (page: PageId)
     try {
       const result = await api.matches({
         minScore, assessedOnly, postedWithinDays, limit: PAGE_SIZE, offset,
-        dismissed: showDismissed,
+        dismissed: showDismissed, excludeAggregators,
       });
       setNoProfile(false);
       return result.items;
@@ -94,7 +95,7 @@ export function Shortlist({ api, go }: { api: JobPlatformApi; go: (page: PageId)
       }
       throw cause;
     }
-  }, [api, minScore, assessedOnly, postedWithinDays, offset, showDismissed]);
+  }, [api, minScore, assessedOnly, postedWithinDays, offset, showDismissed, excludeAggregators]);
 
   const matches = useApiResource(load);
 
@@ -212,6 +213,21 @@ export function Shortlist({ api, go }: { api: JobPlatformApi; go: (page: PageId)
           Only roles the model has judged
         </label>
 
+        {/* The apply loop skips these already — a link into another job board is another job
+            board, and following it spends a slot of the day's cap arriving at a second search
+            results page. This is the same rule, offered to the person reading the list, because
+            a row nothing will ever apply through is still taking up the page. Off by default,
+            like every filter here: a shortlist quietly showing a subset reads as a quiet market.
+
+            It does not hide a posting whose vendor has not been derived — see `applyVendor`. */}
+        <label className="check">
+          <input
+            type="checkbox" checked={excludeAggregators}
+            onChange={(e) => { setOffset(0); setExcludeAggregators(e.target.checked); }}
+          />
+          Hide roles that only link to a job board
+        </label>
+
         {/* Narrowing to the last day or two is how this page is read on a morning: the sweep
             reserves most of its judgement budget for postings that age, so that is where
             tonight's verdicts are. Any time is still the default - a shortlist silently showing
@@ -239,6 +255,7 @@ export function Shortlist({ api, go }: { api: JobPlatformApi; go: (page: PageId)
             ? 'Nothing set aside yet.'
             : `Nothing above ${minScore}`
               + `${assessedOnly ? ' that the model has judged' : ''}`
+              + `${excludeAggregators ? ' with an employer to apply to' : ''}`
               + `${age(postedWithinDays)}.`}
         </div>
       )}
@@ -312,6 +329,16 @@ function Entry({ api, match, rank, scoreRank, expanded, onToggle, onDismiss, onR
 
           {match.requiredGapCount > 0 && (
             <span className="stamp warn">{match.requiredGapCount} unmet</span>
+          )}
+
+          {/* Only on the rows the facet would hide, and only for that value. `Unknown` and the
+              twelve vendor names are not worth a stamp on a shortlist — knowing the form is
+              Greenhouse rather than Lever changes nothing a person does here — but "there is no
+              employer at the end of this" is why the row reads thin, and it is the one thing a
+              reader would otherwise have to open the posting to find out. A null vendor gets
+              nothing: nobody has derived one, which is not a claim about the link. */}
+          {match.applyVendor === 'Aggregator' && (
+            <span className="stamp warn">job board only</span>
           )}
 
           {/* Coverage on every row, not only where it is alarming. A 100 over every axis and a

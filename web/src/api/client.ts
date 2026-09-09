@@ -653,6 +653,17 @@ export interface MatchQuery {
    * those would hide the rest of the shortlist.
    */
   postedWithinDays?: number;
+  /**
+   * Drop the postings whose apply link leads to another job board rather than to an employer.
+   *
+   * The same rule the apply loop already skips on, offered here because a row nothing will ever
+   * apply through still takes up the page a person reads to decide what to do today. Off by
+   * default: a list quietly showing a subset reads as a market that has gone quiet.
+   *
+   * It never hides a row whose `applyVendor` is null — that means nobody has derived one yet,
+   * not that there is nothing at the end of the link.
+   */
+  excludeAggregators?: boolean;
 }
 
 export interface PostingQuery {

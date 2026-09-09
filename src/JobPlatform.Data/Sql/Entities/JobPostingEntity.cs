@@ -1,4 +1,4 @@
-using JobPlatform.Core.Applications;
+﻿using JobPlatform.Core.Applications;
 using JobPlatform.Core.Enrichment;
 
 namespace JobPlatform.Data.Sql.Entities;
@@ -230,6 +230,66 @@ public sealed class JobPostingEntity
     /// which is the only trace either outcome leaves on the row.
     /// </remarks>
     public DateTimeOffset? EmployerAtsCheckedUtc { get; set; }
+
+    /// <summary>
+    /// Whose application system sits at the end of this row's own apply link, or null where
+    /// nothing has derived it yet.
+    /// </summary>
+    /// <remarks>
+    /// <b>A stored derivation, for the reason <see cref="Seniority"/> and
+    /// <see cref="AnnualSalaryMin"/> are stored ones.</b> <c>AtsVendorDetector.Detect</c> reads a
+    /// URL rather than compares one - it parses a host, walks it to a label boundary and reads the
+    /// query parameters - so it has no SQL at all, and every caller that wanted it has had to run
+    /// it after materialisation. That is fine for the apply queue, which computes it over the page
+    /// it already holds. It is not fine for a <i>filter</i>: the shortlist is <c>Skip</c>/<c>Take</c>
+    /// paged, and a predicate applied after the bound is not a filter, it is a silent reduction of
+    /// the page size with an offset that steps over rows the caller never saw. This column is what
+    /// lets the shortlist's aggregator facet run in the query, before the bound, like every other
+    /// filter on that path.
+    ///
+    /// <b>It is the vendor of the link this row itself would hand over, and it stops there.</b>
+    /// <c>JobUrlDirect ?? EmployerAtsApplyUrl ?? JobUrl</c> - the ladder
+    /// <c>JobMatchRepository.ResolveApplyTargetAsync</c> already resolves an apply target by, and
+    /// deliberately not the queue's fourth rung. The queue may borrow a link off the same job on
+    /// another board; a row here is one posting rather than a cluster, and the borrowed link
+    /// belongs to the listing that published it - which is itself in the shortlist, carrying its
+    /// own employer vendor. So a LinkedIn listing whose twin can be applied to is hidden by the
+    /// facet and its twin is not, which is the answer the facet is for.
+    ///
+    /// <b>Null means nobody has derived it, and never <see cref="AtsVendor.Unknown"/>.</b> That
+    /// member means "there is no destination to reason about" - a blank link, a <c>mailto:</c>, a
+    /// string that is not a URL - which is a verdict about the row, and a migration that stamped it
+    /// on 7,368 untouched postings would be asserting that verdict about every one of them. The
+    /// same argument, and the same nullability, as <see cref="EmployerAtsMatchConfidence"/> and
+    /// <see cref="OffsiteApply"/>. <b>The facet reads null as "keep"</b>: a filter that hid what it
+    /// had not judged would empty the shortlist on the morning of the deploy.
+    ///
+    /// <b>Every writer of the three columns it reads must rewrite it, and there are two.</b>
+    /// <c>JobPostingRepository.Apply</c> runs on every posting the scraper sees, so the corpus
+    /// refreshes itself nightly; <c>EmployerAtsBoardRepository</c> rewrites it beside a recovered
+    /// link, because that is the whole point of recovering one - a LinkedIn posting stops being an
+    /// aggregator row the moment the employer's own board answers about it. Postings nobody scrapes
+    /// any more are reached by <c>dbadmin backfill-apply-vendor</c>, which is a console command for
+    /// the reason <c>backfill-crossboard</c> is: the rule is C#, and a second implementation of it
+    /// in T-SQL would disagree on the first URL either spelled differently.
+    /// </remarks>
+    public AtsVendor? ApplyVendor { get; set; }
+
+    /// <summary>
+    /// The vendor of the apply link a posting with these columns would hand over.
+    /// </summary>
+    /// <remarks>
+    /// One definition and three readers - the ingest upsert, the recovered-link write and the
+    /// backfill command - for the reason <c>EmployerAtsBoardRepository.WithoutEmployerLink</c>
+    /// gives: a ladder written out at each of them is three spellings held together by nothing,
+    /// and this codebase has already paid for that once on the shortlist's channel filter.
+    ///
+    /// A plain static rather than an <see cref="System.Linq.Expressions.Expression"/>, because
+    /// unlike that rule this one can never compose into a query: it is exactly the call SQL cannot
+    /// make, which is why the column it fills exists.
+    /// </remarks>
+    public static AtsVendor VendorOf(string? jobUrlDirect, string? employerAtsApplyUrl, string? jobUrl)
+        => AtsVendorDetector.Detect(jobUrlDirect ?? employerAtsApplyUrl ?? jobUrl);
 
     // --- derived by PostingEnricher ----------------------------------------------------
 

@@ -20,6 +20,12 @@ namespace JobPlatform.Data.Sql;
 /// because a list response does not need them and paying to deserialise them there would undo
 /// the point of projecting.
 /// </remarks>
+/// <param name="ApplyVendor">
+/// Whose application system sits at the end of this posting's own apply link, read off the stored
+/// column rather than off the URL - see <c>JobPostingEntity.ApplyVendor</c> for why one exists.
+/// Null where nothing has derived it yet, which is not <c>AtsVendor.Unknown</c>: a client showing
+/// this must not present "nobody has looked" as "there is nothing to open".
+/// </param>
 public sealed record MatchRow(
     long PostingId,
     string Title,
@@ -48,7 +54,8 @@ public sealed record MatchRow(
     int ScorerVersion,
     double? Similarity,
     double RankScore,
-    bool HasApplication)
+    bool HasApplication,
+    AtsVendor? ApplyVendor = null)
 {
     /// <summary>Reads one of the JSON columns back. Never throws - see the repository.</summary>
     public IReadOnlyList<T> Read<T>(string? json) => JobMatchRepository.Read<T>(json);
@@ -728,6 +735,28 @@ public sealed class JobMatchRepository(JobsDbContext db)
     /// <param name="postedSince">
     /// Only postings posted at or after this instant. Null for the whole scored corpus.
     /// </param>
+    /// <param name="excludeAggregators">
+    /// Drop the postings whose apply link leads to another job board.
+    /// </param>
+    /// <remarks>
+    /// <b>One clause on a stored column, because the rule that fills it has no SQL.</b>
+    /// <c>AtsVendorDetector.Detect</c> parses a host and reads query parameters, so it runs after
+    /// materialisation everywhere else in this file - and after materialisation is exactly where a
+    /// filter must not run on a <c>Skip</c>/<c>Take</c> paged query. <c>JobPostings.ApplyVendor</c>
+    /// exists so this one can sit with the others, in the query, before the bound.
+    ///
+    /// <b>A row nothing has derived is kept.</b> <c>ApplyVendor</c> is null until a writer reaches
+    /// it, and EF compiles this comparison with C# null semantics - <c>&lt;&gt; 13 OR IS NULL</c> -
+    /// so an undated corpus stays visible rather than vanishing on the morning of a deploy. That is
+    /// the safe direction and the only one: the facet's job is to hide rows an agent would skip,
+    /// and hiding a row nobody has judged is hiding a job for no stated reason.
+    ///
+    /// <b>It answers about this posting and not about the job.</b> The apply queue may borrow a
+    /// link off the same job on another board; the shortlist is a list of postings rather than of
+    /// clusters, so the twin that carries the employer link is its own row here and keeps its own
+    /// employer vendor. Hiding the LinkedIn listing and keeping the twin is the outcome the facet
+    /// is for, not a disagreement with the queue.
+    /// </remarks>
     public async Task<IReadOnlyList<MatchRow>> ListAsync(
         long profileId,
         int minimumScore,
@@ -736,6 +765,7 @@ public sealed class JobMatchRepository(JobsDbContext db)
         int offset,
         bool dismissed = false,
         DateTimeOffset? postedSince = null,
+        bool excludeAggregators = false,
         CancellationToken ct = default)
     {
         var query = db.JobMatches
@@ -753,6 +783,13 @@ public sealed class JobMatchRepository(JobsDbContext db)
         if (postedSince is { } cutoff)
         {
             query = query.Where(PostingRecency.Matches(cutoff));
+        }
+
+        // Beside the age filter and for the same reason: before Skip and Take, or it is a silent
+        // reduction of the page size rather than a filter. See the remarks.
+        if (excludeAggregators)
+        {
+            query = query.Where(m => m.Posting!.ApplyVendor != AtsVendor.Aggregator);
         }
 
         // Either the shortlist or the dismissed pile, never both. A list that mixes them puts
@@ -798,7 +835,8 @@ public sealed class JobMatchRepository(JobsDbContext db)
                 m.ScorerVersion,
                 m.Similarity,
                 m.RankScore,
-                false))
+                false,
+                m.Posting.ApplyVendor))
             .ToListAsync(ct);
     }
 
@@ -1752,7 +1790,8 @@ public sealed class JobMatchRepository(JobsDbContext db)
                 m.ScorerVersion,
                 m.Similarity,
                 m.RankScore,
-                db.ApplicationDocuments.Any(d => d.ProfileId == profileId && d.PostingId == postingId)))
+                db.ApplicationDocuments.Any(d => d.ProfileId == profileId && d.PostingId == postingId),
+                m.Posting.ApplyVendor))
             .FirstOrDefaultAsync(ct);
 
     /// <summary>Every profile with something to score. Small by construction.</summary>

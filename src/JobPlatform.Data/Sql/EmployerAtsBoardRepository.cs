@@ -794,13 +794,30 @@ public sealed class EmployerAtsBoardRepository(JobsDbContext db)
 
             foreach (var (postingId, applyUrl, confidence) in matched)
             {
+                // The vendor of the link this posting would now hand over. Recovering a link is
+                // exactly the event that changes it: the row was a LinkedIn posting page, which
+                // AtsVendorDetector reads as Aggregator, and it is now the employer's own form -
+                // so a shortlist facet that hides aggregators has to stop hiding it here or the
+                // whole recovery is invisible on the page it was built for.
+                //
+                // Guarded by JobUrlDirect rather than assumed from it, and the guard is in SQL so
+                // it is evaluated against the row as it stands. WithoutEmployerLink means the work
+                // list held only postings with no published link, but the list is built one board
+                // fetch earlier and a scrape in between may have filled that column - in which
+                // case the ladder's top rung applies, EmployerAtsApplyUrl is not the link this row
+                // hands over, and its vendor is not the one to write.
+                var vendor = AtsVendorDetector.Detect(applyUrl);
+
                 stamped += await db.JobPostings
                     .Where(p => p.Id == postingId)
                     .ExecuteUpdateAsync(
                         p => p
                             .SetProperty(x => x.EmployerAtsApplyUrl, applyUrl)
                             .SetProperty(x => x.EmployerAtsMatchConfidence, confidence)
-                            .SetProperty(x => x.EmployerAtsCheckedUtc, now),
+                            .SetProperty(x => x.EmployerAtsCheckedUtc, now)
+                            .SetProperty(
+                                x => x.ApplyVendor,
+                                x => x.JobUrlDirect == null ? vendor : x.ApplyVendor),
                         ct);
             }
 

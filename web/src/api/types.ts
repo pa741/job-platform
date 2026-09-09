@@ -432,6 +432,19 @@ export interface MatchSummary {
   coverage: number;
   requiredGapCount: number;
 
+  /**
+   * Whose application system is at the end of this posting's apply link.
+   *
+   * `Aggregator` is the value worth acting on: the link leads to another job board rather than
+   * to an employer, so following it lands on a second set of search results. The apply loop
+   * already skips these, and `MatchQuery.excludeAggregators` hides them here.
+   *
+   * **Null is not `Unknown`.** `Unknown` is a verdict — there is no address to open — and null
+   * means nobody has derived one, which is the state of any posting nothing has rescraped since
+   * the column was added. Render the two differently or not at all.
+   */
+  applyVendor: string | null;
+
   /** Null until the model has judged this pair. Not the same as a Weak verdict. */
   verdict: CandidacyVerdict | null;
   assessmentScore: number | null;

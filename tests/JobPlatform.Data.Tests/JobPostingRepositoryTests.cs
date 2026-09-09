@@ -1,3 +1,4 @@
+﻿using JobPlatform.Core.Applications;
 using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Model;
 using JobPlatform.Data.Sql;
@@ -194,6 +195,62 @@ public sealed class JobPostingRepositoryTests : IDisposable
         Assert.Equal(0, outcome.Unchanged);
         Assert.Equal(2, await db.JobPostings.CountAsync());
         Assert.Equal(2, run.ParsedCount);
+    }
+
+    /// <summary>
+    /// The vendor column the shortlist's aggregator facet filters on.
+    /// </summary>
+    /// <remarks>
+    /// <b>The ingest is the writer that keeps the corpus current, and it writes on every posting
+    /// it sees rather than only on a material change.</b> <c>HasMaterialChange</c> does not watch
+    /// <c>JobUrlDirect</c>, so a board that quietly swapped an aggregator link for an employer one
+    /// would leave the row counted as unchanged - and a vendor written only on the changed branch
+    /// would never hear about it. The second ingest below is the assertion: same posting, new
+    /// link, no material change, and the column moves anyway.
+    ///
+    /// The facet is only as good as this. A stale vendor hides a job somebody could apply to, or
+    /// shows one nothing will ever apply through, and neither says anything about itself.
+    /// </remarks>
+    [Fact]
+    public async Task Ingest_derives_the_apply_vendor_and_rewrites_it_when_the_link_moves()
+    {
+        var boardPage = new JobPosting
+        {
+            ExternalId = "a1",
+            Site = "linkedin",
+            Title = "Backend Engineer",
+            Company = "Northwind Labs",
+            Location = "London, ENG, GB",
+            Description = "text",
+            JobUrl = "https://www.linkedin.com/jobs/view/4295887",
+        };
+
+        await using (var db = CreateContext())
+        {
+            await CreateRepository(db).IngestAsync(Context("run1.csv"), [boardPage], 1, 0);
+
+            // No employer link, so the link this posting hands over is LinkedIn's own page - and
+            // LinkedIn is another job board, whatever else it is. This is the row the facet is
+            // mostly about: measured on this corpus, 309 of 382 applyable postings carried no
+            // employer link and every one of them was LinkedIn.
+            Assert.Equal(AtsVendor.Aggregator, (await db.JobPostings.SingleAsync()).ApplyVendor);
+        }
+
+        await using (var db = CreateContext())
+        {
+            // The board starts publishing the employer's form. Nothing else about the advert
+            // changed, so this run reports the posting as unchanged.
+            var withLink = boardPage with
+            {
+                JobUrlDirect = "https://boards.greenhouse.io/northwind/jobs/4012345",
+            };
+
+            var (_, outcome, _, _) = await CreateRepository(db).IngestAsync(
+                Context("run2.csv"), [withLink], 1, 0);
+
+            Assert.Equal(1, outcome.Unchanged);
+            Assert.Equal(AtsVendor.Greenhouse, (await db.JobPostings.SingleAsync()).ApplyVendor);
+        }
     }
 
     [Fact]
