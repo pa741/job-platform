@@ -752,6 +752,20 @@ mechanism, and it is derived from the corpus rather than guessed at.
 
 Each of these cost a red CI run; none of them fail locally.
 
+- **`host.json`'s `logLevel` does not configure the isolated worker, and nothing says so.**
+  `ConfigureFunctionsApplicationInsights()` registers the Application Insights logger provider
+  with a filter rule of its own, defaulted to Warning, and that rule is not reachable from
+  configuration. So `"JobPlatform": "Information"` in host.json governs the *host's* copy of a log
+  and every `logger.LogInformation` in the worker assembly is dropped before it leaves the
+  process. The symptom is telemetry that looks fine: the host's own
+  `Executing 'Functions.MatchSweepFunction'` pairs arrive under `Function.*`, so a query finds
+  rows and a reader concludes logging works. Measured on 2026-09-09 over fourteen hours, no
+  category beginning `JobPlatform` existed at all, and the nightly sweep's own account of itself -
+  requested against written against discarded - had never been queryable. `Program.cs` removes the
+  rule and then restates the levels where the worker can hear them, including the EF command
+  logger at Warning: without that second half, removing the rule puts every SQL statement the
+  sweep runs into telemetry billed by the gigabyte.
+
 - **Event Grid can refuse a dead-letter container ARM has just finished creating.** The
   subscription validates `deadLetterDestination` by reading the blob container, and that read
   goes through a different plane from the one that created it. The template is not the
