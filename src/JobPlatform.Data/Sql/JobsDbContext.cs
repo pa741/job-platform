@@ -1364,6 +1364,20 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
             entity.Property(e => e.EmphasiseJson);
             entity.Property(e => e.AssessmentPayloadJson);
 
+            // The CV the candidate picked for this posting themselves. No navigation property and
+            // no index, for the reasons JobMatchEntity.ChosenCvVariantId gives: it is read on the
+            // row already in hand, and an Include here would drag a whole CV's markdown into every
+            // shortlist read.
+            //
+            // Restrict rather than Cascade, and not only because SQL Server refuses a second
+            // cascade path into CvVariants through the profile: a variant somebody chose has to
+            // stay fetchable, which is the rule Submissions.CvVariantId is already held to.
+            // Retiring a CV is archiving, never deletion.
+            entity.HasOne<CvVariantEntity>()
+                .WithMany()
+                .HasForeignKey(e => e.ChosenCvVariantId)
+                .OnDelete(DeleteBehavior.Restrict);
+
             entity.HasOne(e => e.Profile)
                 .WithMany()
                 .HasForeignKey(e => e.ProfileId)

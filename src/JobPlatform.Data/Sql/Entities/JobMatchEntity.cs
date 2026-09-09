@@ -1,4 +1,4 @@
-using JobPlatform.Core.Matching;
+﻿using JobPlatform.Core.Matching;
 
 namespace JobPlatform.Data.Sql.Entities;
 
@@ -164,6 +164,46 @@ public sealed class JobMatchEntity
     /// </para>
     /// </remarks>
     public DateTimeOffset? DismissedAtUtc { get; set; }
+
+    /// <summary>
+    /// The CV the candidate chose for this posting themselves, where they have chosen one.
+    /// </summary>
+    /// <remarks>
+    /// <b>A person settling what the arithmetic would not.</b> Selection ties whenever two CVs
+    /// answer an advert equally well, which on a thin advert is most of the library, and the tie
+    /// is otherwise broken by a model at send time. That is a reasonable default and a poor
+    /// substitute for the candidate saying which of their own documents should go: they are the
+    /// only party here who knows what they would rather be read as.
+    ///
+    /// <b>On the match rather than on the submission, because the decision precedes the
+    /// application.</b> A submission row is created when something is sent or parked; the choice
+    /// is made while looking at a draft, often days earlier, and a column that only existed after
+    /// the fact could not hold it. The pair is what this table is, and the candidate's other
+    /// standing decision about a pair - <see cref="DismissedAtUtc"/> - already lives here.
+    ///
+    /// <b>It survives a re-score, exactly as the dismissal does.</b> <c>UpsertScoresAsync</c>
+    /// clears what the model concluded when the arithmetic moves, because that was inferred from
+    /// the old numbers; this was not inferred from anything - a person read two documents and
+    /// picked one - so a sweep that dropped it would silently hand the decision back to a model
+    /// the next night.
+    ///
+    /// <b>Indexed by the foreign key's own convention rather than by a decision here.</b> Nothing
+    /// asks it in that direction - "which postings did they pick this CV for" is not a question
+    /// this system has, where <c>Submissions.CvVariantId</c> is indexed deliberately because "what
+    /// came back from the applications carrying this CV" is the question that column exists for.
+    /// It is left as EF wrote it: the column is null on almost every row, so the index is small,
+    /// and suppressing a convention to save nothing measurable is how a schema acquires special
+    /// cases nobody can explain later.
+    /// </remarks>
+    public long? ChosenCvVariantId { get; set; }
+
+    /// <summary>When they chose it. Null exactly when nothing was chosen.</summary>
+    /// <remarks>
+    /// Kept because the choice ages against the library: a CV picked in March, re-authored in
+    /// April, is a decision made about words that have since changed - and the page that offers
+    /// the choice can say so rather than presenting a stale pick as current.
+    /// </remarks>
+    public DateTimeOffset? ChosenCvAtUtc { get; set; }
 }
 
 /// <summary>

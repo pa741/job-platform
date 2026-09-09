@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+﻿import { useCallback, useEffect, useState } from 'react';
 import { ApiError, type JobPlatformApi } from '../api/client';
 import type {
   ApplicationDetail, ApplicationSummary, OpenQuestion, Submission, SubmissionEvent,
@@ -8,6 +8,7 @@ import { ErrorNote } from '../components/Primitives';
 import { useApiResource } from '../components/useApiResource';
 import { WakingRegion, LoadingRegion } from '../components/WakingRegion';
 import type { PageId } from '../routing/route';
+import { saveFile } from '../api/save';
 
 /**
  * The phases, in the order an application moves through them.
@@ -91,6 +92,15 @@ interface Evidence {
   screenshotRef?: string | null;
   /** The names of the fields that were filled in. Names, never the answers given to them. */
   submittedFields?: string[] | null;
+
+  /**
+   * Which of those were answered with prose this system wrote rather than you.
+   *
+   * A subset of `submittedFields`. It is the question an audit asks first — an application
+   * carries what you typed, what the writing pass drafted from the advert, and what the
+   * allowlist read off your profile, and only the first is something you said.
+   */
+  draftedFields?: string[] | null;
 }
 
 /** A submission as this page reads it: the shared contract plus the park columns above. */
@@ -470,14 +480,7 @@ function Draft({ api, draft, onSent }: {
     setError(undefined);
 
     api.applicationPdf(draft.id, kind)
-      .then((blob) => {
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = filename;
-        link.click();
-        URL.revokeObjectURL(url);
-      })
+      .then((file) => saveFile(file, filename))
       .catch(setError)
       .finally(() => setDownloading(undefined));
   };
@@ -553,6 +556,30 @@ function Draft({ api, draft, onSent }: {
 
           <h4 className="mini">Cover letter</h4>
           <pre className="markdown">{detail.coverLetterMarkdown}</pre>
+
+          {/* The other prose that goes out. It is written to be typed into a form's own boxes,
+              so it leaves under your name exactly as the letter does — and this is the only
+              place you can read it before it does. */}
+          {detail.draftedAnswers?.length > 0 && (
+            <>
+              <h4 className="mini">Answers drafted for this posting</h4>
+              <p className="note">
+                Typed into the form's free-text boxes. The heading is this system's wording for
+                each question — a form asking it differently is matched to the same answer.
+              </p>
+              {detail.draftedAnswers.map((drafted) => (
+                <div key={drafted.questionText} className="draft">
+                  <p className="note">
+                    <b>{drafted.questionText}</b>
+                    {drafted.category === 'StableFact'
+                      ? <span className="stamp" title="The same answer whatever the posting."> reused</span>
+                      : null}
+                  </p>
+                  <pre className="markdown">{drafted.answer}</pre>
+                </div>
+              ))}
+            </>
+          )}
         </>
       )}
     </div>
@@ -803,6 +830,11 @@ function EvidenceBlock({ evidence }: { evidence: Evidence }) {
   const screenshot = evidence.screenshotRef?.trim();
   const fields = evidence.submittedFields?.filter((name) => name.trim().length > 0) ?? [];
 
+  // Marked rather than listed twice. The two lists overlap by construction — a drafted field was
+  // filled in — so a second line repeating half of the first is noise where a mark against the
+  // name is the fact: this one was answered in words the system wrote.
+  const drafted = new Set(evidence.draftedFields?.filter((name) => name.trim().length > 0) ?? []);
+
   if (!reference && !finalUrl && !screenshot && fields.length === 0) return null;
 
   return (
@@ -832,7 +864,13 @@ function EvidenceBlock({ evidence }: { evidence: Evidence }) {
       </span>
       {fields.length > 0 && (
         <span className="muted" style={{ display: 'block', marginTop: 'var(--s1)' }}>
-          Filled in: {fields.join(', ')} — field names, never the answers given to them.
+          Filled in: {fields.map((name) => (
+            <span key={name}>
+              {name}
+              {drafted.has(name) ? <span className="stamp" title="Answered with prose this system wrote for this posting, not with anything you typed."> ours</span> : null}
+              {' '}
+            </span>
+          ))} — field names, never the answers given to them.
         </span>
       )}
     </span>

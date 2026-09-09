@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using JobPlatform.Api.Endpoints;
 using JobPlatform.Api.Infrastructure;
 using JobPlatform.Core.Submissions;
@@ -192,6 +192,14 @@ public sealed class SubmissionEndpoints : IEndpointGroup
                 Stage = e.Stage,
                 Source = e.Source.ToString(),
                 Note = e.Note,
+                Evidence = e.Evidence is null ? null : new SubmissionEvidenceResponse
+                {
+                    ConfirmationRef = e.Evidence.ConfirmationRef,
+                    FinalUrl = e.Evidence.FinalUrl,
+                    ScreenshotRef = e.Evidence.ScreenshotRef,
+                    SubmittedFields = e.Evidence.SubmittedFields,
+                    DraftedFields = e.Evidence.DraftedFields,
+                },
             }).ToList(),
         });
     }

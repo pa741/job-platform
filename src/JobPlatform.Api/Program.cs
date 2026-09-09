@@ -237,7 +237,16 @@ if (apiOptions.AllowedOrigins.Length > 0)
     builder.Services.AddCors(cors => cors.AddDefaultPolicy(policy => policy
         .WithOrigins(apiOptions.AllowedOrigins)
         .AllowAnyHeader()
-        .AllowAnyMethod()));
+        .AllowAnyMethod()
+
+        // The dashboard is served from a different origin to the API, so a response header is
+        // invisible to it unless it is named here - and this one carries the filename every CV
+        // download is supposed to arrive under. Without it the browser has the right name and
+        // the page cannot read it, so it invents one from the variant's label: the employer sees
+        // Pablo_De_Groot_Curriculum_Vitae.pdf and the candidate's own downloads folder fills up
+        // with "AI First.pdf", which is the variant name the stable filename exists to keep out
+        // of sight.
+        .WithExposedHeaders("Content-Disposition")));
 }
 
 // Container Apps terminates TLS at its ingress and forwards the caller's address. Without

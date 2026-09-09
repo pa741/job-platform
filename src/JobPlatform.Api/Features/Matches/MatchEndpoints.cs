@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using JobPlatform.Api.Endpoints;
 using JobPlatform.Api.Infrastructure;
 using JobPlatform.Core.Applications;
@@ -53,6 +53,10 @@ public sealed class MatchEndpoints : IEndpointGroup
         group.MapGet("/{postingId:long}/cv", CurriculumVitaeAsync)
             .WithName("GetMatchCurriculumVitae")
             .WithSummary("Which of the candidate's own CVs goes with this posting, and why.");
+
+        group.MapPut("/{postingId:long}/cv", SetCurriculumVitaeAsync)
+            .WithName("SetMatchCurriculumVitae")
+            .WithSummary("Chooses the CV to send for this posting, or hands the choice back.");
 
         group.MapGet("/skill-gap", SkillGapAsync)
             .WithName("GetSkillGap")
@@ -122,6 +126,31 @@ public sealed class MatchEndpoints : IEndpointGroup
                 row.Read<ConceptGap>(row.GapsJson)),
             library);
 
+        // What the candidate settled themselves, where they did. Read after the selection rather
+        // than instead of it: the page shows their choice AND what the arithmetic made of the
+        // field, because the second is why the first was worth making and what they would switch
+        // between if they changed their mind.
+        //
+        // The variant is fetched rather than looked up in the scored library, because a chosen
+        // one may not be in it - archiving a CV removes it from selection and not from a decision
+        // somebody already made about it, and "the CV you chose can no longer be sent" is the one
+        // thing this panel must not fail to say.
+        var picked = await matches.GetChosenCvAsync(profileId.Value, postingId, ct);
+
+        var chosenByCandidate = picked is { } choice
+            ? await variants.GetAsync(profileId.Value, choice.VariantId, ct) is { } variant
+                ? new CandidateCvChoice(
+                    variant.Id,
+                    variant.Label,
+                    choice.AtUtc,
+                    variant.IsSendable,
+                    selection.Scores
+                        .Where(score => score.VariantId == variant.Id)
+                        .Select(score => (int?)score.Score)
+                        .FirstOrDefault())
+                : null
+            : null;
+
         return TypedResults.Ok(new CvChoiceResponse
         {
             PostingId = postingId,
@@ -131,7 +160,13 @@ public sealed class MatchEndpoints : IEndpointGroup
             Missing = [.. selection.Missing.Select(gap =>
                 new CvChoiceGap(gap.RequiredKey, GapLabel(gap.RequiredKey)))],
             Rationale = selection.Rationale,
-            DecidedBy = selection.Outcome is CvSelectionOutcome.Chosen ? "arithmetic" : null,
+
+            // The candidate's own decision outranks the arithmetic's, here as at send time: it is
+            // reported as theirs whatever the scores made of the field.
+            DecidedBy = chosenByCandidate is not null
+                ? "candidate"
+                : selection.Outcome is CvSelectionOutcome.Chosen ? "arithmetic" : null,
+            ChosenByCandidate = chosenByCandidate,
             Considered = library.Count,
         });
 
@@ -332,6 +367,59 @@ public sealed class MatchEndpoints : IEndpointGroup
     /// must not get a different answer the second time.
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// Settles which CV goes with this posting, by the one party who is not guessing.
+    /// </summary>
+    /// <remarks>
+    /// <b>The tie is common and the tie-break is a model, and neither of those is a reason to keep
+    /// a person out of the decision.</b> An advert that states little ties every CV that covers
+    /// it, and the pack then asks a model which of two documents reads better against the advert -
+    /// a defensible default that nobody asked the candidate about. This is the route that lets
+    /// them answer, and their answer stands at send time: <c>get_submission_pack</c> reads it
+    /// before it reads the arithmetic.
+    ///
+    /// <b>A write, so it is theirs alone.</b> This surface authenticates a person; the agent
+    /// surface has no equivalent tool and must not - a client choosing the CV would be exactly the
+    /// second spelling of selection that living in the pack exists to prevent, and a model
+    /// overruling a person's stated choice is the failure this route was built to end.
+    ///
+    /// <b>Null clears it and hands the decision back</b> rather than freezing the last pick. A
+    /// person who changes their mind and wants the system to decide again has no other way to say
+    /// so, and a choice that could only be replaced would quietly outlive the library it was made
+    /// against.
+    ///
+    /// 404 covers both "not your posting" and "not your CV", deliberately: the two are the same
+    /// answer to a caller that should be naming neither.
+    /// </remarks>
+    private static async Task<IResult> SetCurriculumVitaeAsync(
+        ClaimsPrincipal user,
+        long postingId,
+        [FromBody] SetChosenCvRequest request,
+        [FromServices] CandidateProfileRepository profiles,
+        [FromServices] JobMatchRepository matches,
+        TimeProvider clock,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (!user.TryGetSubjectId(out var subjectId, out var error))
+        {
+            return error;
+        }
+
+        var profileId = await profiles.GetIdAsync(subjectId, ct);
+
+        if (profileId is null)
+        {
+            return TypedResults.NotFound();
+        }
+
+        var stored = await matches.SetChosenCvAsync(
+            profileId.Value, postingId, request.VariantId, clock.GetUtcNow(), ct);
+
+        return stored ? TypedResults.NoContent() : TypedResults.NotFound();
+    }
+
     private static async Task<IResult> SetDismissedAsync(
         ClaimsPrincipal user,
         long postingId,

@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using JobPlatform.Core.Submissions;
 
 namespace JobPlatform.Api.Features.Submissions;
@@ -68,6 +68,50 @@ public sealed record SubmissionEventResponse
     public required string Source { get; init; }
 
     public string? Note { get; init; }
+
+    /// <summary>
+    /// What was captured while this was claimed, where anything was.
+    /// </summary>
+    /// <remarks>
+    /// <b>Stored since the write path was built and read back by nothing until now.</b> A run
+    /// records a confirmation reference, where the browser ended up, a screenshot path and the
+    /// names of the fields it filled - and every one of those was invisible outside the database,
+    /// which makes an audit trail that cannot be audited. Null where nothing was captured, never
+    /// an empty block: an application with no evidence is still an application, and a panel of
+    /// blanks reads as proof that does not exist.
+    /// </remarks>
+    public SubmissionEvidenceResponse? Evidence { get; init; }
+}
+
+/// <summary>What a browser captured while claiming an application was made.</summary>
+/// <remarks>
+/// <b>Names, never values</b>, which is the line the write side draws and the reason this is safe
+/// to project at all: enough to see that an agent answered a right-to-work question nobody
+/// authorised it to answer, and not enough to be a second copy of the answer it gave.
+/// </remarks>
+public sealed record SubmissionEvidenceResponse
+{
+    /// <summary>The reference the employer's own system showed.</summary>
+    public string? ConfirmationRef { get; init; }
+
+    /// <summary>Where the browser ended up. Not the apply URL, which is where it started.</summary>
+    public string? FinalUrl { get; init; }
+
+    /// <summary>A stored path, never a link: a signed URL in a log is a dead pointer that still looks live.</summary>
+    public string? ScreenshotRef { get; init; }
+
+    /// <summary>The names of the fields that were filled in.</summary>
+    public IReadOnlyList<string>? SubmittedFields { get; init; }
+
+    /// <summary>
+    /// Which of those were answered with prose this system wrote rather than the candidate.
+    /// </summary>
+    /// <remarks>
+    /// The question an audit asks first, and the reason the pair is worth showing a person: an
+    /// application carries what they typed, what the writing pass drafted from the advert, and
+    /// what the allowlist read off their profile, and only the first is something they said.
+    /// </remarks>
+    public IReadOnlyList<string>? DraftedFields { get; init; }
 }
 
 /// <summary>

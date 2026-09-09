@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using JobPlatform.Api.Infrastructure;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Routing;
@@ -156,11 +156,13 @@ public sealed class AuthorizationTests
             .Where(e => e.RoutePattern.RawText?.StartsWith("/api/v1/matches", StringComparison.Ordinal) == true)
             .ToList();
 
-        // List, detail, the dismissal, the skills gap, and which CV goes with a posting. Counted
-        // so this cannot pass vacuously - and so a new route on this group is a decision rather
-        // than a default. The CV choice belongs behind the same policy as the rest: it names a
-        // document out of somebody's own library and reads the match it was chosen against.
-        Assert.Equal(5, routes.Count);
+        // List, detail, the dismissal, the skills gap, which CV goes with a posting, and the
+        // candidate settling that themselves. Counted so this cannot pass vacuously - and so a new
+        // route on this group is a decision rather than a default. Both CV routes belong behind
+        // the same policy as the rest: they name a document out of somebody's own library and read
+        // the match it was chosen against, and one of them writes a decision that an agent then
+        // acts on at send time.
+        Assert.Equal(6, routes.Count);
 
         Assert.All(routes, route =>
         {

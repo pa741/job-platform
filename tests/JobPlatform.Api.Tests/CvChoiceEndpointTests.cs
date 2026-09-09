@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using JobPlatform.Core.Enrichment;
@@ -170,6 +170,104 @@ public sealed class CvChoiceEndpointTests
     /// method that writes that table, because a CV with no concepts scores zero against everything
     /// and every outcome in this file would be NoFit for the wrong reason.
     /// </remarks>
+    /// <summary>
+    /// The candidate settles it themselves, and the answer says so.
+    /// </summary>
+    /// <remarks>
+    /// <b>The decision this route exists to take away from a model.</b> An advert that states
+    /// little ties every CV that covers it, and the tie is otherwise broken by a model at send
+    /// time - defensible, and nobody asked the person whose documents they are. Their pick is
+    /// reported as theirs rather than folded into the arithmetic's outcome, because the page has
+    /// to show both: what will be sent, and what the scores made of the field if they want to
+    /// change their mind.
+    /// </remarks>
+    [Fact]
+    public async Task The_candidates_own_choice_is_recorded_and_reported_as_theirs()
+    {
+        using var harness = await CvLibraryHarness.CreateAsync(rendering: false);
+
+        await ReadCvAsync(harness, "skill.kubernetes", "skill.csharp");
+        await ScoreAsync(harness, Fits, "skill.kubernetes", "skill.csharp");
+
+        var stored = await harness.As(CvLibraryHarness.Ada).PutAsJsonAsync(
+            $"/api/v1/matches/{Fits}/cv", new { variantId = harness.Backend }, Json);
+
+        Assert.Equal(HttpStatusCode.NoContent, stored.StatusCode);
+
+        var choice = await harness.As(CvLibraryHarness.Ada)
+            .GetFromJsonAsync<JsonElement>($"/api/v1/matches/{Fits}/cv", Json);
+
+        Assert.Equal("candidate", choice.GetProperty("decidedBy").GetString());
+
+        var theirs = choice.GetProperty("chosenByCandidate");
+
+        Assert.Equal(harness.Backend, theirs.GetProperty("variantId").GetInt64());
+        Assert.True(theirs.GetProperty("isSendable").GetBoolean());
+
+        // The arithmetic's own finding survives beside it, because it is what the page offers as
+        // the alternative if they change their mind.
+        Assert.Equal("Chosen", choice.GetProperty("outcome").GetString());
+    }
+
+    /// <summary>
+    /// And they can hand the decision back.
+    /// </summary>
+    /// <remarks>
+    /// A pick that could be replaced but never withdrawn would quietly outlive the library it was
+    /// made against - the CV they chose in March, superseded in April by one they would now rather
+    /// send, with no way to say so short of choosing again every time.
+    /// </remarks>
+    [Fact]
+    public async Task Clearing_the_choice_hands_it_back_to_the_arithmetic()
+    {
+        using var harness = await CvLibraryHarness.CreateAsync(rendering: false);
+
+        await ReadCvAsync(harness, "skill.kubernetes", "skill.csharp");
+        await ScoreAsync(harness, Fits, "skill.kubernetes", "skill.csharp");
+
+        await harness.As(CvLibraryHarness.Ada).PutAsJsonAsync(
+            $"/api/v1/matches/{Fits}/cv", new { variantId = harness.Backend }, Json);
+
+        var cleared = await harness.As(CvLibraryHarness.Ada).PutAsJsonAsync(
+            $"/api/v1/matches/{Fits}/cv", new { variantId = (long?)null }, Json);
+
+        Assert.Equal(HttpStatusCode.NoContent, cleared.StatusCode);
+
+        var choice = await harness.As(CvLibraryHarness.Ada)
+            .GetFromJsonAsync<JsonElement>($"/api/v1/matches/{Fits}/cv", Json);
+
+        Assert.Equal(JsonValueKind.Null, choice.GetProperty("chosenByCandidate").ValueKind);
+        Assert.Equal("arithmetic", choice.GetProperty("decidedBy").GetString());
+    }
+
+    /// <summary>
+    /// A CV that is not theirs cannot be chosen, and neither can a posting that is not theirs.
+    /// </summary>
+    /// <remarks>
+    /// The id arrives from a page and a page is editable, so it is checked against the library
+    /// rather than trusted into a foreign key that would hold while the fact it asserts is false.
+    /// Both refusals are 404 deliberately: a caller naming somebody else's row learns only that it
+    /// is not theirs to name.
+    /// </remarks>
+    [Fact]
+    public async Task Neither_another_persons_cv_nor_an_unmatched_posting_can_be_chosen()
+    {
+        using var harness = await CvLibraryHarness.CreateAsync(rendering: false);
+
+        await ReadCvAsync(harness, "skill.kubernetes", "skill.csharp");
+        await ScoreAsync(harness, Fits, "skill.kubernetes", "skill.csharp");
+
+        var invented = await harness.As(CvLibraryHarness.Ada).PutAsJsonAsync(
+            $"/api/v1/matches/{Fits}/cv", new { variantId = 9_999 }, Json);
+
+        Assert.Equal(HttpStatusCode.NotFound, invented.StatusCode);
+
+        var unmatched = await harness.As(CvLibraryHarness.Ada).PutAsJsonAsync(
+            $"/api/v1/matches/{Unmatched}/cv", new { variantId = harness.Backend }, Json);
+
+        Assert.Equal(HttpStatusCode.NotFound, unmatched.StatusCode);
+    }
+
     private static async Task ReadCvAsync(CvLibraryHarness harness, params string[] keys)
     {
         await using var db = harness.Database();

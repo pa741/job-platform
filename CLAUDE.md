@@ -585,6 +585,25 @@ mechanism, and it is derived from the corpus rather than guessed at.
   posting - a cached one would serve this employer's prose to the next employer that asked. Prose is
   also kept out of a form that offers choices, `StableFact` drafts excepted: a paragraph cannot be a
   dropdown option, and *"LinkedIn"* can.
+- **The candidate can settle a tie themselves, and their answer outranks both the arithmetic and
+  the tie-break.** `JobMatches.ChosenCvVariantId` is written by `PUT /matches/{postingId}/cv` and
+  read by `get_submission_pack` *before* the selection is acted on, so the CV a person picked on
+  the dashboard is the one an agent uploads and `decidedBy` reads `candidate`. It lives on the
+  match rather than the submission because **the decision precedes the application** - a
+  submission row exists only once something is sent or parked, and the choice is made while
+  reading a draft. It survives a re-score for the reason the dismissal does: nothing about it was
+  inferred from the old numbers. **It wins on `NoFit` too, and does not park the posting** - the
+  "no CV beats the nearest CV" rule is about what a machine may do unasked, and a person who has
+  opened the file and picked it is not that failure; the note says the arithmetic disagreed rather
+  than hiding it. Sendability is still required, because an archived or unrendered variant has no
+  file an employer could receive.
+- **Half of this candidate's drafted postings tie, so the tie is the common case rather than the
+  edge one.** `ChosenCv` used to offer a download only on `Chosen`, which meant the page whose job
+  is "show me what is about to go out" showed nothing at all half the time. Every candidate in a
+  tie is now downloadable, and the download uses the filename the server sent: the API sets it from
+  `ApplicationPackFile.FileName`, and the client had been overriding it with the variant's label -
+  which is the one string §6 of the CV spec exists to keep out of a file list. Reading that header
+  cross-origin needs `Content-Disposition` in the API's `WithExposedHeaders`.
 - **`draftedFields` is the write-side half of `drafted: true`, and it is names only like its
   sibling.** `SubmissionEvidence.SubmittedFields` answers *what did it put on the form*; this
   answers *which of those did we write*, which is a different question and the one an audit asks

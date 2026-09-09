@@ -51,7 +51,37 @@ public sealed record ApplicationDetail : ApplicationSummary
 
     /// <summary>What this draft chose to lead with.</summary>
     public IReadOnlyList<string> Emphasised { get; init; } = [];
+
+    /// <summary>
+    /// The free text drafted for this posting - the paragraphs a form's own boxes get.
+    /// </summary>
+    /// <remarks>
+    /// <b>Written to be sent, and until now readable nowhere.</b> These go to an employer under
+    /// the candidate's name, and the only surface that carried them was the agent's:
+    /// <c>get_submission_pack</c> hands them over and <c>resolve_form_field</c> matches a form's
+    /// wording to them, while the page the candidate reads their application on showed the cover
+    /// letter and stopped. A person cannot approve prose they have never seen.
+    ///
+    /// Projected on the single-row read only, like the markdown beside it and for the same
+    /// reason: a list of thirty drafts carrying five paragraphs each is megabytes for a page that
+    /// shows titles.
+    /// </remarks>
+    public IReadOnlyList<DraftedAnswerResponse> DraftedAnswers { get; init; } = [];
 }
+
+/// <summary>One drafted answer, as a page needs it.</summary>
+/// <param name="QuestionText">
+/// The catalogue's wording, which is deliberately not any form's. See <c>DraftedAnswer</c>: a
+/// form asking "What draws you to us?" is answered by the draft filed under "Why do you want to
+/// work at this company?", and matching the two is <c>resolve_form_field</c>'s job rather than a
+/// page's.
+/// </param>
+/// <param name="Answer">What would be typed into that box.</param>
+/// <param name="Category">
+/// <c>PostingSpecific</c>, <c>StableFact</c> or <c>Novel</c> - worth showing because they age
+/// differently: prose about this employer is written per posting and a stable fact is not.
+/// </param>
+public sealed record DraftedAnswerResponse(string QuestionText, string Answer, string Category);
 
 /// <summary>
 /// Generating and downloading the cover letter, and the per-posting free text with it.
@@ -541,5 +571,7 @@ public sealed class ApplicationEndpoints : IEndpointGroup
                 : stored.CurriculumVitaeMarkdown,
             CoverLetterMarkdown = stored.CoverLetterMarkdown,
             Emphasised = stored.Emphasised,
+            DraftedAnswers = [.. stored.DraftedAnswers.Select(answer => new DraftedAnswerResponse(
+                answer.QuestionText, answer.Answer, answer.Category.ToString()))],
         };
 }

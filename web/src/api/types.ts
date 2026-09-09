@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Mirrors the API's response contracts (`src/JobPlatform.Api/Features/**`).
  *
  * Hand-written rather than generated from the OpenAPI document, deliberately: generation
@@ -584,6 +584,30 @@ export interface ApplicationDetail extends ApplicationSummary {
   curriculumVitaeMarkdown: string | null;
   coverLetterMarkdown: string;
   emphasised: string[];
+
+  /**
+   * The free text drafted for this posting — the paragraphs a form's own boxes get.
+   *
+   * Written to be sent under your name, and until now readable nowhere: the agent surface had
+   * them and the page you approve an application on showed the cover letter and stopped.
+   * `questionText` is the catalogue's wording rather than any form's, so a form asking "What
+   * draws you to us?" is answered by the draft filed under "Why do you want to work at this
+   * company?" — the matching is the server's job, not this page's.
+   */
+  draftedAnswers: DraftedAnswer[];
+}
+
+/** One paragraph drafted for one posting, and where it came from. */
+export interface DraftedAnswer {
+  questionText: string;
+  answer: string;
+
+  /**
+   * `PostingSpecific` — prose about this employer, written per posting.
+   * `StableFact` — the same answer whatever the posting, such as where you heard about the job.
+   * `Novel` — a question nothing anticipated, answered by a person.
+   */
+  category: string;
 }
 
 /**
@@ -608,11 +632,42 @@ export interface CvChoice {
 
   rationale: string;
 
-  /** `arithmetic` where one was chosen, otherwise null. Never `model` from this route. */
+  /**
+   * `arithmetic` where the scores chose one, `candidate` where you did, otherwise null.
+   *
+   * Never `model` from this route: a page load must not spend a model call, so a tie stays a tie
+   * here and the pack settles it when an application is assembled.
+   */
   decidedBy: string | null;
+
+  /**
+   * The CV you picked for this posting yourself, where you picked one.
+   *
+   * Carried beside `outcome` rather than replacing it, because both matter: this is what will be
+   * sent, and the outcome is why the choice was worth making and what the alternatives are.
+   */
+  chosenByCandidate: CandidateCvChoice | null;
 
   /** How many CVs were eligible at all. Zero is "write one", not "write a different one". */
   considered: number;
+}
+
+/** The CV a person settled on for one posting. */
+export interface CandidateCvChoice {
+  variantId: number;
+  label: string;
+  /** When it was chosen. Null on a build that stored no timestamp. */
+  atUtc: string | null;
+
+  /**
+   * Whether it could still go out. **False is the case worth rendering**: a chosen CV that has
+   * been archived, or re-authored without being re-rendered, has no file behind it any more —
+   * and a page that quietly dropped the choice would leave somebody believing this was settled.
+   */
+  isSendable: boolean;
+
+  /** What it scored against this advert, where it was scored at all. */
+  score: number | null;
 }
 
 export interface CvChoiceVariant {

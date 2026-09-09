@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+﻿import { useCallback, useState } from 'react';
 import { ApiError, type JobPlatformApi } from '../api/client';
 import type { ApplicationDetail, MatchDetail, MatchSummary, Submission } from '../api/types';
 import { ChosenCv } from '../components/ChosenCv';
@@ -7,6 +7,7 @@ import { ErrorNote } from '../components/Primitives';
 import { useApiResource } from '../components/useApiResource';
 import { WakingRegion, LoadingRegion } from '../components/WakingRegion';
 import type { PageId } from '../routing/route';
+import { saveFile } from '../api/save';
 
 const PAGE_SIZE = 25;
 
@@ -519,14 +520,7 @@ function DraftView({ api, draft }: { api: JobPlatformApi; draft: ApplicationDeta
     setError(undefined);
 
     api.applicationPdf(draft.id, kind)
-      .then((blob) => {
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = filename;
-        link.click();
-        URL.revokeObjectURL(url);
-      })
+      .then((file) => saveFile(file, filename))
       .catch(setError)
       .finally(() => setDownloading(undefined));
   };

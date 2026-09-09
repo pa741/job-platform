@@ -1,4 +1,4 @@
-namespace JobPlatform.Api.Features.Matches;
+﻿namespace JobPlatform.Api.Features.Matches;
 
 /// <summary>
 /// One scored posting, as a candidate sees it.
@@ -295,14 +295,26 @@ public sealed record CvChoiceResponse
     public required string Rationale { get; init; }
 
     /// <summary>
-    /// <c>arithmetic</c> where a CV was chosen, otherwise null.
+    /// <c>arithmetic</c> where the scores chose one, <c>candidate</c> where a person did, otherwise null.
     /// </summary>
     /// <remarks>
     /// Never <c>model</c> from this route, and that is the honest thing rather than a limitation:
     /// a page load must not spend a model call, so a tie is shown as a tie. The pack decides it
-    /// when an application is actually assembled, and records which of the two decided.
+    /// when an application is actually assembled, and records which of the three decided.
     /// </remarks>
     public string? DecidedBy { get; init; }
+
+    /// <summary>
+    /// The CV the candidate picked for this posting themselves, where they picked one.
+    /// </summary>
+    /// <remarks>
+    /// <b>Carried beside <see cref="Outcome"/> rather than folded into it, because the page needs
+    /// both facts.</b> "You chose this one" is what to show and offer for download; "the
+    /// arithmetic could not separate these two" is why the choice was worth making and what the
+    /// alternatives are if they change their mind. Collapsing the pair would leave a page that
+    /// cannot offer a switch back.
+    /// </remarks>
+    public CandidateCvChoice? ChosenByCandidate { get; init; }
 
     /// <summary>
     /// How many CVs were eligible to be scored at all.
@@ -314,6 +326,27 @@ public sealed record CvChoiceResponse
     /// </remarks>
     public required int Considered { get; init; }
 }
+
+/// <summary>Which CV to send for this posting, or null to hand the decision back.</summary>
+/// <param name="VariantId">
+/// One of this candidate's own CVs. <b>Null is a value rather than an omission</b>: it clears the
+/// choice and lets the arithmetic - and, on a tie, the tie-break - decide again.
+/// </param>
+public sealed record SetChosenCvRequest(long? VariantId);
+
+/// <summary>The CV a person picked for this posting, and whether it can still be sent.</summary>
+/// <param name="VariantId">Its id in the candidate's library.</param>
+/// <param name="Label">What they called it.</param>
+/// <param name="AtUtc">When they chose it.</param>
+/// <param name="IsSendable">
+/// Whether it could go out as it stands. <b>False is why this is reported separately from the
+/// tied list.</b> A chosen variant that has since been archived, or re-authored without being
+/// re-rendered, is a decision that no longer has a document behind it - and a page that quietly
+/// dropped the choice would leave somebody believing they had settled this posting.
+/// </param>
+/// <param name="Score">What it scored against this advert, where it was in the running at all.</param>
+public sealed record CandidateCvChoice(
+    long VariantId, string Label, DateTimeOffset? AtUtc, bool IsSendable, int? Score);
 
 /// <summary>One CV in the running, as a page shows it.</summary>
 /// <param name="VariantId">Its id in the candidate's library, so the page can link and download.</param>

@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   ApplicationDetail, ApplicationSummary, ConceptDetail, ConceptListItem,
   DailyRollup, FacetsResponse, MatchDetail, MatchSummary,
   MeResponse, MetricsSummary, PageResponse, PostingDetail, PostingInsight, PostingSummary, ProfileRequest,
@@ -446,7 +446,7 @@ export class JobPlatformApi {
    * Both formats, because the pack sends both and an ATS may take only one. The PDF is what a
    * person would send; several large vendors parse the DOCX more reliably.
    */
-  cvVariantFile = (id: number, format: 'pdf' | 'docx'): Promise<Blob> =>
+  cvVariantFile = (id: number, format: 'pdf' | 'docx'): Promise<DownloadedFile> =>
     this.download(
       `${this.baseUrl}/api/v1/cv-variants/${id}/cv.${format}`,
       format === 'docx'
@@ -468,6 +468,23 @@ export class JobPlatformApi {
    */
   cvChoice = (postingId: number) =>
     this.request<CvChoice>(`/api/v1/matches/${postingId}/cv`);
+
+  /**
+   * Chooses the CV to send for one posting, or hands the decision back.
+   *
+   * A PUT for the reason the dismissal is one: it sets a state rather than appending to a log, so
+   * a client retrying a write it is unsure of gets the same answer twice. `null` clears the
+   * choice — a pick that could only be replaced and never withdrawn would quietly outlive the
+   * library it was made against.
+   *
+   * What it decides is not cosmetic: `get_submission_pack` reads this before it reads the
+   * arithmetic, so the CV named here is the one an agent uploads.
+   */
+  setCvChoice = (postingId: number, variantId: number | null) =>
+    this.request<void>(`/api/v1/matches/${postingId}/cv`, {
+      method: 'PUT',
+      body: JSON.stringify({ variantId }),
+    });
 
   /**
    * Sets, or clears, "not interested" on one match.
@@ -526,7 +543,7 @@ export class JobPlatformApi {
    * they return somebody's CV. So the file is fetched with the token, turned into an object
    * URL and handed to a synthetic link; the caller revokes the URL afterwards.
    */
-  applicationPdf = (id: number, kind: 'cv' | 'cover-letter'): Promise<Blob> =>
+  applicationPdf = (id: number, kind: 'cv' | 'cover-letter'): Promise<DownloadedFile> =>
     this.download(this.applicationPdfUrl(id, kind), 'application/pdf');
 
   /**
@@ -543,8 +560,15 @@ export class JobPlatformApi {
    * `Accept` is passed rather than assumed: the library serves a DOCX from the same shape of
    * route, and a client asking for `application/pdf` and being handed a Word document is the
    * kind of mismatch that is only noticed at an upload box.
+   *
+   * <b>The server's filename comes back with the bytes.</b> Every CV route sets it from
+   * `ApplicationPackFile.FileName` - one stable name whichever variant was chosen, which exists
+   * so that a file list never tells an employer a different CV is kept for other roles. A caller
+   * that invented its own name would undo that rule on the one machine where somebody checks
+   * what is about to go out. Reading it needs `Content-Disposition` in the API's
+   * `WithExposedHeaders`, because the dashboard is a different origin.
    */
-  private async download(url: string, accept: string): Promise<Blob> {
+  private async download(url: string, accept: string): Promise<DownloadedFile> {
     const token = await this.getToken();
     const headers = new Headers({ Accept: accept });
     if (token) headers.set('Authorization', `Bearer ${token}`);
@@ -568,8 +592,46 @@ export class JobPlatformApi {
       throw new ApiError(response.status, `Could not download the file (${response.status}).`);
     }
 
-    return response.blob();
+    return { blob: await response.blob(), filename: filenameOf(response) };
   }
+}
+
+/** A downloaded file and the name the server said it has. */
+export interface DownloadedFile {
+  blob: Blob;
+
+  /**
+   * The name from `Content-Disposition`, or undefined where the header is absent or unreadable.
+   *
+   * Undefined rather than a guess, so a caller has to decide what to do about it: the header is
+   * missing on an origin that has not exposed it, and a name invented here would look right
+   * locally and be wrong in the one place it matters.
+   */
+  filename?: string;
+}
+
+/**
+ * The filename out of a `Content-Disposition` header.
+ *
+ * Handles the two spellings that matter - `filename*=UTF-8''...` first, because a name with a
+ * non-ASCII character is sent that way and is the more correct of the two, then plain
+ * `filename=`. Anything else yields undefined rather than a partial parse: this is not a general
+ * header parser and pretending otherwise is how a quoted semicolon becomes a truncated filename.
+ */
+function filenameOf(response: Response): string | undefined {
+  const header = response.headers.get('Content-Disposition');
+  if (!header) return undefined;
+
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(header)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded.trim());
+    } catch {
+      return undefined;
+    }
+  }
+
+  return /filename="?([^";]+)"?/i.exec(header)?.[1]?.trim();
 }
 
 export interface MatchQuery {

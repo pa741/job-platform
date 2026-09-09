@@ -579,10 +579,11 @@ public sealed class SubmissionTools(
                 label = decision.Variant?.Label,
                 score = decision.Score,
 
-                // 'arithmetic' where the floor and the margin settled it, 'model' where they
-                // could not and a tie-break did, null where nothing chose. Returned because they
-                // are not the same claim: one is reproducible from stored rows, the other is a
-                // judgement that will not necessarily repeat.
+                // 'candidate' where the person chose it themselves on the dashboard, 'arithmetic'
+                // where the floor and the margin settled it, 'model' where they could not and a
+                // tie-break did, null where nothing chose. Returned because they are not the same
+                // claim: one is a stated preference, one is reproducible from stored rows, and the
+                // last is a judgement that will not necessarily repeat.
                 decidedBy = decision.DecidedBy,
                 rationale = decision.Selection.Rationale,
 
@@ -777,9 +778,10 @@ public sealed class SubmissionTools(
     /// eventually sends.
     /// </param>
     /// <param name="DecidedBy">
-    /// <c>arithmetic</c>, <c>model</c>, or null where nothing decided. Reported because the two are
-    /// different claims - one is reproducible from stored rows and the other is a judgement that
-    /// need not repeat - and C4 cannot tell them apart afterwards if this is not said now.
+    /// <c>candidate</c>, <c>arithmetic</c>, <c>model</c>, or null where nothing decided. Reported
+    /// because the three are different claims - one is a person's stated preference, one is
+    /// reproducible from stored rows, and the last is a judgement that need not repeat - and C4
+    /// cannot tell them apart afterwards if this is not said now.
     /// </param>
     /// <param name="Ballot">What was actually put to the model, so a cut list is visible.</param>
     /// <param name="Parked">Whether this call put the posting down.</param>
@@ -850,6 +852,47 @@ public sealed class SubmissionTools(
     {
         var library = await variants.ListSelectableFactsAsync(profileId, ct);
         var selection = CvVariantSelector.Select(CvVariantSelector.DemandsOf(match), library);
+
+        // The candidate's own choice, read before the arithmetic is acted on and outranking every
+        // outcome it could have reached.
+        //
+        // <b>They are the only party in this decision who is not inferring.</b> The scores say
+        // which document answers more of the advert; a tie-break model says which of two reads
+        // better against it; the person says which one they want an employer to read, which is a
+        // different question and theirs to answer. So a stored choice wins on Chosen - where it
+        // means "not that one, this one" - and on Ambiguous, which is the case it was built for.
+        //
+        // <b>It wins on NoFit too, and that is the one to think about rather than skip.</b> The
+        // rule this library was built around is that no CV is better than the nearest CV, and it
+        // is a rule about what a machine may do unasked: the failure is a document sent because
+        // something scored it least-bad, invisibly. A person who has opened both files and picked
+        // one is not that failure, and refusing them would leave the system holding an opinion
+        // about somebody's own application that they had explicitly overruled. So the pack sends
+        // it, does not park the posting - nothing is waiting on a CV that has been chosen - and
+        // says plainly in the note that the arithmetic disagreed.
+        //
+        // Sendability is still required, because that is not an opinion: an archived variant or
+        // one whose render is older than its words has no file an employer could receive, so the
+        // choice falls through to the arithmetic and the note says why.
+        if (await matches.GetChosenCvAsync(profileId, postingId, ct) is { } settled
+            && await variants.GetAsync(profileId, settled.VariantId, ct) is { IsSendable: true } theirs)
+        {
+            var scored = selection.Scores
+                .Where(score => score.VariantId == theirs.Id)
+                .Select(score => (int?)score.Score)
+                .FirstOrDefault();
+
+            return new CvDecision(
+                selection, theirs, "candidate", [], Parked: false, scored,
+                $"The CV to send is \"{theirs.Label}\", chosen by the candidate themselves for this "
+                + "posting rather than by the scores. Attach that one and no other. "
+                + (selection.Outcome is CvSelectionOutcome.NoFit
+                    ? "The arithmetic would have offered none - nothing in the library covers "
+                        + "enough of what this advert asks for - and their decision stands over "
+                        + "it. Do not park this posting. "
+                    : string.Empty)
+                + selection.Rationale);
+        }
 
         if (selection.Outcome is CvSelectionOutcome.Chosen && selection.Chosen is { } winner)
         {

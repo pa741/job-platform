@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+﻿import { useCallback, useState } from 'react';
 import { ApiError, type JobPlatformApi } from '../api/client';
 import type {
   CvGap, CvGapBriefResponse, CvLibraryCapacity, CvLibraryStaleness,
@@ -8,6 +8,7 @@ import { ErrorNote, Field } from '../components/Primitives';
 import { useApiResource } from '../components/useApiResource';
 import { WakingRegion, LoadingRegion } from '../components/WakingRegion';
 import type { PageId } from '../routing/route';
+import { saveFile } from '../api/save';
 
 /**
  * The widest label the store will take, mirroring `CvVariantLimits.MaxLabelLength`.
@@ -811,14 +812,7 @@ function Downloads({ api, variant }: { api: JobPlatformApi; variant: CvVariantSu
     setError(undefined);
 
     api.cvVariantFile(variant.variantId, format)
-      .then((blob) => {
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `${DOWNLOAD_STEM}.${format}`;
-        link.click();
-        URL.revokeObjectURL(url);
-      })
+      .then((file) => saveFile(file, `${DOWNLOAD_STEM}.${format}`))
       .catch(setError)
       .finally(() => setBusy(undefined));
   };

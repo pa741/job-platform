@@ -1843,6 +1843,86 @@ public sealed class JobMatchRepository(JobsDbContext db)
     }
 
     /// <summary>
+    /// Records the CV the candidate chose for this posting themselves, or clears it.
+    /// </summary>
+    /// <remarks>
+    /// <b>The write behind the one decision on this pair that a model must not make.</b> Selection
+    /// ties whenever two CVs answer an advert equally well, and the tie is otherwise settled by a
+    /// model at send time - a reasonable default, and a poor substitute for the person deciding
+    /// which of their own documents they would rather be read as.
+    ///
+    /// <b>The variant is checked against this candidate's library here rather than trusted from
+    /// the route.</b> An id arriving from a page is an id a person could edit, and a match row
+    /// naming another candidate's CV would be a foreign key that holds and a fact that is false -
+    /// so it is verified before it is stored, and a variant that is not theirs answers false
+    /// exactly as an unmatched pair does. Sendability is deliberately <i>not</i> required: a
+    /// choice is allowed to name a variant that is archived or awaiting a re-render, because the
+    /// read side has to be able to say "the CV you chose is no longer sendable" rather than
+    /// silently having forgotten the choice.
+    ///
+    /// Idempotent by state, like the dismissal above and for the same reason: a page that stores
+    /// the choice it already holds must not walk the timestamp forward, or "chosen in March"
+    /// becomes "chosen a moment ago" on every render.
+    /// </remarks>
+    /// <param name="profileId">The candidate, resolved by the caller.</param>
+    /// <param name="postingId">The posting the choice is about.</param>
+    /// <param name="variantId">The CV they picked, or null to hand the decision back.</param>
+    /// <param name="now">When they picked it. Ignored when clearing.</param>
+    /// <returns>False where the pair is not matched, or the variant is not this candidate's.</returns>
+    public async Task<bool> SetChosenCvAsync(
+        long profileId,
+        long postingId,
+        long? variantId,
+        DateTimeOffset now,
+        CancellationToken ct = default)
+    {
+        if (variantId is { } id
+            && !await db.CvVariants.AnyAsync(v => v.Id == id && v.ProfileId == profileId, ct))
+        {
+            return false;
+        }
+
+        var entity = await db.JobMatches
+            .FirstOrDefaultAsync(m => m.ProfileId == profileId && m.PostingId == postingId, ct);
+
+        if (entity is null)
+        {
+            return false;
+        }
+
+        if (entity.ChosenCvVariantId != variantId)
+        {
+            entity.ChosenCvVariantId = variantId;
+            entity.ChosenCvAtUtc = variantId is null ? null : now;
+
+            await db.SaveChangesAsync(ct);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// The CV this candidate chose for this posting, where they chose one.
+    /// </summary>
+    /// <remarks>
+    /// Two columns off one row, read on the paths that have to honour the choice - the pack that
+    /// assembles an application and the page that shows what would go out. It answers null for an
+    /// unmatched pair rather than throwing: the callers all have their own refusal for that, and
+    /// two of them ask this first.
+    /// </remarks>
+    public async Task<(long VariantId, DateTimeOffset? AtUtc)?> GetChosenCvAsync(
+        long profileId, long postingId, CancellationToken ct = default)
+    {
+        var row = await db.JobMatches
+            .AsNoTracking()
+            .Where(m => m.ProfileId == profileId && m.PostingId == postingId)
+            .Select(m => new { m.ChosenCvVariantId, m.ChosenCvAtUtc })
+            .FirstOrDefaultAsync(ct);
+
+        return row?.ChosenCvVariantId is { } id ? (id, row.ChosenCvAtUtc) : null;
+    }
+
+    /// <summary>
     /// One pair in full, for the writing pass.
     /// </summary>
     /// <remarks>

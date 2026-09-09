@@ -442,6 +442,93 @@ public sealed class CvSelectionToolTests
     }
 
     /// <summary>
+    /// A CV the candidate chose themselves is the one that goes, and no model is asked.
+    /// </summary>
+    /// <remarks>
+    /// <b>The tie-break is a model deciding between two documents somebody wrote about their own
+    /// working life, and it runs because nobody asked them.</b> When they have answered, the pack
+    /// reads their answer before it reads the arithmetic: the ballot is never put, the writer is
+    /// never called, and <c>decidedBy</c> says <c>candidate</c> so that months later the row can
+    /// still tell a stated preference from a judgement that need not repeat.
+    ///
+    /// The writer in this harness would happily pick one, so asserting it was not called is what
+    /// separates "their choice was honoured" from "their choice happened to agree".
+    /// </remarks>
+    [Fact]
+    public async Task A_cv_the_candidate_chose_is_sent_without_asking_a_model()
+    {
+        using var harness = await McpToolHarness.CreateAsync();
+
+        await using (var db = harness.Database())
+        {
+            var match = await db.JobMatches.SingleAsync(row => row.PostingId == McpToolHarness.TiedCv);
+
+            match.ChosenCvVariantId = harness.DataVariant;
+            match.ChosenCvAtUtc = McpToolHarness.Now;
+
+            await db.SaveChangesAsync();
+        }
+
+        var pack = McpToolHarness.Read(await harness.Tools().GetSubmissionPackAsync(
+            McpToolHarness.AsCandidate(), McpToolHarness.TiedCv));
+
+        var selection = pack.GetProperty("cvSelection");
+
+        Assert.Equal(harness.DataVariant, selection.GetProperty("cvVariantId").GetInt64());
+        Assert.Equal("candidate", selection.GetProperty("decidedBy").GetString());
+
+        // The arithmetic's own finding is still reported, unchanged: the outcome describes what
+        // the scores did and the id describes what will be attached.
+        Assert.Equal("Ambiguous", selection.GetProperty("outcome").GetString());
+
+        // Nothing was put to the model, so no ballot was composed.
+        Assert.Empty(selection.GetProperty("tied").EnumerateArray());
+        Assert.Contains("chosen by the candidate", pack.GetProperty("note").GetString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// And a posting they chose a CV for is not parked, whatever the scores say.
+    /// </summary>
+    /// <remarks>
+    /// <b>The rule this library is built on is that no CV beats the nearest CV, and it is a rule
+    /// about what a machine may do unasked.</b> The failure it prevents is a document sent because
+    /// something scored it least-bad, invisibly, with nobody told. A person who has opened the
+    /// file and picked it is not that failure - and parking the posting anyway would put it in a
+    /// gap brief as waiting for a CV that has already been chosen for it.
+    /// </remarks>
+    [Fact]
+    public async Task A_posting_whose_cv_they_chose_is_not_parked_for_want_of_one()
+    {
+        using var harness = await McpToolHarness.CreateAsync();
+
+        await using (var db = harness.Database())
+        {
+            var match = await db.JobMatches.SingleAsync(row => row.PostingId == McpToolHarness.NoCvFit);
+
+            match.ChosenCvVariantId = harness.BackendVariant;
+            match.ChosenCvAtUtc = McpToolHarness.Now;
+
+            await db.SaveChangesAsync();
+        }
+
+        var pack = McpToolHarness.Read(await harness.Tools().GetSubmissionPackAsync(
+            McpToolHarness.AsCandidate(), McpToolHarness.NoCvFit));
+
+        var selection = pack.GetProperty("cvSelection");
+
+        Assert.Equal(harness.BackendVariant, selection.GetProperty("cvVariantId").GetInt64());
+        Assert.False(selection.GetProperty("parked").GetBoolean());
+
+        // Said rather than hidden: they overruled an abstention, and the note is where a run
+        // reads why it is sending a CV the scores would not have offered.
+        Assert.Contains("arithmetic would have offered none", pack.GetProperty("note").GetString(), StringComparison.Ordinal);
+
+        await using var after = harness.Database();
+
+        Assert.False(await after.Submissions.AnyAsync());
+    }
+
+    /// <summary>
     /// A posting the queue would never offer is not parked, so the brief cannot go blind to one.
     /// </summary>
     /// <remarks>
