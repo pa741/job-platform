@@ -32,34 +32,10 @@ builder.Services
     .ConfigureFunctionsApplicationInsights();
 
 // Every log this project writes was being filtered out before it left the worker, and nothing
-// said so.
-//
-// ConfigureFunctionsApplicationInsights registers the Application Insights logger provider with
-// a filter rule of its own, defaulted to Warning. host.json's logLevel section does not reach
-// here - that file configures the *host* process, and this is the isolated worker - so the
-// "JobPlatform": "Information" line there governs the host's copy of a log and not the worker's
-// own. The result is that host-emitted lines ("Executing 'Functions.MatchSweepFunction'") arrive
-// and every logger.LogInformation in this assembly does not.
-//
-// Measured on 2026-09-09: across fourteen hours of telemetry, the only Function.* traces were
-// the host's own Executing/Executed pairs, and no category beginning JobPlatform existed at all.
-// The nightly sweep's own account of itself - how many assessments it asked for, wrote and
-// discarded - has therefore never been queryable, which is exactly the figure somebody wants
-// when a night looks thin.
-//
-// Removing the provider's rule lets the ordinary Logging configuration decide, which is what
-// every other host in this solution already does. It is the documented fix rather than a trick:
-// there is no setting that reaches this rule.
-builder.Logging.Services.Configure<LoggerFilterOptions>(options =>
-{
-    var applicationInsights = options.Rules.FirstOrDefault(rule => rule.ProviderName
-        == "Microsoft.Extensions.Logging.ApplicationInsights.ApplicationInsightsLoggerProvider");
-
-    if (applicationInsights is not null)
-    {
-        options.Rules.Remove(applicationInsights);
-    }
-});
+// said so. See WorkerLogging for the whole account: host.json configures the host process, the
+// functions run in the isolated worker, and the Application Insights provider carries a filter
+// rule there that no setting reaches.
+builder.Services.AllowApplicationInsightsInformationLogs();
 
 // What the host.json line says, said again where the worker can hear it. Without this the
 // removal above leaves the worker on the framework default, which is Information for everything

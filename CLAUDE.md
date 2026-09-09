@@ -764,7 +764,16 @@ Each of these cost a red CI run; none of them fail locally.
   requested against written against discarded - had never been queryable. `Program.cs` removes the
   rule and then restates the levels where the worker can hear them, including the EF command
   logger at Warning: without that second half, removing the rule puts every SQL statement the
-  sweep runs into telemetry billed by the gigabyte.
+  sweep runs into telemetry billed by the gigabyte. `WorkerLogging` holds the removal and
+  `WorkerLoggingFilterTests` asserts it, because the first attempt was written inline with the
+  test asserting a copy of it.
+- **Worker traces are categorised under `CategoryName`; host traces under `Category`.** A KQL
+  query written for one finds nothing in the other and reads exactly like a logger that is still
+  filtered - `traces | where customDimensions.Category startswith 'JobPlatform'` returns zero rows
+  while the lines are sitting there under `customDimensions.CategoryName`. Add ingestion latency
+  of a few minutes and a fix that worked looks like a fix that did nothing, which is what happened
+  on 2026-09-09. Query on the message or on `CategoryName`, and give it five minutes before
+  concluding anything.
 
 - **Event Grid can refuse a dead-letter container ARM has just finished creating.** The
   subscription validates `deadLetterDestination` by reading the blob container, and that read
