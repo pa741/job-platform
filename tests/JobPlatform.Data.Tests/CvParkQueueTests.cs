@@ -694,6 +694,62 @@ public sealed class CvParkQueueTests : IDisposable
     }
 
     // -----------------------------------------------------------------------
+    // The pair of tests every reader of a park has to agree on
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// What the queue considers, asked about one pair, agrees with what the queue returns.
+    /// </summary>
+    /// <remarks>
+    /// <b>The third spelling of two tests, pinned against the first.</b>
+    /// <see cref="JobMatchRepository.IsQueueEligibleAsync"/> exists so <c>get_submission_pack</c>
+    /// cannot park a posting <see cref="JobMatchRepository.ListCvBlockedPostingsAsync"/> then
+    /// filters out - a standing block no report accounts for. Three copies of a predicate is
+    /// exactly the arrangement that drifts, so the two are asserted against each other here rather
+    /// than trusted to stay in step: a posting the queue offers is eligible, and one it has never
+    /// judged is not.
+    ///
+    /// A dismissal is asserted alongside because it is the half that is a decision rather than a
+    /// timing accident. An unjudged posting is one the nightly pass has not reached; a dismissed
+    /// one is the candidate saying no, and a park on it argues a Saturday's work from a vacancy
+    /// they have already refused.
+    /// </remarks>
+    [Fact]
+    public async Task Queue_eligibility_answers_for_one_pair_what_the_queue_answers_for_all()
+    {
+        await using (var db = CreateContext())
+        {
+            var unjudged = await db.JobMatches.SingleAsync(m => m.PostingId == 2);
+
+            unjudged.Verdict = null;
+            unjudged.AssessmentScore = null;
+            unjudged.AssessedAtUtc = null;
+
+            var dismissed = await db.JobMatches.SingleAsync(m => m.PostingId == 3);
+
+            dismissed.DismissedAtUtc = Now;
+
+            await db.SaveChangesAsync();
+        }
+
+        var offered = await QueueAsync();
+
+        Assert.Equal([1L, 4L], offered);
+
+        await using var read = CreateContext();
+        var matches = new JobMatchRepository(read);
+
+        Assert.True(await matches.IsQueueEligibleAsync(ProfileId, 1));
+        Assert.False(await matches.IsQueueEligibleAsync(ProfileId, 2));
+        Assert.False(await matches.IsQueueEligibleAsync(ProfileId, 3));
+
+        // A posting this candidate was never scored against, which is the ordinary way a model
+        // names an id that is not theirs. It answers the same as a dismissal rather than throwing:
+        // there is nothing to park either way.
+        Assert.False(await matches.IsQueueEligibleAsync(ProfileId, 99));
+    }
+
+    // -----------------------------------------------------------------------
     // Fixtures
     // -----------------------------------------------------------------------
 

@@ -46,7 +46,9 @@ namespace JobPlatform.Api.Features.Mcp;
 /// <b>That makes one read a writer, in exactly one direction, and it is the direction that ends a
 /// loop rather than starting one.</b> Where nothing fits, the pack parks the posting as
 /// <c>NoCvVariant</c> and records what it asked for that no CV covers - which is why
-/// <see cref="ParkApplicationAsync"/> refuses that reason outright. A park written without those
+/// <see cref="ParkApplicationAsync"/> refuses that reason outright. It parks only what the queue
+/// would have offered, so that no park is written which <see cref="ListCvGapsAsync"/> cannot
+/// then account for. A park written without those
 /// concepts is held for ever, because the queue's release clause reads an empty standing set as
 /// "nothing has been covered yet"; only a pass that has run a selection knows them, and the pack
 /// is the only pass that does. <see cref="ListCvGapsAsync"/> is the other half: it ranks what the
@@ -389,12 +391,19 @@ public sealed class SubmissionTools(
         + "to its PDF and DOCX, the cover letter, the free-text answers drafted for this posting, "
         + "and the allowlisted profile answers a form asks for by name. THE CV IS CHOSEN, NOT "
         + "WRITTEN: the candidate keeps a handful of CVs and this scores each against what the "
-        + "advert asks for. Read 'cvSelection.outcome'. 'Chosen' means send that CV and nothing "
-        + "else. 'NoFit' means NO CV IS AVAILABLE for this posting and the posting has already "
-        + "been parked with what it asked for that no CV covers - do not apply, do not attach the "
-        + "nearest CV, and move on; the candidate has been told what to write. 'Ambiguous' means "
-        + "two CVs fit equally and nothing could separate them, so no CV is offered and a person "
-        + "decides. Use list_cv_gaps to report how many postings a run left for want of a CV. "
+        + "advert asks for. THE FIELD THAT DECIDES WHAT TO ATTACH IS 'cvSelection.cvVariantId': "
+        + "where it is set, send that CV and no other; where it is null, send none. "
+        + "'cvSelection.outcome' says how that was arrived at, and it is about the arithmetic "
+        + "rather than about the answer. 'Chosen' means the scores settled it outright. 'NoFit' "
+        + "means NO CV IS AVAILABLE for this posting and the posting has already been parked with "
+        + "what it asked for that no CV covers - do not apply, do not attach the nearest CV, and "
+        + "move on; the candidate has been told what to write. 'Ambiguous' means two or more CVs "
+        + "fit equally and the arithmetic declined to separate them, and it has two endings: with "
+        + "'cvVariantId' set, the tie was put to a model over the ballot in 'tied' and "
+        + "'decidedBy' reads 'model' - that CV is the one to send; with 'cvVariantId' null, "
+        + "nothing chose, so no CV is offered, do not guess, and the posting comes back on the "
+        + "next run for a person to decide. Use list_cv_gaps to report how many postings a run "
+        + "left for want of a CV. "
         + "Returns an explanation rather than an error where no cover letter has been generated "
         + "yet - letters are written on request from the dashboard and by the nightly pass, and "
         + "this surface does not generate them. The document links are minted per request and "
@@ -559,6 +568,12 @@ public sealed class SubmissionTools(
             // document that earned them.
             cvSelection = new
             {
+                // The arithmetic's finding, which is not the same sentence as "what to send".
+                // 'Ambiguous' with a variant beside it is the tie-break having worked - the
+                // selector declined to separate two CVs and a model was asked which, so the
+                // outcome still reports what the scores did. What decides the attachment is
+                // cvVariantId, which is null on every outcome that offered nothing, and the tool
+                // description says so in those terms.
                 outcome = decision.Selection.Outcome.ToString(),
                 cvVariantId = decision.Variant?.Id,
                 label = decision.Variant?.Label,
@@ -917,24 +932,40 @@ public sealed class SubmissionTools(
                 + $"next run. {selection.Rationale}");
         }
 
-        var parked = await ParkForNoCvAsync(profileId, postingId, selection, target, runId, ct);
+        var park = await ParkForNoCvAsync(profileId, postingId, selection, target, runId, ct);
 
         return new CvDecision(
-            selection, null, null, [], parked, null,
+            selection, null, null, [], park is NoCvPark.Parked, null,
             "No CV is available for this posting and none should be attached: nothing in this "
             + "candidate's library covers enough of what it asks for. "
-            + (parked
-                ? "The posting has been parked as 'NoCvVariant' with the concepts it wanted, so "
+            + park switch
+            {
+                NoCvPark.Parked =>
+                    "The posting has been parked as 'NoCvVariant' with the concepts it wanted, so "
                     + "the candidate has been told what to write and it comes back once they "
                     + "have written it. Nothing further is needed here - move on to the next "
-                    + "posting."
-                : "It was not parked, because an application against it already carries events; "
-                    + "record what actually happened with record_event instead.")
+                    + "posting.",
+                NoCvPark.Claimed =>
+                    "It was not parked, because an application against it already carries events; "
+                    + "record what actually happened with record_event instead.",
+                NoCvPark.NotOffered =>
+                    "It was not parked, because this posting is not one the queue offers: the "
+                    + "assessment pass has not judged it a credible fit, or the candidate has "
+                    + "dismissed it. A park on it would be a block list_cv_gaps does not count "
+                    + "and no run summary accounts for. If it is later judged applyable it "
+                    + "arrives through list_applyable, where this same selection runs and parks "
+                    + "it if the library still does not fit.",
+                _ =>
+                    "It was not parked, because this posting states nothing specific enough to "
+                    + "write a CV against - so there is no gap to record, and a park recording "
+                    + "none is one no CV the candidate ever writes could release.",
+            }
             + $" {selection.Rationale}");
     }
 
     /// <summary>
-    /// Puts a posting down for want of a CV, recording what would let it back.
+    /// Puts a posting down for want of a CV, recording what would let it back - or says why it
+    /// did not.
     /// </summary>
     /// <remarks>
     /// <b>The server establishes this reason or nobody does</b>, which is why
@@ -956,12 +987,26 @@ public sealed class SubmissionTools(
     /// exactly as the match breakdown says it does. Re-deriving that anywhere downstream would be
     /// a second definition of "covers", free to disagree with the one that parked the posting.
     ///
-    /// <b>An empty gap set is passed through rather than suppressed.</b> It happens when a library
-    /// covers every requirement across several CVs and none of them in one document - and the
-    /// queue holds such a park rather than releasing it, deliberately, because a universal over an
-    /// empty set is vacuously true and any CV at all would then release it. The cost is visible
-    /// rather than hidden: the posting stays in <c>CvGapBrief.BlockedPostings</c> and contributes
-    /// to no gap, which is the difference that file documents as worth noticing.
+    /// <b>Refused for a posting the queue would never offer, which is the second thing this
+    /// checks and the one a run never meets.</b> The pack assembles for any matched posting - the
+    /// dashboard opens one for a posting the nightly assessment has not reached, and a client may
+    /// name any id it holds - where <c>list_applyable</c> and <c>CvGapBrief</c> both count only
+    /// what the model judged at least <c>Possible</c> and the candidate has not dismissed. A park
+    /// written outside that set is a posting held with nothing reporting it: <c>list_cv_gaps</c>
+    /// answers "nothing is blocked" while a standing <c>NoCvVariant</c> row sits in
+    /// <c>list_submissions</c>, which is the contradiction a model driving this surface found.
+    /// Nothing is lost by declining: if the assessment later judges the posting applyable it
+    /// arrives through the queue, where this same selection runs and parks it then.
+    ///
+    /// <b>An empty gap set is not parked either, and the refusal belongs to
+    /// <c>SubmissionRepository.ParkAsync</c> rather than to this method.</b> The release clause
+    /// reads an empty standing set as "nothing has been covered yet", so such a park is held for
+    /// ever and no document the candidate writes can release it - which is why the repository
+    /// throws rather than writing one. <c>CvVariantSelector</c> already names the whole demand set
+    /// where nothing clears the floor, so the case that survives is the narrow one it cannot fill:
+    /// a library with nothing in it meeting an advert that states nothing discriminating. That is
+    /// answered here as "not parked" with a sentence saying why, because a pack that returned 500
+    /// for it would lose the rest of the pack over a posting nobody could apply to anyway.
     ///
     /// <b>It writes on a read, which is the one place this surface does.</b> That is not a
     /// widening of what the pack may do - it may already park nothing else, and this reason no
@@ -970,7 +1015,7 @@ public sealed class SubmissionTools(
     /// on every run for ever, which is the loop <c>ParkReason.NoCvVariant</c> was given its own
     /// retry class to end.
     /// </remarks>
-    private async Task<bool> ParkForNoCvAsync(
+    private async Task<NoCvPark> ParkForNoCvAsync(
         long profileId,
         long postingId,
         CvSelection selection,
@@ -978,6 +1023,20 @@ public sealed class SubmissionTools(
         long? runId,
         CancellationToken ct)
     {
+        // Asked before the submission read, because it is the cheaper of the two and the one that
+        // rules out the commonest way to reach this method by hand.
+        if (!await matches.IsQueueEligibleAsync(profileId, postingId, ct))
+        {
+            return NoCvPark.NotOffered;
+        }
+
+        var gaps = selection.Missing.Select(gap => gap.RequiredKey).ToList();
+
+        if (gaps.Count == 0)
+        {
+            return NoCvPark.NothingToRecord;
+        }
+
         var now = time.GetUtcNow();
 
         var claimed = (await submissions.ListAsync(profileId, now, ct))
@@ -985,7 +1044,7 @@ public sealed class SubmissionTools(
 
         if (claimed is { Status.Phase: not null })
         {
-            return false;
+            return NoCvPark.Claimed;
         }
 
         await submissions.ParkAsync(
@@ -996,10 +1055,34 @@ public sealed class SubmissionTools(
             target?.ApplyUrl,
             runId,
             awaitingQuestionId: null,
-            missingConceptKeys: [.. selection.Missing.Select(gap => gap.RequiredKey)],
+            missingConceptKeys: gaps,
             ct);
 
-        return true;
+        return NoCvPark.Parked;
+    }
+
+    /// <summary>
+    /// What became of the park a <c>NoFit</c> selection asks for.
+    /// </summary>
+    /// <remarks>
+    /// Four answers rather than the bool this returned first, because the pack's note says a
+    /// different thing for each and three of them are "not parked" - which a caller reading one
+    /// sentence would otherwise have to tell apart by guessing. Only <see cref="Parked"/> puts the
+    /// posting down, and only it is reported as <c>cvSelection.parked</c>.
+    /// </remarks>
+    private enum NoCvPark
+    {
+        /// <summary>Put down as <c>NoCvVariant</c>, with the concepts that would release it.</summary>
+        Parked,
+
+        /// <summary>An application on this posting already carries events, so parking would lie about it.</summary>
+        Claimed,
+
+        /// <summary>Not a posting the queue offers - unjudged, or dismissed - so a park would be invisible.</summary>
+        NotOffered,
+
+        /// <summary>Nothing discriminating was asked for, so there is no gap a CV could be written against.</summary>
+        NothingToRecord,
     }
 
     /// <summary>The vocabulary's preferred name for a key, or the key where it knows none.</summary>
@@ -1173,8 +1256,10 @@ public sealed class SubmissionTools(
         + "made, so refusing is the cheap outcome and guessing is not. Anything only the "
         + "candidate may state - sponsorship, right to work, salary, an EEO question - is "
         + "answered verbatim from what they have stored or not at all, never mapped onto the "
-        + "nearest option. Where a person must answer, park the application with reason "
-        + "'MissingAnswer' and the question text, which puts it in front of them.")]
+        + "nearest option. 'sensitive' in the answer is about the question rather than about the "
+        + "value: true means this system reads it as one only the candidate may answer, whatever "
+        + "the flag said on the way in. Where a person must answer, park the application with "
+        + "reason 'MissingAnswer' and the question text, which puts it in front of them.")]
     public async Task<object> ResolveFormFieldAsync(
         RequestContext<CallToolRequestParams> context,
         [Description("The question exactly as the form asks it, wording and punctuation included.")] string questionText,
@@ -1288,7 +1373,18 @@ public sealed class SubmissionTools(
             field = resolution.Field,
             confidence = resolution.Confidence,
             rationale = resolution.Rationale,
-            sensitive = resolution.Sensitive,
+
+            // The question, not the value, and the two used to disagree in the audit log: Core's
+            // FormFieldResolution.Sensitive says "what came back is an answer only the candidate
+            // may assert", which is false on every abstention because an abstention returns
+            // nothing - so a refusal whose own rationale explained that the question asks for
+            // something only they may state was recorded beside 'sensitive: false'. What a caller
+            // and a later reader are both asking here is whether this is a question a person has
+            // to answer, which is the same fact the 'sensitive' argument carries in and the same
+            // reading the questions surface reports. It can only tighten what was sent, exactly
+            // as the resolver's own does, so a caller that left the flag false and gets true back
+            // has been told the server recognised the question where it did not.
+            sensitive = sensitive || SensitiveQuestions.Looks(questionText),
             model = resolution.Model,
             note = resolution.NeedsUser
                 ? "Nothing was answered. Do not compose one: park the application with reason "
@@ -1924,7 +2020,10 @@ public sealed class SubmissionTools(
         + "skipping silently: a posting nobody parked is offered again next run with no record of "
         + "what happened last time. Refused for a posting whose application already carries "
         + "events - that one was made rather than blocked, and what happened to it afterwards is "
-        + "record_event's job.")]
+        + "record_event's job. 'NoCvVariant' is a ninth reason this system parks for and no "
+        + "client may ask for: it means a selection ran and no CV fitted, which only "
+        + "get_submission_pack can establish, and it parks the posting itself when that "
+        + "happens - so it appears in list_submissions and list_cv_gaps but not here.")]
     public async Task<object> ParkApplicationAsync(
         RequestContext<CallToolRequestParams> context,
         [Description("The posting being put down. Must already be matched to this candidate.")] long postingId,

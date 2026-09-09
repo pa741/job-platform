@@ -417,6 +417,16 @@ what was missing; and a `NoFit` carrying an empty gap set parks a posting **for 
 selector names the whole demand set when the difference is empty and `ParkAsync` refuses the state
 outright.
 
+A fourth, found by a model driving the surface: **the park is only written for a posting the queue
+would offer.** The pack assembles for any matched posting - the dashboard opens one for a posting
+the nightly assessment has not reached, and a client may name any id it holds - while both
+`list_applyable` and the gap brief count only what was judged at least `Possible` and not dismissed.
+Parked outside that set, the posting stood in `list_submissions` as blocked for want of a CV while
+`list_cv_gaps` reported nothing blocked: the two reads a run summarises itself from, disagreeing
+about the same row. `get_submission_pack` now declines the write and says which of the two it was,
+and nothing is lost - a posting later judged applyable arrives through the queue, where the same
+selection runs and parks it then.
+
 Every application uploads `Firstname_Surname_Curriculum_Vitae.pdf` whichever variant was sent. The
 variant's own name would tell an employer that a different CV is kept for other roles, and it
 arrives in the file list before anybody opens the document - so the stable name is the last path

@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using JobPlatform.Core.Submissions;
 using Xunit;
 
@@ -552,11 +552,17 @@ public sealed class McpToolRefusalTests
         Assert.False(resolved.GetProperty("consultedModel").GetBoolean());
         Assert.Contains("park the application", resolved.GetProperty("note").GetString(), StringComparison.Ordinal);
 
-        // The rationale, not the flag: 'sensitive' on a resolution describes the answer that came
-        // back and an abstention has none, so the only thing that can say <i>why</i> nothing came
-        // back is the sentence. Asserting it is what separates "this question may not be guessed
-        // at" from "this deployment has no model", which are the same empty answer and want
-        // opposite fixes.
+        // The flag, which is about the question and not about the value that did not come back.
+        // Core's resolution reports the second - whether what it handed over is an answer only the
+        // candidate may assert - and that is false on every abstention by construction, so an
+        // audit line used to read 'sensitive: false' beside a refusal explaining that the question
+        // asks for something only they may state. This surface answers the question instead, which
+        // is what the argument of the same name carries in.
+        Assert.True(resolved.GetProperty("sensitive").GetBoolean());
+
+        // The rationale as well, because the flag cannot say <i>why</i> nothing came back.
+        // Asserting it is what separates "this question may not be guessed at" from "this
+        // deployment has no model", which are the same empty answer and want opposite fixes.
         Assert.Contains(
             "only the candidate may state",
             resolved.GetProperty("rationale").GetString(),

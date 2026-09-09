@@ -440,4 +440,96 @@ public sealed class CvSelectionToolTests
         // this candidate's CVs do not mention, which is not something a form is filled in with.
         Assert.DoesNotContain(harness.Disclosures.Records, record => record.Tool == "list_cv_gaps");
     }
+
+    /// <summary>
+    /// A posting the queue would never offer is not parked, so the brief cannot go blind to one.
+    /// </summary>
+    /// <remarks>
+    /// <b>The contradiction this closes was found by a model driving the surface.</b> The pack
+    /// assembles for any matched posting - a person opening one for a posting the nightly
+    /// assessment has not reached is ordinary - and it used to park whatever it found no CV for.
+    /// The queue and the gap brief both count only what was judged at least <c>Possible</c> and
+    /// not dismissed, so such a park stood in <c>list_submissions</c> as a blocked posting while
+    /// <c>list_cv_gaps</c> answered that nothing was blocked at all: two reports of the same fact
+    /// disagreeing, in the pair a run is meant to summarise itself from.
+    ///
+    /// <b>Both halves are asserted, because either alone would pass on the broken build.</b> That
+    /// nothing was parked is the fix; that the brief still reads zero is what says the two now
+    /// agree rather than that the brief was taught to see a park nothing else counts.
+    /// </remarks>
+    [Fact]
+    public async Task An_unjudged_posting_is_not_parked_for_want_of_a_cv()
+    {
+        using var harness = await McpToolHarness.CreateAsync();
+
+        await using (var db = harness.Database())
+        {
+            var match = await db.JobMatches.SingleAsync(row => row.PostingId == McpToolHarness.NoCvFit);
+
+            match.Verdict = null;
+            match.AssessmentScore = null;
+            match.AssessedAtUtc = null;
+
+            await db.SaveChangesAsync();
+        }
+
+        var pack = McpToolHarness.Read(await harness.Tools().GetSubmissionPackAsync(
+            McpToolHarness.AsCandidate(), McpToolHarness.NoCvFit));
+
+        var selection = pack.GetProperty("cvSelection");
+
+        // The selection is unchanged - the arithmetic does not know what the assessment thinks -
+        // and only the write is refused.
+        Assert.Equal("NoFit", selection.GetProperty("outcome").GetString());
+        Assert.Equal(JsonValueKind.Null, selection.GetProperty("cvVariantId").ValueKind);
+        Assert.False(selection.GetProperty("parked").GetBoolean());
+
+        Assert.Contains(
+            "not one the queue offers",
+            pack.GetProperty("note").GetString(),
+            StringComparison.Ordinal);
+
+        var brief = McpToolHarness.Read(
+            await harness.Tools().ListCvGapsAsync(McpToolHarness.AsCandidate()));
+
+        Assert.Equal(0, brief.GetProperty("blockedPostings").GetInt32());
+
+        await using var after = harness.Database();
+
+        Assert.False(await after.Submissions.AnyAsync());
+    }
+
+    /// <summary>
+    /// And a posting the candidate has dismissed is not parked either.
+    /// </summary>
+    /// <remarks>
+    /// The same disagreement from the other side, and the more expensive one to leave: a dismissal
+    /// is the candidate saying they will not apply, so a park on it is a block against an
+    /// application that was never going to be made - and the brief excludes it deliberately, for
+    /// the reason <c>ListCvBlockedPostingsAsync</c> gives about arguing a Saturday's work from
+    /// vacancies somebody has already refused.
+    /// </remarks>
+    [Fact]
+    public async Task A_dismissed_posting_is_not_parked_for_want_of_a_cv()
+    {
+        using var harness = await McpToolHarness.CreateAsync();
+
+        await using (var db = harness.Database())
+        {
+            var match = await db.JobMatches.SingleAsync(row => row.PostingId == McpToolHarness.NoCvFit);
+
+            match.DismissedAtUtc = McpToolHarness.Now;
+
+            await db.SaveChangesAsync();
+        }
+
+        var pack = McpToolHarness.Read(await harness.Tools().GetSubmissionPackAsync(
+            McpToolHarness.AsCandidate(), McpToolHarness.NoCvFit));
+
+        Assert.False(pack.GetProperty("cvSelection").GetProperty("parked").GetBoolean());
+
+        await using var after = harness.Database();
+
+        Assert.False(await after.Submissions.AnyAsync());
+    }
 }

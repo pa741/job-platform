@@ -1599,6 +1599,11 @@ public sealed class JobMatchRepository(JobsDbContext db)
                 //
                 // The same two tests the queue applies, for the same reason and in the same order,
                 // so a posting that cannot be offered cannot be argued for either.
+                //
+                // They are asked one pair at a time by IsQueueEligibleAsync, which is what stops
+                // this filter hiding a park rather than merely excluding a posting: the pack
+                // declines to park anything these two would exclude, so every standing
+                // NoCvVariant row is one this query counts.
                 && db.JobMatches.Any(m => m.ProfileId == profileId
                     && m.PostingId == s.PostingId
                     && m.DismissedAtUtc == null
@@ -1625,6 +1630,47 @@ public sealed class JobMatchRepository(JobsDbContext db)
                 [.. row.Missing.Distinct(StringComparer.Ordinal).OrderBy(key => key, StringComparer.Ordinal)]))
         ];
     }
+
+    /// <summary>
+    /// Whether the queue considers this pair at all, before anything about a submission is read.
+    /// </summary>
+    /// <remarks>
+    /// <b>The two match-level tests <see cref="ListApplyableAsync"/> and
+    /// <see cref="ListCvBlockedPostingsAsync"/> already share, asked about one pair.</b> The queue
+    /// offers a posting the model judged at least <c>Possible</c> and the candidate has not
+    /// dismissed; the gap brief counts a blocked posting on the same two, so that a posting which
+    /// cannot be offered cannot be argued for either. Everything else either query applies is
+    /// about a submission - a live application, a park, a duplicate listing - and is deliberately
+    /// not here: this answers "is this pair in the queue's world", not "would it be offered now".
+    ///
+    /// <b>It exists so a park cannot be written that no report can see.</b>
+    /// <c>get_submission_pack</c> assembles a pack for any matched posting - a person opening one
+    /// from the dashboard for a posting the nightly assessment has not reached yet is ordinary -
+    /// and it is the one read on that surface that writes, parking for
+    /// <c>ParkReason.NoCvVariant</c>. Without this test it could put down a posting the brief's
+    /// two tests then filter out, which is a standing park nothing reports and no run summary
+    /// accounts for: the failure a model driving the surface found by packing an unassessed
+    /// posting and being told the queue had nothing blocked.
+    ///
+    /// <b>A third spelling of the same predicate, and the cost is stated rather than hidden.</b>
+    /// It lives beside the other two so that a change to what "the queue considers" means is one
+    /// screen rather than a search, and it is asked only on the branch that is about to write -
+    /// one indexed read on a rare path, against a database billed by wall-clock time.
+    /// </remarks>
+    /// <param name="profileId">The candidate, resolved by the caller.</param>
+    /// <param name="postingId">The posting being asked about.</param>
+    /// <returns>False for an unmatched pair, exactly as for a dismissed or unjudged one.</returns>
+    public Task<bool> IsQueueEligibleAsync(
+        long profileId, long postingId, CancellationToken ct = default)
+        => db.JobMatches
+            .AsNoTracking()
+            .AnyAsync(
+                m => m.ProfileId == profileId
+                    && m.PostingId == postingId
+                    && m.Verdict != null
+                    && m.Verdict >= CandidacyVerdict.Possible
+                    && m.DismissedAtUtc == null,
+                ct);
 
     /// <summary>
     /// Where an application for this pair would go, or null where the pair is not matched.

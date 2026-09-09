@@ -1547,7 +1547,13 @@ that is not writing the CV cannot invent a claim in it.
   feedback something real to correlate. It takes an optional `runId` **only** so that a
   `NoCvVariant` park made inside a run belongs to it: without it the commonest kind of park would
   be the one kind a run's summary could not be checked against, and `RunSummary.Parked` would read
-  as an overstatement on every unattended pass.
+  as an overstatement on every unattended pass. **That park is bounded to postings the queue could
+  actually offer** - judged at least `Possible`, not dismissed, which `IsQueueEligibleAsync` asks
+  one pair at a time. The pack assembles for any *matched* posting, so without the bound it could
+  put down a posting `ListCvBlockedPostingsAsync` then filters out on those same two tests: a
+  standing block sitting in `list_submissions` while `list_cv_gaps` answered that nothing was
+  blocked at all. Three copies of that predicate is the arrangement that drifts, so
+  `CvParkQueueTests` pins the single-pair one against the queue's own answer.
 - **The selection floor and margin are their own constants and must not be merged with the
   matcher's.** `MatchRanker.FusionFloor` and `MatchSweepFunction.AssessmentThreshold` were briefly
   collapsed into one and that was already a mistake; `CvVariantSelector.SelectionFloor` answers a
