@@ -294,6 +294,19 @@ worked around.
   never sees it. Azure rejects the downgrade rather than performing it, so the failure mode
   is a red pipeline rather than a lost database. Basic has no auto-pause because the DTU model
   has no serverless tier — that is what removed the ~1 minute cold start.
+- **The API keeps one replica resident** (`apiMinReplicas` in `infra/main.bicep`, repository
+  variable `JP_API_MIN_REPLICAS=1`). It defaults to 0 so a clone stays free. Unlike
+  `JP_SQL_SKU`, dropping this one **fails silently** - Azure accepts the change, the API goes
+  back to scale-to-zero, and the only symptom is a ~20 second wait on the first request after
+  an idle period. That 20 seconds is Container Apps scheduling and sidecar startup, not the
+  image pull, so it cannot be fixed in the application. A keep-alive ping is not a substitute:
+  a min-replica bills at the idle rate, a pinged one at the active rate, ~3x more for the same
+  warm replica.
+- **Basic is always-on, not always-warm.** The remaining first-request latency is SQL, and it
+  is not auto-pause - Basic cannot pause. A cold buffer pool refilled at 5 DTU is IO-bound
+  (`physical_data_read_percent` ~90%, `cpu_percent` ~30%); a shortlist query measured 12.6s
+  cold against ~100ms warm. Only a higher tier fixes it; indexing does not, because the warm
+  path already uses the same plan.
 - **Free-tier ceilings are load-bearing**, not incidental: Cosmos autoscale max 1000 RU/s,
   SQL `useFreeLimit` with `freeLimitExhaustionBehavior: AutoPause`. Raising either starts
   billing.

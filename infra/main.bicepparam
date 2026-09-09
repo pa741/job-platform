@@ -33,6 +33,13 @@ param apiClientId = readEnvironmentVariable('JP_API_CLIENT_ID', '')
 param apiAllowAnonymousReads = empty(readEnvironmentVariable('JP_API_ALLOW_ANONYMOUS_READS', ''))
   ? false
   : bool(readEnvironmentVariable('JP_API_ALLOW_ANONYMOUS_READS', 'false'))
+// 1 keeps one API replica resident and removes the ~20 second activation the first request
+// after an idle period pays; the default keeps a fresh clone free. Empty-guarded like every
+// other API parameter - see the note above - and int() because an environment variable is a
+// string even when it holds a number.
+param apiMinReplicas = empty(readEnvironmentVariable('JP_API_MIN_REPLICAS', ''))
+  ? 0
+  : int(readEnvironmentVariable('JP_API_MIN_REPLICAS', '0'))
 // 'basic' buys an always-on database for a few euros a month; the default keeps a fresh
 // clone free. Empty-guarded like every other API parameter - see the note above.
 param sqlSku = empty(readEnvironmentVariable('JP_SQL_SKU', ''))

@@ -26,6 +26,11 @@ param sqlConnectionString string
 @description('Container image. Defaults to the public GHCR image built by this repo CI.')
 param containerImage string
 
+@description('Replicas to keep resident. 0 scales to zero when idle and is free; 1 removes the ~20s activation the first request after an idle period otherwise pays.')
+@minValue(0)
+@maxValue(3)
+param minReplicas int = 0
+
 @description('Entra tenant id, for validating bearer tokens.')
 param tenantId string
 
@@ -291,9 +296,9 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
           probes: [
             {
               // Points at /health, which touches nothing. The readiness endpoint checks
-              // Cosmos, and probing anything that reaches Azure SQL would hold the serverless
-              // database awake around the clock and spend the whole free grant on health
-              // checks - see the readiness check's own comment.
+              // Cosmos, and probing anything that reaches Azure SQL would spend this
+              // database's small IO budget on health checks around the clock - see the
+              // readiness check's own comment.
               type: 'Liveness'
               httpGet: {
                 path: '/health'
@@ -306,11 +311,24 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
         }
       ]
       scale: {
-        // Scale to zero when idle. Container Apps bills only for active replicas, so an API
-        // nobody is calling costs nothing and stays inside the monthly free grant.
-        minReplicas: 0
-        // Capped low deliberately: every replica is a potential connection to a serverless
-        // database billed by the second, so a traffic spike must not fan out across it.
+        // 0 scales to zero when idle, which is free and is what a fresh clone gets. 1 keeps
+        // one replica resident, which is not.
+        //
+        // Scale-to-zero costs about 20 seconds on the first request after an idle period,
+        // and none of it is the image pull - measured from the environment's own system
+        // logs, KEDAScaleTargetActivated to the app container starting is scheduling and
+        // sidecar startup, with the cached image pull inside half a second of it. Nothing
+        // the application does can shorten that, because the request has not reached the
+        // application yet.
+        //
+        // A resident replica is billed at Container Apps' *idle* rate whenever it is not
+        // serving a request - a tenth of the active vCPU rate - which is why this is a
+        // scale setting rather than a keep-alive ping. A ping buys the same warm replica at
+        // the active rate all month, and costs roughly three times as much to do it.
+        minReplicas: minReplicas
+        // Capped low deliberately: the database is 5 DTU, so a traffic spike that fanned out
+        // across replicas would contend for one very small database rather than scale past
+        // it.
         maxReplicas: 3
         rules: [
           {

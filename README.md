@@ -772,7 +772,7 @@ Designed to sit inside the free tiers, not merely to be cheap:
 | Cosmos DB | 1,000 RU/s + 25 GB, lifetime | Database-level shared autoscale capped at exactly 1,000 RU/s |
 | Azure SQL | 100,000 vCore-seconds/month | Serverless, `minCapacity 0.5`, 60-minute auto-pause — **the default; this deployment opts out, see below** |
 | Functions | Monthly grant on Flex Consumption | One short execution per day |
-| Container Apps | 180k vCPU-s + 360k GiB-s/month | API scales to zero when idle; max 3 replicas |
+| Container Apps | 180k vCPU-s + 360k GiB-s/month | Max 3 replicas. Scales to zero by default — **this deployment keeps one replica resident, see below** |
 | Container registry | — | Public image on GHCR, so no ACR (~$5/month) and no registry credential |
 | Log Analytics | — | 1 GB/day ingestion cap |
 
@@ -791,7 +791,9 @@ configured with `freeLimitExhaustionBehavior: AutoPause`, so if the grant does r
 pauses until the first of the next month rather than falling through to paid rates. Cost is
 structurally capped at zero; the failure mode is unavailability, not a bill.
 
-### The one place this deployment spends money
+### The two places this deployment spends money
+
+#### The database
 
 `sqlSku` defaults to `free-serverless`, so cloning this repository still deploys at zero
 cost. This particular deployment sets it to `basic`, and the reason is the cold start rather
@@ -805,8 +807,11 @@ someone opens the dashboard to look at it.
 
 Basic is the DTU purchasing model, which has no serverless option at all, so it simply never
 pauses. At 5 DTU and a 2 GB ceiling — against single-digit megabytes stored — it is the
-cheapest always-on tier Azure sells: **€5.37/month** in France Central (€0.1766/day, retail,
-verified against the Azure Retail Prices API). For comparison, the same database kept online
+cheapest always-on tier Azure sells: **€5.25/month** in France Central (€0.1726/day, retail,
+verified against the Azure Retail Prices API). The same SKU is €4.21/month in Spain Central —
+France Central is chosen only because the *free offer* was not provisionable elsewhere, a
+constraint that no longer applies now that this database is paid, and a server's region is
+immutable so changing it means recreating the database. For comparison, the same database kept online
 under the serverless meter would be roughly €209/month, and provisioned General Purpose
 about €107.
 
@@ -820,12 +825,45 @@ Two things worth knowing before copying this:
   every push; with the variable unset the parameter defaults back to `free-serverless` and
   the pipeline would try to revert a database that cannot return to the free offer.
 
-That number is also what dictates the API's shape rather than being a footnote to it. An API
-serving dashboard reads from SQL would keep the database awake for as long as anyone had a
-tab open, and the remaining ~46k vCore-seconds is a few days of that. So metrics are served
-from Cosmos, which is always on and RU-billed inside its own free ceiling; SQL is reached
-only for posting search and detail, behind output caching; and no health probe touches it at
-all.
+Five DTU is also what dictates the API's shape rather than being a footnote to it. A
+dashboard served out of SQL would put every polled read through that one small IO budget. So
+metrics are served from Cosmos, which is always on and RU-billed inside its own free ceiling;
+SQL is reached only for posting search and detail, behind output caching; and no health probe
+touches it at all.
+
+#### The API replica
+
+`apiMinReplicas` defaults to 0, so a clone scales to zero and stays free. This deployment
+sets it to 1, and again the reason is a cold start rather than the money.
+
+Scale-to-zero costs about **20 seconds** on the first request after an idle period. That is
+not the image pull — measured from the environment's own system logs, a cached pull lands
+inside half a second, and the 20 seconds is Container Apps scheduling the replica and
+starting its sidecars. It happens before the request reaches the application, so no amount
+of application startup tuning touches it.
+
+A resident replica is billed at Container Apps' **idle** rate whenever it is not serving a
+request: $0.000004 per vCPU-second against $0.000034 active. At the container's 0.5 vCPU and
+1 GiB, net of the monthly free grant, that is roughly **$13/month** — the memory meter is
+most of it, and dropping to 0.25 vCPU / 0.5 GiB would roughly halve it if the app proves it
+fits.
+
+Worth stating because the obvious alternative is worse: a keep-alive ping buys the same warm
+replica at the *active* rate all month, about $48, to deliver exactly what the scale setting
+delivers for $13. Pinging an app to keep it warm is the expensive way to do this.
+
+**`JP_API_MIN_REPLICAS` must stay set.** Unlike the SQL variable, dropping this one fails
+silently: CI redeploys on every push, the parameter falls back to 0, and the API simply
+returns to scale-to-zero with the cold start back and no error anywhere.
+
+#### What this does not fix
+
+The remaining cold start is the database, and it is not auto-pause — Basic cannot pause. On
+the first query after an idle period the buffer pool is cold, and refilling it at 5 DTU is
+IO-throttled: `physical_data_read_percent` pins near 90% while `cpu_percent` sits around 30%,
+and a shortlist query that runs in ~100ms warm has been measured at **12.6 seconds** cold.
+Basic buys always-on, not always-warm. Fixing that means S0 (10 DTU, ~€13/month) rather than
+a configuration change.
 
 ## Calling the API
 

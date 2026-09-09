@@ -73,6 +73,10 @@ env:
   # the deployment tries to downgrade a paid database, which Azure rejects outright with
   # "Cannot update paid database to free database" - a failed pipeline, every push.
   JP_SQL_SKU: ${{ vars.JP_SQL_SKU }}
+  # Keeps one API replica resident, removing the ~20 second activation an idle app pays on
+  # the next request. Unset it and the next deploy silently returns the API to scale-to-zero:
+  # no error, just the cold start back. Empty-guarded in main.bicepparam.
+  JP_API_MIN_REPLICAS: ${{ vars.JP_API_MIN_REPLICAS }}
 
 jobs:
   # The image is built and pushed first: the container app references it by tag, and

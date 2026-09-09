@@ -56,6 +56,16 @@ param apiClientId string = ''
 @description('Serve API read endpoints without a token. For local or demo use only.')
 param apiAllowAnonymousReads bool = false
 
+// Defaults to 0 so a fresh clone of this public repository still deploys at zero cost, the
+// same bargain sqlSku strikes below. 1 keeps one API replica resident and removes the ~20
+// second Container Apps activation that the first request after an idle period pays; it
+// costs roughly ten euros a month at the container's current 0.5 vCPU / 1 GiB, billed at
+// the idle rate because a resident replica that is not serving a request qualifies for it.
+@description('API replicas to keep resident. 0 scales to zero when idle and is free; 1 removes the activation cold start.')
+@minValue(0)
+@maxValue(3)
+param apiMinReplicas int = 0
+
 @description('Browser origins allowed to call the API, e.g. the Static Web App.')
 param apiAllowedOrigins array = []
 
@@ -388,6 +398,7 @@ module containerApp 'modules/containerapp.bicep' = {
     tenantId: tenantId
     apiClientId: apiClientId
     allowAnonymousReads: apiAllowAnonymousReads
+    minReplicas: apiMinReplicas
     // The dashboard's origin is appended here rather than configured by hand. A Static Web
     // App's hostname is generated at creation, so it cannot be known in advance - taking it
     // from the module's output is what keeps CORS correct without a second deploy pass.

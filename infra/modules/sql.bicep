@@ -75,8 +75,10 @@ var serverlessProperties = {
 }
 
 var basicProperties = {
-  // 2 GB is the Basic ceiling. The database holds single-digit megabytes and grows by well
-  // under a megabyte a day, so this is years of headroom rather than a tight fit.
+  // 2 GB is the Basic ceiling. Measured 2026-09-09: 327 MB stored, growing ~8 MB/day over the
+  // preceding week, which reaches the ceiling around April 2027. Headroom rather than a tight
+  // fit, but not indefinite - the next always-on step is S0 (10 DTU, 250 GB), and moving
+  // Basic to S0 is an online scale rather than a rebuild.
   maxSizeBytes: 2147483648
 }
 
