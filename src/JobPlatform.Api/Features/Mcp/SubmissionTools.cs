@@ -1256,10 +1256,16 @@ public sealed class SubmissionTools(
         + "made, so refusing is the cheap outcome and guessing is not. Anything only the "
         + "candidate may state - sponsorship, right to work, salary, an EEO question - is "
         + "answered verbatim from what they have stored or not at all, never mapped onto the "
-        + "nearest option. 'sensitive' in the answer is about the question rather than about the "
-        + "value: true means this system reads it as one only the candidate may answer, whatever "
-        + "the flag said on the way in. Where a person must answer, park the application with "
-        + "reason 'MissingAnswer' and the question text, which puts it in front of them.")]
+        + "nearest option. Pass 'postingId' wherever the form belongs to one: the free text the "
+        + "nightly pass drafted for that posting - why this company, why this role - is matched "
+        + "here against the form's own wording, which is frequently different from the wording it "
+        + "was drafted under, and 'drafted: true' in the answer says the words were written for "
+        + "this application rather than typed by the candidate. A drafted answer is never "
+        + "remembered for another posting. 'sensitive' in the answer is about the question rather "
+        + "than about the value: true means this system reads it as one only the candidate may "
+        + "answer, whatever the flag said on the way in. Where a person must answer, park the "
+        + "application with reason 'MissingAnswer' and the question text, which puts it in front "
+        + "of them.")]
     public async Task<object> ResolveFormFieldAsync(
         RequestContext<CallToolRequestParams> context,
         [Description("The question exactly as the form asks it, wording and punctuation included.")] string questionText,
@@ -1306,6 +1312,23 @@ public sealed class SubmissionTools(
         var choices = options is { Length: > 0 } ? options : null;
         var cached = await answers.GetResolutionAsync(profileId.Value, questionText, choices, now, ct);
 
+        // The free text the writing pass drafted for this posting, where the caller named one.
+        //
+        // Read here rather than left to the pack, because the two surfaces answer different
+        // questions and only this one is asked "what do I type in this box". DraftedAnswer says in
+        // as many words that its question text is the catalogue's wording and not the form's - "What
+        // draws you to us?" and "Why do you want to work at this company?" are one question sharing
+        // no words - and that matching a live field to one of them is this tool's job. Until this
+        // read existed nothing passed them in, so a run resolving its fields here was told to park
+        // MissingAnswer over questions the expensive deployment had already answered for this very
+        // posting.
+        //
+        // One query, and only when a posting is named. A caller filling in a form that belongs to
+        // no posting - a general application, an account signup - pays nothing for this.
+        var drafted = postingId is { } posting
+            ? (await documents.GetLatestForPostingAsync(profileId.Value, posting, ct))?.DraftedAnswers ?? []
+            : [];
+
         var resolution = await resolver.ResolveAsync(
             new FormFieldRequest
             {
@@ -1329,6 +1352,8 @@ public sealed class SubmissionTools(
                 // sensitive can be answered from it by any wording.
                 Profile = view?.Profile,
 
+                Drafted = drafted,
+
                 // No company id. Nothing on this surface can name an employer's row - a
                 // company-scoped answer is written and read from the dashboard, where the
                 // employer is chosen from the pipeline rather than typed by a model.
@@ -1341,7 +1366,15 @@ public sealed class SubmissionTools(
         // exists to prevent happening twice. Writing a stage-one or stage-two decision here would
         // buy nothing - both stages run before the cache is even read - and would clear the
         // Confirmed flag a person may have set on the row it overwrote.
-        if (resolution.ConsultedModel)
+        //
+        // And never where the value was drafted for this posting, however it was matched.
+        // FormAnswerResolutions is keyed on the question and its options and deliberately not on
+        // the posting - a decision is about a question - which is right for a stored answer and
+        // ruinous for a drafted one: this employer's prose would be remembered against "why do you
+        // want to work here" and served to the next employer that asks it, which is the most
+        // legible way an application can announce that nobody read it. The model call is still
+        // recorded in the AI ledger by the resolver; what is not written is the reuse.
+        if (resolution.ConsultedModel && !resolution.Drafted)
         {
             await answers.RecordResolutionAsync(
                 profileId.Value,
@@ -1385,6 +1418,12 @@ public sealed class SubmissionTools(
             // as the resolver's own does, so a caller that left the flag false and gets true back
             // has been told the server recognised the question where it did not.
             sensitive = sensitive || SensitiveQuestions.Looks(questionText),
+
+            // Where the words came from, which the stage alone cannot say: prose drafted for this
+            // posting is reachable both by its own stage and by a model recognising the form's
+            // wording as the same question. A caller auditing an application afterwards is asking
+            // whether the candidate wrote this or the system did.
+            drafted = resolution.Drafted,
             model = resolution.Model,
             note = resolution.NeedsUser
                 ? "Nothing was answered. Do not compose one: park the application with reason "

@@ -560,10 +560,10 @@ mechanism, and it is derived from the corpus rather than guessed at.
 - **Resolution runs on this side of the tool call, and abstains by default.** `resolve_form_field`
   hands the question to `IFormFieldResolver`; the alternative - shipping the candidate's stored
   answers to the client to choose between - is the whole-profile disclosure this surface exists
-  instead of, with an extra hop and a bill attached. Three of its four stages need no provider, so
-  a deployment with no AI still answers from the allowlist, from what the candidate has typed, and
-  from what the same question resolved to before; only the fourth is a model call, and it abstains
-  rather than failing. **The characteristic failure of a matcher is the confident near-miss**, and
+  instead of, with an extra hop and a bill attached. Four of its five stages need no provider, so
+  a deployment with no AI still answers from the allowlist, from what the candidate has typed, from
+  the free text drafted for this posting, and from what the same question resolved to before; only
+  the fifth is a model call, and it abstains rather than failing. **The characteristic failure of a matcher is the confident near-miss**, and
   a wrong answer on an application is read as a statement the candidate made rather than as a bug
   in a tool they were using - so below the confidence floor, on a sensitive field with no exact
   stored answer, or where an option set will not map cleanly, the answer is that a person is
@@ -571,6 +571,20 @@ mechanism, and it is derived from the corpus rather than guessed at.
   the question is raised as an `OpenQuestion` and the posting returns **when that is answered**
   rather than on the next run, or the agent parks the same posting for the same missing answer
   every run, which is a loop and not a retry.
+- **The drafted free text is the resolver's to match, and for a long time nothing handed it any.**
+  `DraftedAnswer` says in its own remarks that its question text is the catalogue's wording rather
+  than the form's - *"What draws you to us?"* and *"Why do you want to work at this company?"* are
+  one question sharing no content word - and that matching a live field to one of them belongs
+  here. `FormFieldRequest` had no field for them, so the tool that answers *"what do I type in this
+  box"* could not see the five answers the expensive deployment had written for that very posting,
+  and a run resolving its fields parked `MissingAnswer` over every one of them. Three rules hold it
+  together now: a drafted answer **loses to a declared one** on any question both could answer,
+  because what a person typed outranks what was written for them; it is **shortlisted without the
+  word-overlap filter** the stored answers get, since sharing no words is the case it exists for;
+  and it is **never written to `FormAnswerResolutions`**, which is keyed on the question and not the
+  posting - a cached one would serve this employer's prose to the next employer that asked. Prose is
+  also kept out of a form that offers choices, `StableFact` drafts excepted: a paragraph cannot be a
+  dropdown option, and *"LinkedIn"* can.
 - **A disclosure record names what was asked for and never the value.** An audit log holding the
   data it audits has moved the problem rather than solved it. Cosmos, not SQL, for the reason every
   dashboard read is; its own container rather than `aiCalls`, because the two answer different

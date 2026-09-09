@@ -1,5 +1,6 @@
 ﻿using System.Text.Json;
 using JobPlatform.Core.Submissions;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace JobPlatform.Api.Tests;
@@ -646,5 +647,52 @@ public sealed class McpToolRefusalTests
 
         Assert.True(resolved.GetProperty("needsUser").GetBoolean());
         Assert.Equal(JsonValueKind.Null, resolved.GetProperty("value").ValueKind);
+    }
+
+    /// <summary>
+    /// The free text drafted for a posting answers that posting's form, and only that posting's.
+    /// </summary>
+    /// <remarks>
+    /// <b>The tool could not see a drafted answer at all until this was wired up.</b> The pack
+    /// carried them and the resolver was never handed them, so a run resolving its fields here was
+    /// told to park <c>MissingAnswer</c> over questions the nightly pass had already answered - the
+    /// failure H8 exists to prevent, arriving through the one surface that was supposed to prevent
+    /// it.
+    ///
+    /// <b>Both halves are asserted, and the second is the guard.</b> A drafted answer is prose
+    /// about one employer, so it must reach the form of the posting it was written for and nothing
+    /// else. The same question asked without a posting is the same question about a different
+    /// application, and it gets nothing.
+    /// </remarks>
+    [Fact]
+    public async Task Free_text_drafted_for_a_posting_answers_that_postings_form()
+    {
+        using var harness = await McpToolHarness.CreateAsync();
+
+        var resolved = McpToolHarness.Read(await harness.Tools().ResolveFormFieldAsync(
+            McpToolHarness.AsCandidate(),
+            "Why do you want to work here?",
+            postingId: McpToolHarness.WithDocuments));
+
+        Assert.Equal("Because of the traffic.", resolved.GetProperty("value").GetString());
+        Assert.Equal("DraftedAnswer", resolved.GetProperty("stage").GetString());
+        Assert.True(resolved.GetProperty("drafted").GetBoolean());
+        Assert.False(resolved.GetProperty("consultedModel").GetBoolean());
+
+        var elsewhere = McpToolHarness.Read(await harness.Tools().ResolveFormFieldAsync(
+            McpToolHarness.AsCandidate(),
+            "Why do you want to work here?"));
+
+        Assert.True(elsewhere.GetProperty("needsUser").GetBoolean());
+        Assert.False(elsewhere.GetProperty("drafted").GetBoolean());
+
+        // And nothing was remembered. FormAnswerResolutions is keyed on the question and not the
+        // posting, so a cached drafted answer would be served to the next employer that asked it.
+        // Today this holds because the fold match costs no model call and only model calls are
+        // cached; the assertion is here so that a later change which does consult a model for a
+        // draft has to keep the guard rather than discover it.
+        await using var db = harness.Database();
+
+        Assert.False(await db.FormAnswerResolutions.AnyAsync());
     }
 }

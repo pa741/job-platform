@@ -1,13 +1,15 @@
+﻿using JobPlatform.Core.Applications;
 using JobPlatform.Core.Profiles;
 
 namespace JobPlatform.Core.Submissions;
 
-/// <summary>Which of the four stages produced an answer, or refused to.</summary>
+/// <summary>Which of the five stages produced an answer, or refused to.</summary>
 /// <remarks>
 /// <b>The numbering ascends with what the stage costs, and the walk stops at the first stage that
 /// decides.</b> That ordering is the whole of B2: a canonical key is a dictionary lookup, a stored
-/// answer is one index seek, a cached resolution is another, and only past all three is anybody
-/// paying a model to think about a question this system has already thought about.
+/// answer is one index seek, a drafted answer and a cached resolution are each another, and only
+/// past all four is anybody paying a model to think about a question this system has already
+/// thought about.
 ///
 /// <b>It is reported rather than inferred, because "did that cost a model call" is the acceptance
 /// criterion.</b> "The second occurrence of a question resolves without a model call" cannot be
@@ -29,14 +31,21 @@ public enum FormFieldStage
     /// <summary>The candidate's own answer to this same question, in their own words.</summary>
     DeclaredAnswer = 2,
 
-    /// <summary>What this question resolved to before. A hit here never reaches a model.</summary>
-    Cache = 3,
+    /// <summary>Prose drafted for this posting, matched to the form's wording without a model.</summary>
+    /// <remarks>
+    /// Below <see cref="DeclaredAnswer"/> deliberately: what the candidate typed outranks what was
+    /// written for them, on every question either could answer.
+    /// </remarks>
+    DraftedAnswer = 3,
 
-    /// <summary>Judgement, bought only where the three above missed.</summary>
-    Model = 4,
+    /// <summary>What this question resolved to before. A hit here never reaches a model.</summary>
+    Cache = 4,
+
+    /// <summary>Judgement, bought only where the four above missed.</summary>
+    Model = 5,
 
     /// <summary>Nothing reached it: no provider, or nothing stored this could be about.</summary>
-    None = 5,
+    None = 6,
 }
 
 /// <summary>
@@ -140,6 +149,30 @@ public sealed record FormFieldRequest
     public bool Sensitive { get; init; }
 
     /// <summary>
+    /// The free text drafted for this posting, where the caller is asking about one.
+    /// </summary>
+    /// <remarks>
+    /// <b>The seam this closes was open from the day the catalogue was written.</b>
+    /// <see cref="DraftedAnswer"/> says in as many words that its question text is the
+    /// catalogue's wording and not the form's - "What draws you to us?" and "Why do you want to
+    /// work at this company?" are one question sharing no words - and that matching a live field
+    /// to one of these is this resolver's job. Nothing passed them in, so a run that resolved its
+    /// fields here parked <c>MissingAnswer</c> over the five questions the writing pass had
+    /// already answered, in the expensive deployment, once per posting.
+    ///
+    /// <b>They are not the candidate's words and are never treated as them.</b> A stored answer
+    /// is something a person typed; these are prose generated from the advert, so they lose every
+    /// contest against a declared answer, they are reported as drafted wherever a value's
+    /// provenance is reported, and they are never cached - the resolution cache is keyed on the
+    /// question and not the posting, so a cached one would type this employer's prose into the
+    /// next employer's form.
+    ///
+    /// Empty is the ordinary state: a caller that names no posting has none, and a posting whose
+    /// documents were never written has none either.
+    /// </remarks>
+    public IReadOnlyList<DraftedAnswer> Drafted { get; init; } = [];
+
+    /// <summary>
     /// The candidate's stored answers that could apply, already scoped to them.
     /// </summary>
     /// <remarks>
@@ -194,7 +227,8 @@ public sealed record FormFieldResolution
         string rationale,
         long? answerId,
         bool sensitive,
-        string? model)
+        string? model,
+        bool drafted = false)
     {
         Stage = stage;
         Field = field;
@@ -204,6 +238,7 @@ public sealed record FormFieldResolution
         AnswerId = answerId;
         Sensitive = sensitive;
         Model = model;
+        Drafted = drafted;
     }
 
     /// <summary>Which stage decided. See <see cref="FormFieldStage"/> on why it is reported.</summary>
@@ -245,7 +280,26 @@ public sealed record FormFieldResolution
     /// </remarks>
     public bool Sensitive { get; }
 
-    /// <summary>Which deployment answered, where one was reached. Null for the first three stages.</summary>
+    /// <summary>
+    /// Whether the value is prose drafted for this posting rather than anything the candidate typed.
+    /// </summary>
+    /// <remarks>
+    /// <b>It exists so the caller knows not to cache this.</b> <c>FormAnswerResolutions</c> is
+    /// keyed on the question and its options and deliberately not on the posting - a decision is
+    /// about a question - which is right for a stored answer and wrong for a drafted one: "why do
+    /// you want to work here", cached against this posting's prose, is served to the next employer
+    /// that asks it, which is the most legible way an application can announce that nobody read
+    /// it.
+    ///
+    /// <b>Separate from <see cref="Stage"/> because a drafted answer can be reached two ways.</b>
+    /// The fold match is <see cref="FormFieldStage.DraftedAnswer"/> and costs nothing; a model
+    /// recognising "What draws you to us?" as the same question is
+    /// <see cref="FormFieldStage.Model"/> and costs a call. Stage says what was spent and this
+    /// says where the words came from, and folding the two would have to lie about one of them.
+    /// </remarks>
+    public bool Drafted { get; }
+
+    /// <summary>Which deployment answered, where one was reached. Null for the first four stages.</summary>
     public string? Model { get; }
 
     /// <summary>Whether this cost a model call. Derived, so it cannot disagree with the stage.</summary>
@@ -260,7 +314,8 @@ public sealed record FormFieldResolution
         string? field = null,
         long? answerId = null,
         bool sensitive = false,
-        string? model = null)
+        string? model = null,
+        bool drafted = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
         ArgumentException.ThrowIfNullOrWhiteSpace(rationale);
@@ -273,7 +328,8 @@ public sealed record FormFieldResolution
             FormFieldPolicy.Bounded(rationale),
             answerId,
             sensitive,
-            model);
+            model,
+            drafted);
     }
 
     /// <summary>

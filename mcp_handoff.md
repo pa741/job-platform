@@ -101,14 +101,22 @@ settle before writing it, because neither is a detail:
   which has cost real work three times; a generation pass reports to `IAiCallLog` the way
   `KernelCandidacyAssessor` does, or it fails as a count nobody is comparing to anything.
 
-**And the drafted free-text answers are stored but nothing writes them yet.** As of the four
-commits on this branch the column (`DraftedAnswersJson`), `DraftedAnswerCatalog`, the repository
-overload that takes them and the pack's `draftedAnswers[]` projection are all built, and
-`KernelApplicationWriter` produces none: `GenerateAsync` calls the overload that passes null, so
-every pack today carries an empty list. `model.md` already places them in the writing pass, which
-is the right place - the advert, the profile, the gap list and the emphasis list are already in
-that prompt, so they cost a few hundred output tokens against work already paid for, and they are
-assertions made in the voice of that revision's CV.
+**The drafted free-text answers are now written, and `resolve_form_field` can finally see them.**
+The column (`DraftedAnswersJson`), `DraftedAnswerCatalog`, the repository overload and the pack's
+`draftedAnswers[]` projection were built first and `KernelApplicationWriter` produced none; it now
+drafts the catalogue's `PerPosting` questions alongside the documents, and the generation pass adds
+the one `StableAnswers` entry that needs no model.
+
+**What stayed broken after that, and was found by a model driving the surface rather than by a
+test:** nothing passed those answers to the resolver. `DraftedAnswer` states that its question text
+is the catalogue's wording and not the form's - *"What draws you to us?"* and *"Why do you want to
+work at this company?"* are one question sharing no words - and that matching a live field to one
+of them is `resolve_form_field`'s job, but `FormFieldRequest` had no field for them. So the pack
+carried the answers, the resolver reported `stage: "None"`, and a run resolving its fields parked
+`MissingAnswer` over the five questions the expensive deployment had already answered for that
+posting. It is a fold match ahead of the cache, plus a place in the model's shortlist for the
+wordings a fold cannot catch, and a drafted answer is never cached because that table is keyed on
+the question rather than on the posting.
 
 **Until generation catches up, the honest instruction to a run is to relax the gate rather than to
 read an empty queue as a fact about the market.** `documentsReady: true` returns one posting;

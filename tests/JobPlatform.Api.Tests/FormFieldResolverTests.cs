@@ -1,7 +1,8 @@
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 using JobPlatform.Ai;
 using JobPlatform.Ai.Applications;
 using JobPlatform.Core.Ai;
+using JobPlatform.Core.Applications;
 using JobPlatform.Core.Profiles;
 using JobPlatform.Core.Submissions;
 using Microsoft.Extensions.Configuration;
@@ -59,6 +60,7 @@ public sealed class FormFieldResolverTests
         string? name = null,
         CandidateProfile? profile = null,
         PriorResolution? cached = null,
+        IReadOnlyList<DraftedAnswer>? drafted = null,
         params FormAnswer[] answers)
         => new()
         {
@@ -67,8 +69,18 @@ public sealed class FormFieldResolverTests
             Name = name,
             Profile = profile,
             Cached = cached,
+            Drafted = drafted ?? [],
             Answers = answers,
         };
+
+    /// <summary>The catalogue's own wording for the question every ATS asks in its own.</summary>
+    private const string WhyThisCompany = "Why do you want to work at this company?";
+
+    private static DraftedAnswer Draft(
+        string question = WhyThisCompany,
+        string answer = "Because of the traffic you serve and the C# you serve it with.",
+        FreeTextCategory category = FreeTextCategory.PostingSpecific)
+        => new(question, answer, category);
 
     /// <summary>A resolver with a scripted model behind it, and the script's call counter.</summary>
     private static (FormFieldResolver Resolver, ScriptedChatService Model) WithModel(
@@ -745,6 +757,158 @@ public sealed class FormFieldResolverTests
     }
 
     /// <summary>A scripted model that counts what it was asked and keeps what it was sent.</summary>
+    // -----------------------------------------------------------------------
+    // The free text drafted for this posting
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// A form asking in the catalogue's own wording is answered from the draft, free.
+    /// </summary>
+    /// <remarks>
+    /// <b>The seam this closes was open from the day the catalogue was written.</b> Nothing passed
+    /// drafted answers into the resolver, so a run that resolved its fields here was told to park
+    /// <c>MissingAnswer</c> over the questions the writing pass had already answered for this very
+    /// posting - in the expensive deployment, once per posting, with the answer sitting in the pack
+    /// the whole time.
+    ///
+    /// The model call count is the assertion that matters beside the value: this stage is a fold
+    /// and a comparison, and a draft that only resolved by asking a model to recognise its own
+    /// wording would be paying for something already known.
+    /// </remarks>
+    [Fact]
+    public async Task A_question_already_drafted_for_this_posting_is_answered_without_a_model()
+    {
+        var (resolver, model) = WithModel(Chose(0, 1));
+
+        var result = await resolver.ResolveAsync(Ask(WhyThisCompany, drafted: [Draft()]));
+
+        Assert.Equal(Draft().Answer, result.Value);
+        Assert.Equal(FormFieldStage.DraftedAnswer, result.Stage);
+        Assert.True(result.Drafted);
+        Assert.False(result.ConsultedModel);
+        Assert.Equal(0, model.Calls);
+
+        // Said in the rationale, because an audit line that reported generated prose as the
+        // candidate's own words is the failure this flag exists to prevent.
+        Assert.Contains("drafted", result.Rationale, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// What the candidate typed outranks what was written for them.
+    /// </summary>
+    /// <remarks>
+    /// The precedence that makes the new stage safe to add at all. A person who has answered this
+    /// question has said what they want said; a draft is the system's best guess at the same thing,
+    /// and reaching for it over their own words would quietly overwrite an answer they gave on
+    /// purpose.
+    /// </remarks>
+    [Fact]
+    public async Task The_candidates_own_answer_outranks_one_drafted_for_them()
+    {
+        var resolver = WithoutModel();
+
+        var result = await resolver.ResolveAsync(Ask(
+            WhyThisCompany,
+            drafted: [Draft()],
+            answers: Answer(WhyThisCompany, "Because I have used the product for years.")));
+
+        Assert.Equal("Because I have used the product for years.", result.Value);
+        Assert.Equal(FormFieldStage.DeclaredAnswer, result.Stage);
+        Assert.False(result.Drafted);
+    }
+
+    /// <summary>
+    /// A wording that shares no word with the draft is what the model is for.
+    /// </summary>
+    /// <remarks>
+    /// <b>The case <c>DraftedAnswer</c> names in its own remarks</b>, and the reason a fold match
+    /// alone would have been a fix that looked like it worked: "What draws you to us?" and "Why do
+    /// you want to work at this company?" are one question with no content word in common, so the
+    /// overlap filter that keeps stored answers out of the prompt would have dropped the only
+    /// candidate that answers it. Drafted answers are therefore shortlisted unfiltered, and the
+    /// prompt has to say which kind each one is.
+    /// </remarks>
+    [Fact]
+    public async Task A_form_wording_that_shares_no_words_with_the_draft_is_matched_by_the_model()
+    {
+        var (resolver, model) = WithModel(Chose(0, 0.95));
+
+        var result = await resolver.ResolveAsync(Ask("What draws you to us?", drafted: [Draft()]));
+
+        Assert.Equal(Draft().Answer, result.Value);
+        Assert.Equal(FormFieldStage.Model, result.Stage);
+        Assert.True(result.Drafted);
+        Assert.True(result.ConsultedModel);
+        Assert.Equal(1, model.Calls);
+
+        // The prompt tells the model which kind it is looking at, because the two are different
+        // claims and the refusal rules turn on the difference.
+        Assert.Contains("Drafted for THIS application", model.Prompts[0], StringComparison.Ordinal);
+
+        // And the rationale does not call it the candidate's answer.
+        Assert.DoesNotContain("candidate's answer", result.Rationale, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Nothing drafted is reached for a question only the candidate may answer.
+    /// </summary>
+    /// <remarks>
+    /// The catalogue drafts nothing sensitive by construction, so this guards the wording of the
+    /// form rather than of the draft - a later catalogue entry, or a novel answer stored against a
+    /// posting, must not become a route by which a sponsorship box is filled in by anything but a
+    /// person. Asserted on the prompt as well as the answer: the rule is that it is never offered
+    /// to a model, not that a model is trusted to decline it.
+    /// </remarks>
+    [Fact]
+    public async Task A_drafted_answer_is_never_reached_for_a_sensitive_question()
+    {
+        var (resolver, model) = WithModel(Chose(0, 1));
+
+        var result = await resolver.ResolveAsync(Ask(
+            "Do you require visa sponsorship to work in the UK?",
+            drafted: [Draft("Do you require visa sponsorship to work in the UK?", "No")]));
+
+        Assert.True(result.NeedsUser);
+        Assert.Null(result.Value);
+        Assert.False(result.Drafted);
+        Assert.Equal(0, model.Calls);
+    }
+
+    /// <summary>
+    /// Prose is not offered to a form that lists choices; a stable fact still is.
+    /// </summary>
+    /// <remarks>
+    /// A hundred and fifty words cannot be one of a dropdown's options, so sending them spends
+    /// tokens on every select a form has and can only produce a refusal. A
+    /// <c>StableFact</c> draft is a word or two - the board the posting was found on - and maps
+    /// onto a choice exactly as a stored answer does, which is why the exclusion is by category
+    /// rather than by the presence of options alone.
+    /// </remarks>
+    [Fact]
+    public async Task Prose_is_kept_out_of_an_option_set_and_a_stable_fact_is_not()
+    {
+        var (prose, proseModel) = WithModel(Chose(0, 1));
+
+        var refused = await prose.ResolveAsync(Ask(
+            "Why do you want to work here?", options: ["Yes", "No"], drafted: [Draft()]));
+
+        Assert.True(refused.NeedsUser);
+        Assert.Equal(0, proseModel.Calls);
+
+        var (fact, factModel) = WithModel(Chose(0, 0.95));
+
+        var mapped = await fact.ResolveAsync(Ask(
+            "Where did you find this vacancy?",
+            options: ["LinkedIn", "Indeed", "A friend"],
+            drafted: [Draft("How did you hear about us?", "LinkedIn", FreeTextCategory.StableFact)]));
+
+        // The option's own spelling, chosen by the model from a shortlist the draft was allowed
+        // into because it is a value rather than a paragraph.
+        Assert.Equal("LinkedIn", mapped.Value);
+        Assert.True(mapped.Drafted);
+        Assert.Equal(1, factModel.Calls);
+    }
+
     private sealed class ScriptedChatService(string response) : IChatCompletionService
     {
         public int Calls { get; private set; }

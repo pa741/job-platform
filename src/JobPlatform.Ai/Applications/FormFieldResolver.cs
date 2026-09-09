@@ -1,7 +1,8 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using JobPlatform.Core.Ai;
+using JobPlatform.Core.Applications;
 using JobPlatform.Core.Submissions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -120,8 +121,10 @@ public sealed class FormFieldResolver(
     /// </remarks>
     private const string PromptTemplate =
         """
-        You are matching ONE question from a job application form to an answer the candidate has
-        already given, in their own words.
+        You are matching ONE question from a job application form to an answer that already
+        exists for this application. Each numbered item below is one of two kinds, and each says
+        which it is: an answer the candidate gave in their own words, or an answer drafted for
+        THIS application from the advert it was written against.
 
         You are not writing an answer and you cannot invent one. Your only two moves are to name
         one of the numbered answers below, or to refuse.
@@ -133,26 +136,31 @@ public sealed class FormFieldResolver(
 
         Refuse - "index": null - whenever any of these is true. Do not weigh them against how
         useful an answer would be:
-        - The stored answer is about a different thing, however closely related. "Do you have the
+        - The answer is about a different thing, however closely related. "Do you have the
           right to work here?" and "Do you require visa sponsorship?" are different questions and
           their answers are opposites.
-        - The stored answer is about the same thing at a different time, place, employer or scope.
-        - The question asks for something the stored answers merely imply, or something you would
+        - The answer is about the same thing at a different time, place, employer or scope.
+        - The question asks for something the answers merely imply, or something you would
           have to add up, convert, round or reword to produce.
-        - The form offers a list of choices and the stored answer is not plainly one of them.
+        - The form offers a list of choices and the answer is not plainly one of them.
         - You are unsure. Unsure is a refusal here, not a low confidence.
+
+        Two wordings of the same question count as the same question, and that is the judgement
+        you are here to make: "What draws you to us?" and "Why do you want to work at this
+        company?" ask for the same thing in different words. Sharing no words is not a reason to
+        refuse; asking for a different thing is.
 
         THE QUESTION THE FORM IS ASKING
         {{$question}}
         {{$options}}
 
-        THE CANDIDATE'S STORED ANSWERS
+        THE ANSWERS AVAILABLE FOR THIS APPLICATION
         These are the only things you may name. You cannot see the candidate's profile, their CV or
         their application history, and you cannot ask for them.
         {{$candidates}}
 
         Return ONLY a JSON object:
-        {"index": <the number of the stored answer that answers the form's question, or null>,
+        {"index": <the number of the answer that answers the form's question, or null>,
          "confidence": <0 to 1: how sure you are that the two are the same question>,
          "reason": "<one sentence, for a person auditing this months later, saying what decided it>"}
         """;
@@ -185,6 +193,7 @@ public sealed class FormFieldResolver(
 
         return FromCatalog(request, sensitive)
             ?? FromDeclared(request, sensitive)
+            ?? FromDrafted(request, sensitive)
             ?? FromCache(request, sensitive)
             ?? await FromModelAsync(request, sensitive, ct);
     }
@@ -360,7 +369,73 @@ public sealed class FormFieldResolver(
     }
 
     /// <summary>
-    /// Stage three: what this question resolved to before.
+    /// Stage three: prose drafted for this posting, where the form asks it in the same words.
+    /// </summary>
+    /// <remarks>
+    /// <b>The fold and nothing else, which is why this stage is free.</b>
+    /// <c>QuestionKey.Normalise</c> is the same casing-and-punctuation fold that decides two
+    /// questions are one question everywhere else here, so a form asking "Why do you want to work
+    /// at this company?" in the catalogue's own wording is answered without a model. A form asking
+    /// "What draws you to us?" is not - those share no words at all, which is the case
+    /// <see cref="DraftedAnswer"/> documents and which the model stage is where it belongs.
+    ///
+    /// <b>Below the candidate's own answers and above the cache</b>, and both halves of that are
+    /// decisions. What a person typed outranks what was written for them on any question both
+    /// could answer. The cache, by contrast, is keyed on the question and not the posting: for the
+    /// questions this catalogue drafts - prose about one employer - a remembered decision is the
+    /// least appropriate thing in the building, so this is asked first.
+    ///
+    /// <b>A drafted answer that will not render into the form's options falls through rather than
+    /// ending the walk</b>, which is the opposite of stage two's behaviour and deliberate. There,
+    /// an exact match that cannot be mapped means the candidate's own answer to this exact question
+    /// does not fit the choices and there is no better evidence anywhere. Here it usually means a
+    /// paragraph met a dropdown, which says nothing about whether a stored answer fits it.
+    ///
+    /// <b>Never for a question that reads as sensitive.</b> The catalogue drafts nothing sensitive
+    /// by construction - anything only a person may assert belongs in their declared answers - so
+    /// this guard is about the form's wording rather than the draft's, and it costs one comparison
+    /// to make the rule true whatever a later catalogue entry says.
+    /// </remarks>
+    private static FormFieldResolution? FromDrafted(FormFieldRequest request, bool sensitive)
+    {
+        if (sensitive || request.Drafted.Count == 0)
+        {
+            return null;
+        }
+
+        var asked = QuestionKey.Normalise(request.QuestionText);
+
+        var match = request.Drafted.FirstOrDefault(drafted =>
+            !string.IsNullOrWhiteSpace(drafted.Answer)
+            && string.Equals(QuestionKey.Normalise(drafted.QuestionText), asked, StringComparison.Ordinal));
+
+        if (match is null)
+        {
+            return null;
+        }
+
+        var value = FormFieldPolicy.ForForm(match.Answer, request.Options);
+
+        if (value is null)
+        {
+            return null;
+        }
+
+        return FormFieldResolution.Answered(
+            FormFieldStage.DraftedAnswer,
+            value,
+            "The writing pass had already drafted an answer for this posting to this question, in "
+            + $"these same words - \"{Truncate(match.QuestionText, 200)}\". It is prose written "
+            + "from this advert rather than something the candidate typed, so nothing was "
+            + "remembered about this decision and it is not reused on any other posting. No model "
+            + "was called." + Offered(request),
+            FormFieldPolicy.Certain,
+            answerId: null,
+            drafted: true);
+    }
+
+    /// <summary>
+    /// Stage four: what this question resolved to before.
     /// </summary>
     /// <remarks>
     /// <b>A hit here never reaches a model, whatever it says, and that is the acceptance criterion
@@ -490,7 +565,7 @@ public sealed class FormFieldResolver(
     }
 
     /// <summary>
-    /// Stage four: judgement, bought only where the three above missed.
+    /// Stage five: judgement, bought only where the four above missed.
     /// </summary>
     /// <remarks>
     /// <b>Three things can stop this before it costs anything, and all three are ordinary.</b> A
@@ -537,8 +612,10 @@ public sealed class FormFieldResolver(
         {
             return FormFieldResolution.Ask(
                 FormFieldStage.None,
-                "Nothing the candidate has stored shares a word with this question, so there was "
-                + "nothing for a model to choose between and none was asked. Ask them.");
+                "Nothing available for this application answers this question: no stored answer "
+                + "of the candidate's shares a word with it, and no free text was drafted for this "
+                + "posting that could be about it. There was nothing for a model to choose between "
+                + "and none was asked. Ask them.");
         }
 
         var started = _time.GetTimestamp();
@@ -622,9 +699,10 @@ public sealed class FormFieldResolver(
 
             return FormFieldResolution.Ask(
                 FormFieldStage.Model,
-                $"The model was shown the {candidates.Count} stored "
-                + $"{(candidates.Count == 1 ? "answer" : "answers")} closest to this question and "
-                + $"would not say any of them answers it.{said} Ask the candidate.",
+                $"The model was shown the {candidates.Count} "
+                + $"{(candidates.Count == 1 ? "answer" : "answers")} closest to this question - the "
+                + "candidate's own, and any drafted for this posting - and would not say any of "
+                + $"them answers it.{said} Ask the candidate.",
                 confidence,
                 _options.BulkDeployment);
         }
@@ -648,7 +726,7 @@ public sealed class FormFieldResolver(
 
             return FormFieldResolution.Ask(
                 FormFieldStage.Model,
-                $"The model read this as the candidate's answer to \"{Truncate(chosen.QuestionText, 200)}\" "
+                $"The model read this as {Whose(chosen)} \"{Truncate(chosen.QuestionText, 200)}\" "
                 + $"but reported only {Number(confidence)}, below the "
                 + $"{Number(FormFieldPolicy.ConfidenceFloor)} this system requires of anything it "
                 + $"types on somebody's behalf.{said} Ask the candidate.",
@@ -665,8 +743,8 @@ public sealed class FormFieldResolver(
 
             return FormFieldResolution.Ask(
                 FormFieldStage.Model,
-                $"The model read this as the candidate's answer to "
-                + $"\"{Truncate(chosen.QuestionText, 200)}\", but what they wrote is not one of the "
+                $"The model read this as {Whose(chosen)} "
+                + $"\"{Truncate(chosen.QuestionText, 200)}\", but what it says is not one of the "
                 + $"{Count(request.Options)} choices this form offers and nothing here maps an "
                 + "answer to the nearest choice. Ask the candidate to pick one.",
                 confidence,
@@ -678,15 +756,17 @@ public sealed class FormFieldResolver(
         return FormFieldResolution.Answered(
             FormFieldStage.Model,
             value,
-            $"No stored answer was filed against this wording, so the model was asked which of the "
-            + $"{candidates.Count} closest it means. It read it as the candidate's answer to "
-            + $"\"{Truncate(chosen.QuestionText, 200)}\", given on {Day(chosen.AnsweredAtUtc)}, at "
-            + $"confidence {Number(confidence)}.{said}" + Offered(request),
+            $"Nothing was filed against this wording, so the model was asked which of the "
+            + $"{candidates.Count} closest it means. It read it as {Whose(chosen)} "
+            + $"\"{Truncate(chosen.QuestionText, 200)}\""
+            + (chosen.AnsweredAtUtc is { } given ? $", given on {Day(given)}" : string.Empty)
+            + $", at confidence {Number(confidence)}.{said}" + Offered(request),
             confidence,
             chosen.Name,
-            chosen.Id == 0 ? null : chosen.Id,
+            chosen.AnswerId,
             sensitive: false,
-            _options.BulkDeployment);
+            _options.BulkDeployment,
+            chosen.IsDrafted);
     }
 
     /// <summary>
@@ -707,8 +787,9 @@ public sealed class FormFieldResolver(
     /// identical requests producing differently ordered prompts produce differently indexed
     /// answers, and a bug that only reproduces sometimes is one nobody fixes.
     /// </remarks>
-    private static IReadOnlyList<FormAnswer> Shortlist(FormFieldRequest request, HashSet<string> words)
-        => [.. request.Answers
+    private static IReadOnlyList<Candidate> Shortlist(FormFieldRequest request, HashSet<string> words)
+    {
+        var stored = request.Answers
             .Where(answer => answer.IsLive)
             .Where(answer => AnswerPrecedence.Applies(answer, request.CompanyId, request.PostingId))
             .Where(answer => !SensitiveQuestions.Guards(answer))
@@ -717,8 +798,74 @@ public sealed class FormFieldResolver(
             .OrderByDescending(pair => pair.Overlap)
             .ThenByDescending(pair => pair.Answer.AnsweredAtUtc)
             .ThenByDescending(pair => pair.Answer.Id)
-            .Take(MaxCandidates)
-            .Select(pair => pair.Answer)];
+            .Select(pair => Candidate.Stored(pair.Answer));
+
+        return [.. Drafted(request).Concat(stored).Take(MaxCandidates)];
+    }
+
+    /// <summary>
+    /// This posting's drafted answers, as candidates the model may name.
+    /// </summary>
+    /// <remarks>
+    /// <b>No word-overlap filter, and that is the whole reason they are here.</b> The stored side
+    /// is filtered on shared content words, which is what keeps a prompt from becoming a copy of
+    /// the answer store. Applying it here would defeat the case this exists for: "What draws you
+    /// to us?" and "Why do you want to work at this company?" are one question and share no
+    /// content word at all, so an overlap gate would drop the only candidate that answers it.
+    /// The list is safe to send unfiltered because it is bounded by construction -
+    /// <c>DraftedAnswerCatalog.PerPosting</c> is a curated handful, deliberately short, and one
+    /// posting has at most that many drafts plus a stable fact.
+    ///
+    /// <b>Held back from a form that offers choices, except where the draft is a value rather than
+    /// prose.</b> A hundred and fifty words of prose cannot be one of a dropdown's options, so
+    /// sending them buys nothing and spends tokens on every select a form has; a
+    /// <see cref="FreeTextCategory.StableFact"/> draft is a word or two - the board somebody heard
+    /// about the job on - and maps onto a choice exactly as a stored answer does.
+    ///
+    /// <b>First in the list rather than interleaved by relevance</b>, because there is no shared
+    /// scale to interleave on: a drafted answer has no overlap score and inventing one to sort by
+    /// would be arithmetic pretending to be a comparison. They come first, the stored answers
+    /// follow in their own order, and the cap applies to the whole.
+    /// </remarks>
+    private static IEnumerable<Candidate> Drafted(FormFieldRequest request)
+        => request.Drafted
+            .Where(drafted => !string.IsNullOrWhiteSpace(drafted.Answer))
+            .Where(drafted => request.Options is not { Count: > 0 }
+                || drafted.Category is FreeTextCategory.StableFact)
+            .Select(Candidate.Drafted);
+
+    /// <summary>
+    /// One thing the model may name, from either source it may come from.
+    /// </summary>
+    /// <remarks>
+    /// <b>The two sources are one list to the model and two facts to everybody else.</b> One call
+    /// decides between them, because two calls would mean paying twice to answer one field and
+    /// would leave the ordering between the two answers to whichever ran first. But what comes
+    /// back has to say which it named: a stored answer is something a person typed, is cacheable,
+    /// and carries an id a resolution row points at; a drafted one is prose written from this
+    /// advert, is none of those, and must never be reported as the candidate's own words.
+    /// </remarks>
+    private sealed record Candidate(
+        string QuestionText,
+        string Value,
+        string? Name,
+        long? AnswerId,
+        DateTimeOffset? AnsweredAtUtc,
+        bool IsDrafted)
+    {
+        public static Candidate Stored(FormAnswer answer)
+            => new(answer.QuestionText, answer.Value, answer.Name,
+                answer.Id == 0 ? null : answer.Id, answer.AnsweredAtUtc, IsDrafted: false);
+
+        public static Candidate Drafted(DraftedAnswer drafted)
+            => new(drafted.QuestionText, drafted.Answer, null, null, null, IsDrafted: true);
+    }
+
+    /// <summary>How a rationale names what the model chose, without calling prose somebody's words.</summary>
+    private static string Whose(Candidate candidate)
+        => candidate.IsDrafted
+            ? "the answer drafted for this posting to"
+            : "the candidate's answer to";
 
     /// <summary>How many content words a stored answer's own question shares with this one.</summary>
     /// <remarks>
@@ -755,7 +902,7 @@ public sealed class FormFieldResolver(
     /// so that a failure can be replayed rather than reconstructed by hand.
     /// </remarks>
     private (string Prompt, KernelArguments Arguments) Compose(
-        FormFieldRequest request, IReadOnlyList<FormAnswer> candidates)
+        FormFieldRequest request, IReadOnlyList<Candidate> candidates)
     {
         var offered = request.Options?.Where(option => !string.IsNullOrWhiteSpace(option)).ToArray() ?? [];
 
@@ -765,8 +912,21 @@ public sealed class FormFieldResolver(
         {
             var answer = candidates[index];
 
+            builder.Append('[').Append(index.ToString(CultureInfo.InvariantCulture)).AppendLine("]");
+
+            // Labelled by source, because the model is being asked the same question about two
+            // different kinds of thing and the refusal rules below turn on which it is looking at.
+            if (answer.IsDrafted)
+            {
+                builder
+                    .Append("  Drafted for THIS application, answering: ")
+                    .AppendLine(Truncate(answer.QuestionText, MaxQuestionChars))
+                    .Append("  The draft says: ").AppendLine(Truncate(answer.Value, MaxAnswerChars));
+
+                continue;
+            }
+
             builder
-                .Append('[').Append(index.ToString(CultureInfo.InvariantCulture)).AppendLine("]")
                 .Append("  They were asked: ").AppendLine(Truncate(answer.QuestionText, MaxQuestionChars))
                 .Append("  They answered: ").AppendLine(Truncate(answer.Value, MaxAnswerChars));
 
@@ -775,8 +935,10 @@ public sealed class FormFieldResolver(
                 builder.Append("  Filed under: ").AppendLine(name);
             }
 
-            builder
-                .Append("  Given on: ").AppendLine(Day(answer.AnsweredAtUtc));
+            if (answer.AnsweredAtUtc is { } given)
+            {
+                builder.Append("  Given on: ").AppendLine(Day(given));
+            }
         }
 
         var arguments = new KernelArguments(AiPrompt.Bulk(_options, "medium"))
