@@ -249,6 +249,7 @@ public sealed class SubmissionRepository(JobsDbContext db)
                 e.FinalUrl,
                 e.ScreenshotRef,
                 e.SubmittedFieldsJson,
+                e.DraftedFieldsJson,
             })
             .ToListAsync(ct);
 
@@ -256,7 +257,9 @@ public sealed class SubmissionRepository(JobsDbContext db)
         [
             .. rows.Select(e => new SubmissionEvent(e.AtUtc, e.Type, e.Stage, e.Source, e.Note)
             {
-                Evidence = ReadEvidence(e.ConfirmationRef, e.FinalUrl, e.ScreenshotRef, e.SubmittedFieldsJson),
+                Evidence = ReadEvidence(
+                    e.ConfirmationRef, e.FinalUrl, e.ScreenshotRef, e.SubmittedFieldsJson,
+                    e.DraftedFieldsJson),
             }),
         ];
     }
@@ -1048,9 +1051,23 @@ public sealed class SubmissionRepository(JobsDbContext db)
     {
         var evidence = submissionEvent.Evidence;
 
-        var fields = evidence?.SubmittedFields?
+        var drafted = evidence?.DraftedFields?
             .Select(name => Bound(name, SubmissionLimits.MaxSubmittedFieldNameLength))
             .OfType<string>()
+            .Distinct(StringComparer.Ordinal)
+            .Take(SubmissionLimits.MaxSubmittedFieldCount)
+            .ToList();
+
+        // The subset rule, applied rather than checked. A field answered from drafted prose was
+        // filled in by definition, so a caller that named it in one list and not the other has
+        // made a bookkeeping slip - and refusing the write over it would lose the record of an
+        // application that really was sent to keep a list tidy. Union, deduplicate, and bound the
+        // result exactly as the submitted list has always been bounded.
+        var fields = (evidence?.SubmittedFields ?? [])
+            .Select(name => Bound(name, SubmissionLimits.MaxSubmittedFieldNameLength))
+            .OfType<string>()
+            .Concat(drafted ?? [])
+            .Distinct(StringComparer.Ordinal)
             .Take(SubmissionLimits.MaxSubmittedFieldCount)
             .ToList();
 
@@ -1069,6 +1086,7 @@ public sealed class SubmissionRepository(JobsDbContext db)
             // Null rather than "[]" where nothing survived, so the column agrees with
             // SubmissionEvidence.IsEmpty: an empty list is not a capture.
             SubmittedFieldsJson = fields is { Count: > 0 } ? JsonSerializer.Serialize(fields) : null,
+            DraftedFieldsJson = drafted is { Count: > 0 } ? JsonSerializer.Serialize(drafted) : null,
         };
     }
 
@@ -1088,7 +1106,11 @@ public sealed class SubmissionRepository(JobsDbContext db)
     /// call <c>ApplicationDocumentRepository</c> makes over <c>EmphasisedJson</c>.
     /// </remarks>
     private static SubmissionEvidence? ReadEvidence(
-        string? confirmationRef, string? finalUrl, string? screenshotRef, string? submittedFieldsJson)
+        string? confirmationRef,
+        string? finalUrl,
+        string? screenshotRef,
+        string? submittedFieldsJson,
+        string? draftedFieldsJson)
     {
         var evidence = new SubmissionEvidence
         {
@@ -1096,6 +1118,7 @@ public sealed class SubmissionRepository(JobsDbContext db)
             FinalUrl = finalUrl,
             ScreenshotRef = screenshotRef,
             SubmittedFields = ReadFields(submittedFieldsJson),
+            DraftedFields = ReadFields(draftedFieldsJson),
         };
 
         return evidence.IsEmpty ? null : evidence;

@@ -1764,6 +1764,7 @@ public sealed class SubmissionTools(
         [Description("Where the browser ended up - the confirmation page, not where the attempt started.")] string? finalUrl = null,
         [Description("A pointer to a stored screenshot. A path, never an image and never a signed URL.")] string? screenshotRef = null,
         [Description("The NAMES of the fields that were filled in. Names only - never the answers given to them.")] string[]? submittedFields = null,
+        [Description("Of those, the NAMES of the fields answered with prose this system wrote - anything resolve_form_field returned with 'drafted: true', and the pack's draftedAnswers. Names only. This is what makes 'who wrote this answer' checkable later without reading prose; a name here is treated as submitted whether or not it also appears in submittedFields.")] string[]? draftedFields = null,
         [Description("Which revision of the generated documents was sent, from get_submission_pack.")] int? documentRevision = null,
         [Description("The run doing this, from start_run. Omit outside a run.")] long? runId = null,
         [Description("Which CV was actually uploaded, from get_submission_pack's cvSelection.cvVariantId. Omit where no CV went with the application.")] long? cvVariantId = null,
@@ -1881,7 +1882,8 @@ public sealed class SubmissionTools(
             new SubmissionEvent(
                 atUtc ?? now, SubmissionEventType.Submitted, null, SubmissionEventSource.Client, note)
             {
-                Evidence = Captured(confirmationRef, finalUrl, screenshotRef, submittedFields),
+                Evidence = Captured(
+                    confirmationRef, finalUrl, screenshotRef, submittedFields, draftedFields),
             },
             idempotencyKey!,
             now,
@@ -1960,6 +1962,7 @@ public sealed class SubmissionTools(
         [Description("Where the browser ended up - the confirmation page, not where the attempt started.")] string? finalUrl = null,
         [Description("A pointer to a stored screenshot. A path, never an image and never a signed URL.")] string? screenshotRef = null,
         [Description("The NAMES of the fields that were filled in. Names only - never the answers given to them.")] string[]? submittedFields = null,
+        [Description("Of those, the NAMES of the fields answered with prose this system wrote - anything resolve_form_field returned with 'drafted: true', and the pack's draftedAnswers. Names only. This is what makes 'who wrote this answer' checkable later without reading prose; a name here is treated as submitted whether or not it also appears in submittedFields.")] string[]? draftedFields = null,
         CancellationToken ct = default)
     {
         var (profileId, failure) = await ResolveAsync(context, ct);
@@ -2007,7 +2010,8 @@ public sealed class SubmissionTools(
             // different kinds of claim, and the log is only auditable if it says which.
             new SubmissionEvent(at, parsed, stage, SubmissionEventSource.Client, note)
             {
-                Evidence = Captured(confirmationRef, finalUrl, screenshotRef, submittedFields),
+                Evidence = Captured(
+                    confirmationRef, finalUrl, screenshotRef, submittedFields, draftedFields),
             },
             idempotencyKey,
             ct);
@@ -2654,7 +2658,10 @@ public sealed class SubmissionTools(
     /// <remarks>
     /// <b>One function for both write paths</b>, so an event inlined into a create and one
     /// appended later carry evidence built the same way - the difference would otherwise show up
-    /// only in the rows, months later.
+    /// only in the rows, months later. It is also why <c>draftedFields</c> arrived on both tools
+    /// at once: a provenance list that existed on <c>create_submission</c> alone would be absent
+    /// from exactly the events an application collects after it was sent, which is where somebody
+    /// reading it back starts.
     ///
     /// <b>Null where the block is empty, asked through <c>IsEmpty</c> rather than by a null check
     /// per argument.</b> Blank counts as nothing there: a selector that matched an empty element
@@ -2668,7 +2675,11 @@ public sealed class SubmissionTools(
     /// to protect the proof of it. The repository bounds each part to its column.
     /// </remarks>
     private static SubmissionEvidence? Captured(
-        string? confirmationRef, string? finalUrl, string? screenshotRef, string[]? submittedFields)
+        string? confirmationRef,
+        string? finalUrl,
+        string? screenshotRef,
+        string[]? submittedFields,
+        string[]? draftedFields)
     {
         var evidence = new SubmissionEvidence
         {
@@ -2676,6 +2687,7 @@ public sealed class SubmissionTools(
             FinalUrl = finalUrl,
             ScreenshotRef = screenshotRef,
             SubmittedFields = submittedFields is { Length: > 0 } ? submittedFields : null,
+            DraftedFields = draftedFields is { Length: > 0 } ? draftedFields : null,
         };
 
         return evidence.IsEmpty ? null : evidence;

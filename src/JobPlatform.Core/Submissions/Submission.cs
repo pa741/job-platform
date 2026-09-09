@@ -1,4 +1,4 @@
-namespace JobPlatform.Core.Submissions;
+﻿namespace JobPlatform.Core.Submissions;
 
 /// <summary>Where the application is made.</summary>
 /// <remarks>
@@ -287,6 +287,31 @@ public sealed record SubmissionEvidence
     /// </remarks>
     public IReadOnlyList<string>? SubmittedFields { get; init; }
 
+    /// <summary>
+    /// Which of those fields were filled in with prose this system wrote. <b>A subset of
+    /// <see cref="SubmittedFields"/>, and names only, on the same terms.</b>
+    /// </summary>
+    /// <remarks>
+    /// <b>The question it answers is "who wrote this answer", and until it existed nothing on
+    /// this table could.</b> An application carries three kinds of sentence - what the candidate
+    /// typed, what the writing pass drafted from the advert, and what a catalogue read off the
+    /// profile - and the first is the only one they can be held to having said themselves. A
+    /// reader auditing an application months later needs to tell them apart before they can
+    /// decide whether an answer was theirs to correct or ours to fix, and prose in a note cannot
+    /// be counted, grouped or compared across applications.
+    ///
+    /// <b>A subset by construction rather than by validation, because a field cannot be drafted
+    /// without having been filled in.</b> The write path folds any name here into
+    /// <see cref="SubmittedFields"/> rather than refusing the pair, which is the choice this table
+    /// makes everywhere: an application really was sent, and dropping the record of it over a
+    /// caller's bookkeeping slip loses the fact that matters to keep the one that does not.
+    ///
+    /// <b>Names, never values</b> - the line <see cref="SubmittedFields"/> draws and for the same
+    /// reason. That a drafted answer went into <c>why_this_company</c> is auditable; a second copy
+    /// of the paragraph is a disclosure this table has no business holding.
+    /// </remarks>
+    public IReadOnlyList<string>? DraftedFields { get; init; }
+
     /// <summary>Whether anything was actually captured.</summary>
     /// <remarks>
     /// <b>Blank counts as nothing.</b> A selector that matched an empty element yields <c>""</c>
@@ -300,7 +325,13 @@ public sealed record SubmissionEvidence
         => string.IsNullOrWhiteSpace(ConfirmationRef)
             && string.IsNullOrWhiteSpace(FinalUrl)
             && string.IsNullOrWhiteSpace(ScreenshotRef)
-            && SubmittedFields?.Any(name => !string.IsNullOrWhiteSpace(name)) != true;
+            && SubmittedFields?.Any(name => !string.IsNullOrWhiteSpace(name)) != true
+
+            // Asked separately rather than left to the subset rule, because the rule is applied by
+            // the write path and this is read by callers that have not been through it. A caller
+            // that named only drafted fields has captured something, and answering "empty" would
+            // drop it on the floor.
+            && DraftedFields?.Any(name => !string.IsNullOrWhiteSpace(name)) != true;
 }
 
 /// <summary>

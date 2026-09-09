@@ -313,5 +313,20 @@ public sealed class SubmissionEventEntity
     /// </remarks>
     public string? SubmittedFieldsJson { get; set; }
 
+    /// <summary>
+    /// Which of those names were filled in with prose this system wrote, as the same shape of JSON.
+    /// </summary>
+    /// <remarks>
+    /// A second column rather than a shape change to the first, and the reason is the rows already
+    /// on the table. <c>SubmittedFieldsJson</c> holds a JSON array of strings written by every
+    /// build so far; turning it into an array of objects to carry a provenance flag would leave
+    /// every existing row unreadable by the new reader, or force a reader that understands both -
+    /// which is two shapes for one fact, decided by which build wrote the row. A separate list is
+    /// null on every old row and means exactly what null means: nothing said so.
+    ///
+    /// Bounded where it is built, like its sibling, and a subset of it by construction.
+    /// </remarks>
+    public string? DraftedFieldsJson { get; set; }
+
     public SubmissionEntity? Submission { get; set; }
 }

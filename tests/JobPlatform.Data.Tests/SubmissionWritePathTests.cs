@@ -508,6 +508,82 @@ public sealed class SubmissionWritePathTests : IDisposable
         Assert.Equal(["fullName", "email", "cv"], recorded.Evidence.SubmittedFields);
     }
 
+    /// <summary>
+    /// Which answers this system wrote is stored beside which fields were filled in.
+    /// </summary>
+    /// <remarks>
+    /// <b>An application carries three kinds of sentence and only one of them is the
+    /// candidate's.</b> What they typed, what the writing pass drafted from the advert, and what
+    /// the allowlist read off their profile all arrive at an employer under their name, and until
+    /// this column existed nothing on this table could tell them apart afterwards - the fact lived
+    /// in whatever prose a client had put in the note, which cannot be counted or compared across
+    /// applications.
+    ///
+    /// <b>The subset is applied and not demanded.</b> "cover_letter" is named as drafted and not
+    /// as submitted, and it comes back in both lists: a field answered from drafted prose was
+    /// filled in by definition, and refusing the write over a caller's bookkeeping would lose the
+    /// record of an application that really was sent.
+    /// </remarks>
+    [Fact]
+    public async Task What_this_system_wrote_is_recorded_beside_what_was_filled_in()
+    {
+        await using var db = CreateContext();
+        var repository = new SubmissionRepository(db);
+
+        var result = await repository.CreateWithEventAsync(
+            ProfileId,
+            1,
+            SubmissionChannel.Ats,
+            null,
+            Submitted(At(31), new SubmissionEvidence
+            {
+                ConfirmationRef = "Application #4417290",
+                SubmittedFields = ["fullName", "email", "why_this_company"],
+                DraftedFields = ["why_this_company", "cover_letter"],
+            }),
+            "run-7:1:Submitted",
+            Now);
+
+        var recorded = Assert.Single(await repository.ListEventsAsync(ProfileId, result.Row!.Id));
+
+        Assert.NotNull(recorded.Evidence);
+        Assert.Equal(["why_this_company", "cover_letter"], recorded.Evidence!.DraftedFields);
+
+        // The union, in the order the two lists were given, with no name twice.
+        Assert.Equal(
+            ["fullName", "email", "why_this_company", "cover_letter"],
+            recorded.Evidence.SubmittedFields);
+    }
+
+    /// <summary>
+    /// An event that names only drafted fields has still captured something.
+    /// </summary>
+    /// <remarks>
+    /// <c>SubmissionEvidence.IsEmpty</c> decides whether a block is stored at all, and it is read
+    /// by callers that have not been through the write path's subset rule. Asking about the
+    /// submitted list alone would drop such an event's evidence on the floor - silently, since
+    /// nothing anywhere would say a list had been discarded.
+    /// </remarks>
+    [Fact]
+    public async Task Evidence_naming_only_drafted_fields_is_still_evidence()
+    {
+        await using var db = CreateContext();
+        var repository = new SubmissionRepository(db);
+        var (submission, _) = await repository.CreateAsync(ProfileId, 1, SubmissionChannel.Ats, null, Now);
+
+        await repository.AddEventAsync(
+            ProfileId,
+            submission.Id,
+            Submitted(At(31), new SubmissionEvidence { DraftedFields = ["why_this_role"] }),
+            "drafted-only");
+
+        var recorded = Assert.Single(await repository.ListEventsAsync(ProfileId, submission.Id));
+
+        Assert.NotNull(recorded.Evidence);
+        Assert.Equal(["why_this_role"], recorded.Evidence!.DraftedFields);
+        Assert.Equal(["why_this_role"], recorded.Evidence.SubmittedFields);
+    }
+
     [Fact]
     public async Task An_event_that_captured_nothing_carries_no_evidence_rather_than_an_empty_block()
     {

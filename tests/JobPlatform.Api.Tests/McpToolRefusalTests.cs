@@ -695,4 +695,45 @@ public sealed class McpToolRefusalTests
 
         Assert.False(await db.FormAnswerResolutions.AnyAsync());
     }
+
+    /// <summary>
+    /// A run can say which of the fields it filled were answered in this system's words.
+    /// </summary>
+    /// <remarks>
+    /// <b>The other half of <c>drafted: true</c>, and it was asked for because there was nowhere
+    /// structured to put it.</b> A client reading a drafted answer out of the resolver could
+    /// record that fact only as prose in the note, which is one sentence by design and cannot be
+    /// counted, grouped or compared - so "how many of last month's applications answered the
+    /// persuasion questions in prose we wrote" was not a question the log could answer at all.
+    ///
+    /// Names only, exactly as <c>submittedFields</c> is, and a subset of it: the pair is what
+    /// makes the trail checkable without a second copy of anybody's answers.
+    /// </remarks>
+    [Fact]
+    public async Task A_run_records_which_answers_this_system_wrote()
+    {
+        using var harness = await McpToolHarness.CreateAsync();
+
+        await harness.Tools().CreateSubmissionAsync(
+            McpToolHarness.AsCandidate(),
+            McpToolHarness.WithDocuments,
+            sent: true,
+            idempotencyKey: "run-9:10:Submitted",
+            submittedFields: ["full_name", "email", "why_this_company"],
+            draftedFields: ["why_this_company", "cover_letter"]);
+
+        await using var db = harness.Database();
+
+        var stored = await db.SubmissionEvents.AsNoTracking().SingleAsync();
+
+        Assert.Contains("why_this_company", stored.DraftedFieldsJson!, StringComparison.Ordinal);
+        Assert.Contains("cover_letter", stored.DraftedFieldsJson!, StringComparison.Ordinal);
+
+        // Named as drafted and not as submitted, and stored as both: it was filled in.
+        Assert.Contains("cover_letter", stored.SubmittedFieldsJson!, StringComparison.Ordinal);
+
+        // The names and nothing else. The values behind them are the candidate's, and this table
+        // holds no copy of them.
+        Assert.DoesNotContain("@", stored.SubmittedFieldsJson!, StringComparison.Ordinal);
+    }
 }

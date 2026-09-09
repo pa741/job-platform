@@ -851,6 +851,9 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
             // full of quotes rather than as anything a reader could have predicted.
             entity.Property(e => e.SubmittedFieldsJson);
 
+            // The same call for the same reason, one column over.
+            entity.Property(e => e.DraftedFieldsJson);
+
             entity.HasOne(e => e.Submission)
                 .WithMany(s => s.Events)
                 .HasForeignKey(e => e.SubmissionId)

@@ -585,6 +585,19 @@ mechanism, and it is derived from the corpus rather than guessed at.
   posting - a cached one would serve this employer's prose to the next employer that asked. Prose is
   also kept out of a form that offers choices, `StableFact` drafts excepted: a paragraph cannot be a
   dropdown option, and *"LinkedIn"* can.
+- **`draftedFields` is the write-side half of `drafted: true`, and it is names only like its
+  sibling.** `SubmissionEvidence.SubmittedFields` answers *what did it put on the form*; this
+  answers *which of those did we write*, which is a different question and the one an audit asks
+  first - an application carries what the candidate typed, what the writing pass drafted from the
+  advert, and what the allowlist read off the profile, and only the first is something they can be
+  held to having said. It is a **second JSON column rather than a shape change** to the first: the
+  rows already on the table hold arrays of strings, and turning them into objects to carry a flag
+  would leave every existing row needing a reader that understands both shapes. The write path
+  **unions it into `SubmittedFields`** rather than refusing a mismatch - a drafted field was filled
+  in by definition, and losing the record of a real application over a caller's bookkeeping slip is
+  the worse trade. Both write tools take it, because a provenance list present on
+  `create_submission` alone would be missing from exactly the events an application collects after
+  it was sent.
 - **A disclosure record names what was asked for and never the value.** An audit log holding the
   data it audits has moved the problem rather than solved it. Cosmos, not SQL, for the reason every
   dashboard read is; its own container rather than `aiCalls`, because the two answer different
