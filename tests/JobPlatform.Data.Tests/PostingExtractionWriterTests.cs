@@ -1,4 +1,4 @@
-using JobPlatform.Core.Enrichment;
+﻿using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Model;
 using JobPlatform.Data.Sql;
 using JobPlatform.Data.Sql.Entities;
@@ -58,7 +58,11 @@ public sealed class PostingExtractionWriterTests : IDisposable
                     ExternalId = "x1",
                     Site = "indeed",
                     Title = "Platform Engineer",
-                    Description = "We use SharePoint.",
+                    // Deliberately a word no vocabulary will ever hold. It used to say
+                    // "SharePoint", which was true of the vocabulary on the day it was written
+                    // and stopped being true the moment SharePoint was added - and the failure
+                    // was two tests about mentions asserting on a concept instead.
+                    Description = "We use Frobnicator.",
                 },
             ],
             1,
@@ -80,7 +84,7 @@ public sealed class PostingExtractionWriterTests : IDisposable
             db.PostingMentions.Add(new PostingMentionEntity
             {
                 PostingId = postingId,
-                SurfaceForm = "SharePoint",
+                SurfaceForm = "Frobnicator",
                 Reason = MentionReason.UnknownBoardSkill,
                 Occurrences = 1,
                 ResolverVersion = 1,
@@ -98,7 +102,7 @@ public sealed class PostingExtractionWriterTests : IDisposable
                 Hash,
                 new DocumentExtraction
                 {
-                    Mentions = [new UnresolvedMention("SharePoint", MentionReason.UnknownModelSkill)],
+                    Mentions = [new UnresolvedMention("Frobnicator", MentionReason.UnknownModelSkill)],
                 },
                 await writer.GetConceptIdsAsync(),
                 Now);
@@ -211,8 +215,8 @@ public sealed class PostingExtractionWriterTests : IDisposable
                 {
                     Mentions =
                     [
-                        new UnresolvedMention("SharePoint", MentionReason.UnknownModelSkill),
-                        new UnresolvedMention("sharepoint", MentionReason.UnknownModelSkill),
+                        new UnresolvedMention("Frobnicator", MentionReason.UnknownModelSkill),
+                        new UnresolvedMention("frobnicator", MentionReason.UnknownModelSkill),
                     ],
                 },
                 await writer.GetConceptIdsAsync(),

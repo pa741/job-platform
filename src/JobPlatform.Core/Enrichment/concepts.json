@@ -1,5 +1,5 @@
 {
-  "version": 8,
+  "version": 9,
   "notes": [
     "The concept key is the identity; the label is an attribute. Renaming a label is an",
     "edit, renaming a key is a data migration.",
@@ -2956,7 +2956,9 @@
       "label": "MCP",
       "requiresCapital": true,
       "aliases": [
-        "model context protocol"
+        "model context protocol",
+        "mcp server",
+        "mcp servers"
       ],
       "broader": [
         "type.concept",
@@ -3580,6 +3582,403 @@
       ],
       "broader": [
         "type.practice",
+        "area.software-development"
+      ]
+    },
+    {
+      "key": "skill.bicep",
+      "kind": "skill",
+      "label": "Bicep",
+      "broader": [
+        "type.tool",
+        "area.cloud",
+        "area.devops"
+      ],
+      "implies": [
+        "skill.iac"
+      ],
+      "related": [
+        "skill.terraform"
+      ]
+    },
+    {
+      "key": "skill.azure-openai",
+      "kind": "skill",
+      "label": "Azure OpenAI",
+      "aliases": [
+        "azure openai service"
+      ],
+      "broader": [
+        "type.platform",
+        "area.ml"
+      ],
+      "implies": [
+        "skill.llms"
+      ],
+      "related": [
+        "skill.openai",
+        "skill.azure"
+      ]
+    },
+    {
+      "key": "skill.azure-ai-foundry",
+      "kind": "skill",
+      "label": "Azure AI Foundry",
+      "aliases": [
+        "ai foundry",
+        "azure ai studio"
+      ],
+      "broader": [
+        "type.platform",
+        "area.ml"
+      ],
+      "implies": [
+        "skill.llms"
+      ],
+      "related": [
+        "skill.azure-openai"
+      ]
+    },
+    {
+      "key": "skill.azure-data-factory",
+      "kind": "skill",
+      "label": "Azure Data Factory",
+      "broader": [
+        "type.tool",
+        "area.data"
+      ],
+      "related": [
+        "skill.databricks"
+      ]
+    },
+    {
+      "key": "skill.entra-id",
+      "kind": "skill",
+      "label": "Entra ID",
+      "aliases": [
+        "azure ad",
+        "azure active directory",
+        "microsoft entra",
+        "microsoft entra id"
+      ],
+      "broader": [
+        "type.platform",
+        "area.security"
+      ]
+    },
+    {
+      "key": "skill.logic-apps",
+      "kind": "skill",
+      "label": "Logic Apps",
+      "aliases": [
+        "azure logic apps"
+      ],
+      "broader": [
+        "type.tool",
+        "area.cloud"
+      ],
+      "related": [
+        "skill.power-platform"
+      ]
+    },
+    {
+      "key": "skill.sharepoint",
+      "kind": "skill",
+      "label": "SharePoint",
+      "broader": [
+        "type.platform",
+        "area.software-development"
+      ]
+    },
+    {
+      "key": "skill.dataverse",
+      "kind": "skill",
+      "label": "Dataverse",
+      "broader": [
+        "type.database",
+        "area.data"
+      ],
+      "related": [
+        "skill.power-platform"
+      ]
+    },
+    {
+      "key": "skill.copilot-studio",
+      "kind": "skill",
+      "label": "Copilot Studio",
+      "aliases": [
+        "microsoft copilot studio"
+      ],
+      "broader": [
+        "type.tool",
+        "area.ml"
+      ],
+      "related": [
+        "skill.power-platform"
+      ]
+    },
+    {
+      "key": "skill.microsoft-copilot",
+      "kind": "skill",
+      "label": "Microsoft Copilot",
+      "aliases": [
+        "m365 copilot",
+        "microsoft 365 copilot"
+      ],
+      "broader": [
+        "type.tool",
+        "area.ml"
+      ],
+      "related": [
+        "skill.copilot-studio"
+      ]
+    },
+    {
+      "key": "skill.microsoft-365",
+      "kind": "skill",
+      "label": "Microsoft 365",
+      "aliases": [
+        "m365",
+        "office 365",
+        "o365"
+      ],
+      "broader": [
+        "type.platform"
+      ],
+      "related": [
+        "skill.sharepoint"
+      ]
+    },
+    {
+      "key": "skill.new-relic",
+      "kind": "skill",
+      "label": "New Relic",
+      "aliases": [
+        "newrelic"
+      ],
+      "broader": [
+        "type.tool",
+        "area.observability"
+      ],
+      "related": [
+        "skill.datadog"
+      ]
+    },
+    {
+      "key": "skill.dynatrace",
+      "kind": "skill",
+      "label": "Dynatrace",
+      "broader": [
+        "type.tool",
+        "area.observability"
+      ],
+      "related": [
+        "skill.datadog"
+      ]
+    },
+    {
+      "key": "skill.sentry",
+      "kind": "skill",
+      "label": "Sentry",
+      "requiresCapital": true,
+      "broader": [
+        "type.tool",
+        "area.observability"
+      ]
+    },
+    {
+      "key": "skill.pinecone",
+      "kind": "skill",
+      "label": "Pinecone",
+      "broader": [
+        "type.database",
+        "area.ml"
+      ],
+      "related": [
+        "skill.rag"
+      ]
+    },
+    {
+      "key": "skill.sagemaker",
+      "kind": "skill",
+      "label": "SageMaker",
+      "aliases": [
+        "amazon sagemaker",
+        "aws sagemaker"
+      ],
+      "broader": [
+        "type.platform",
+        "area.ml"
+      ],
+      "related": [
+        "skill.aws"
+      ]
+    },
+    {
+      "key": "skill.bedrock",
+      "kind": "skill",
+      "label": "Amazon Bedrock",
+      "aliases": [
+        "aws bedrock"
+      ],
+      "broader": [
+        "type.platform",
+        "area.ml"
+      ],
+      "implies": [
+        "skill.llms"
+      ],
+      "related": [
+        "skill.aws"
+      ]
+    },
+    {
+      "key": "skill.tensorrt",
+      "kind": "skill",
+      "label": "TensorRT",
+      "broader": [
+        "type.tool",
+        "area.ml"
+      ]
+    },
+    {
+      "key": "skill.unity-catalog",
+      "kind": "skill",
+      "label": "Unity Catalog",
+      "broader": [
+        "type.tool",
+        "area.data"
+      ],
+      "related": [
+        "skill.databricks"
+      ]
+    },
+    {
+      "key": "skill.prefect",
+      "kind": "skill",
+      "label": "Prefect",
+      "requiresCapital": true,
+      "broader": [
+        "type.tool",
+        "area.data"
+      ]
+    },
+    {
+      "key": "skill.websockets",
+      "kind": "skill",
+      "label": "WebSockets",
+      "aliases": [
+        "websocket",
+        "web sockets"
+      ],
+      "broader": [
+        "type.concept",
+        "area.backend"
+      ],
+      "related": [
+        "skill.rest"
+      ]
+    },
+    {
+      "key": "skill.soap",
+      "kind": "skill",
+      "label": "SOAP",
+      "requiresCapital": true,
+      "broader": [
+        "type.concept",
+        "area.backend"
+      ],
+      "related": [
+        "skill.rest"
+      ]
+    },
+    {
+      "key": "skill.vite",
+      "kind": "skill",
+      "label": "Vite",
+      "requiresCapital": true,
+      "broader": [
+        "type.tool",
+        "area.frontend"
+      ]
+    },
+    {
+      "key": "skill.argocd",
+      "kind": "skill",
+      "label": "Argo CD",
+      "aliases": [
+        "argocd"
+      ],
+      "broader": [
+        "type.tool",
+        "area.devops"
+      ],
+      "related": [
+        "skill.ci-cd",
+        "skill.kubernetes"
+      ]
+    },
+    {
+      "key": "skill.pytest",
+      "kind": "skill",
+      "label": "pytest",
+      "broader": [
+        "type.tool",
+        "area.quality"
+      ],
+      "implies": [
+        "skill.python"
+      ]
+    },
+    {
+      "key": "skill.junit",
+      "kind": "skill",
+      "label": "JUnit",
+      "broader": [
+        "type.tool",
+        "area.quality"
+      ],
+      "implies": [
+        "skill.java"
+      ]
+    },
+    {
+      "key": "skill.gradle",
+      "kind": "skill",
+      "label": "Gradle",
+      "broader": [
+        "type.tool",
+        "area.software-development"
+      ],
+      "implies": [
+        "skill.java"
+      ],
+      "related": [
+        "skill.maven"
+      ]
+    },
+    {
+      "key": "skill.confluence",
+      "kind": "skill",
+      "label": "Confluence",
+      "broader": [
+        "type.tool",
+        "area.delivery"
+      ],
+      "related": [
+        "skill.jira"
+      ]
+    },
+    {
+      "key": "skill.rtos",
+      "kind": "skill",
+      "label": "RTOS",
+      "requiresCapital": true,
+      "aliases": [
+        "real-time operating system"
+      ],
+      "broader": [
+        "type.concept",
         "area.software-development"
       ]
     }

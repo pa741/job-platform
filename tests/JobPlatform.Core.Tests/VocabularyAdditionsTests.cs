@@ -1,4 +1,4 @@
-using JobPlatform.Core.Enrichment;
+﻿using JobPlatform.Core.Enrichment;
 using Xunit;
 
 namespace JobPlatform.Core.Tests;
@@ -155,6 +155,82 @@ public sealed class VocabularyAdditionsTests
         Assert.Equal("area.cloud", Resolve("cloud-native", fromStructuredField: true));
         Assert.Equal("area.ml", Resolve("data-science", fromStructuredField: true));
         Assert.Equal("skill.gitlab-ci", Resolve("gitlab"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Round three, 2026-09-09, from the log again after a run of the corpus asked why every CV
+    // tied. It did not answer that question - the adverts turned out to name one or two things
+    // each - but the mention log had thirty forms above 28 postings that nothing could file.
+    // -----------------------------------------------------------------------
+
+    [Theory]
+    [InlineData("Bicep", "skill.bicep")]
+    [InlineData("Azure OpenAI", "skill.azure-openai")]
+    [InlineData("Azure AI Foundry", "skill.azure-ai-foundry")]
+    [InlineData("Azure Data Factory", "skill.azure-data-factory")]
+    [InlineData("Entra ID", "skill.entra-id")]
+    [InlineData("azure active directory", "skill.entra-id")]
+    [InlineData("Logic Apps", "skill.logic-apps")]
+    [InlineData("SharePoint", "skill.sharepoint")]
+    [InlineData("Dataverse", "skill.dataverse")]
+    [InlineData("Copilot Studio", "skill.copilot-studio")]
+    [InlineData("Microsoft Copilot", "skill.microsoft-copilot")]
+    [InlineData("Microsoft 365", "skill.microsoft-365")]
+    [InlineData("New Relic", "skill.new-relic")]
+    [InlineData("Dynatrace", "skill.dynatrace")]
+    [InlineData("Pinecone", "skill.pinecone")]
+    [InlineData("SageMaker", "skill.sagemaker")]
+    [InlineData("Amazon Bedrock", "skill.bedrock")]
+    [InlineData("TensorRT", "skill.tensorrt")]
+    [InlineData("Unity Catalog", "skill.unity-catalog")]
+    [InlineData("WebSockets", "skill.websockets")]
+    [InlineData("ArgoCD", "skill.argocd")]
+    [InlineData("pytest", "skill.pytest")]
+    [InlineData("JUnit", "skill.junit")]
+    [InlineData("Gradle", "skill.gradle")]
+    [InlineData("Confluence", "skill.confluence")]
+    public void Round_three_resolves_the_form_the_corpus_uses(string form, string key)
+        => Assert.Equal(key, Resolve(form));
+
+    [Fact]
+    public void The_plural_a_model_writes_reaches_the_concept_the_singular_already_had()
+    {
+        // "MCP server" and "MCP servers" were reported as unknown skills on 31 postings while
+        // skill.mcp sat in the vocabulary, because it knew only "MCP" and the protocol's full
+        // name. An alias is the whole fix, and it is the cheap half of this round: a concept that
+        // exists and cannot be reached by the words people use is worse than one that is missing,
+        // because the log reads the same and the fix is not the same.
+        Assert.Equal("skill.mcp", Resolve("MCP server", fromStructuredField: true));
+        Assert.Equal("skill.mcp", Resolve("MCP servers", fromStructuredField: true));
+    }
+
+    [Theory]
+    [InlineData("sentry", "skill.sentry")]
+    [InlineData("prefect", "skill.prefect")]
+    [InlineData("vite", "skill.vite")]
+    [InlineData("soap", "skill.soap")]
+    [InlineData("rtos", "skill.rtos")]
+    public void Round_three_words_that_are_also_ordinary_words_need_their_capital(string lower, string key)
+    {
+        // Every one of these is a real technology and an English or French word - a sentry, a
+        // prefect, soap, vite. Prose spelling them in lower case is not naming the tool, and
+        // requiresCapital is the rule that says so. The same door as the round-one test above:
+        // the text scan, where the original spelling still exists.
+        var lowered = Graph.Resolve(AssertionSource.Board, $"experience with {lower} preferred");
+        Assert.DoesNotContain(key, lowered.Assertions.Select(a => a.ConceptKey));
+    }
+
+    [Fact]
+    public void Round_three_left_the_business_vocabulary_where_it_was()
+    {
+        // The same log names stakeholder-management, go-to-market, account-executive, pre-sales
+        // and crm on 30 to 67 postings each. They are real and they are a different market: this
+        // vocabulary is matched against one candidate's profile and their CVs, and a concept
+        // nobody here holds is prompt tokens on every extraction forever, paid to file a posting
+        // that was never going to be applied to.
+        Assert.False(Graph.TryGet("skill.stakeholder-management", out _));
+        Assert.False(Graph.TryGet("skill.go-to-market", out _));
+        Assert.False(Graph.TryGet("skill.crm", out _));
     }
 
     [Fact]

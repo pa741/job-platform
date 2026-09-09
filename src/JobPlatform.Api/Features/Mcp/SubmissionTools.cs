@@ -171,20 +171,28 @@ public sealed class SubmissionTools(
     /// How many variants a tie may be handed to a model as.
     /// </summary>
     /// <remarks>
-    /// <b>Three, and the bound is the caller's job because <c>CvSelection.Tied</c> can be the whole
-    /// library.</b> A posting that states nothing discriminating ties everything, and a ballot of
-    /// six names is not a tie-break - it is a preference, asked of something that has no way to
-    /// tell six documents apart from their titles.
+    /// <b>The library's own cap, because the cut was quietly excluding a document rather than
+    /// bounding a question.</b> It was three, on the argument that a ballot of six names is a
+    /// preference rather than a tie-break - reasonable when a library held two CVs and a tie of
+    /// three was the pathological case. Measured on a four-CV library on 2026-09-09: ties are the
+    /// normal outcome, half of them are four-way, and the cut is taken score-then-id over
+    /// documents whose scores are equal. So the fourth CV by id was dropped from every ballot it
+    /// was ever in - not weighed and rejected, never shown - and the only way it could be sent was
+    /// for the candidate to choose it by hand.
     ///
-    /// <b>Cutting the list at three settles part of the question on score-then-id, which is the
-    /// thing <c>CvSelectionOutcome.Ambiguous</c> exists to refuse</b>, and the selector says so
-    /// plainly when it declines to do the bounding itself. It is accepted here because the two
-    /// mistakes are different sizes: a fourth contender dropped from a ballot loses a document that
-    /// was already inside the margin of the leader, where an unbounded ballot loses the meaning of
-    /// the question. What must not happen is the cut going unmentioned, so the pack reports the
-    /// ballot it actually sent.
+    /// <b>A cut at the cap is not a cut at all, which is the point.</b> <c>CvVariant</c> bounds
+    /// the library, so a ballot that admits that many can never be longer than the library and the
+    /// arbitrary exclusion has nowhere to happen. What made the old number defensible was that the
+    /// ballot is reported either way; what makes this one better is that there is nothing left to
+    /// report.
+    ///
+    /// The original worry stands and is answered elsewhere: a model asked to pick between six
+    /// documents it can only tell apart by their titles is being asked a question it cannot
+    /// answer. That is what the floor and the margin are for - a ballot only ever holds variants
+    /// already within the margin of the leader - and what the candidate's own choice is for, which
+    /// the pack now reads before it reads any of this.
     /// </remarks>
-    private const int MaxTieBreakBallot = 3;
+    private const int MaxTieBreakBallot = CvVariantLimits.MaxPerProfile;
     /// <summary>Hard ceiling regardless of what a caller asks for. Mirrors the matches endpoint.</summary>
     private const int MaxLimit = 100;
 
