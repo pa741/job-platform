@@ -216,6 +216,17 @@ builder.Services.AddScoped<CandidateProfileRepository>();
 builder.Services.AddScoped<JobMatchRepository>();
 builder.Services.AddScoped<EmbeddingRepository>();
 
+// What each candidate's nights are allowed to buy. Both unattended passes read it - the sweep for
+// its judgement budget, threshold and recent reservation, the generation pass for its drafting
+// bounds - and both resolve it as nullable, so this registration is what turns configuration on
+// rather than what makes the functions activate. Without it they run every profile on
+// PipelineSettings.Default, which is the behaviour that shipped before the table existed.
+//
+// Registered unconditionally, like the match sweep above it: there is nothing to check for. It is
+// the same DbContext and the same managed identity, and a deployment whose migration has not
+// reached the table yet is handled where it is read, not by leaving it out here.
+builder.Services.AddScoped<PipelineSettingsRepository>();
+
 // The realtime feed. Registers nothing when no endpoint is configured, so every consumer
 // resolves IRealtimeFeed as nullable and the dashboard falls back to polling.
 builder.Services.AddRealtimeFeed(builder.Configuration);

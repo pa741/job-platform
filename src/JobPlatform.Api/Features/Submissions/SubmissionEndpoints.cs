@@ -276,11 +276,25 @@ public sealed class SubmissionEndpoints : IEndpointGroup
 
             // 429, not 400. The request is well formed and would be accepted tomorrow; the
             // caller has spent a budget rather than made a mistake, and the status should say so.
+            // The cap is named rather than quoted, because the number is this profile's
+            // PipelineSettings.DailySendCap and this arm has no quota block to read it off -
+            // asking for one would be a second round trip on a path that has already been
+            // refused. Interpolating SubmissionLimits.MaxSubmittedPerDay is what it used to do
+            // and is now simply wrong: that constant is only the default, so the message would
+            // read "25" to somebody capped at six. A detail that says which setting decided,
+            // and where to read it, stays true at every value; a detail carrying a stale number
+            // is worse than one carrying none, because it is the number the reader will act on.
             SubmissionEventResult.DailyLimitReached => TypedResults.Problem(
-                detail: $"This profile has already recorded {SubmissionLimits.MaxSubmittedPerDay} "
-                    + "applications as sent for that day, which is the cap. Nothing was recorded. "
-                    + "The limit exists so that a client looping cannot fill somebody's pipeline "
-                    + "with applications they never made.",
+                detail: "This profile has already recorded as many applications sent for that "
+                    + "day as its daily send cap allows, so nothing was recorded. The cap is "
+                    + "'dailySendCap' on GET /api/v1/pipeline-settings, which defaults to "
+                    // Interpolated rather than written out, so the sentence cannot outlive the
+                    // default it describes. The number the reader is being told is a default is
+                    // the one place a literal is still safe here - and only while it is derived
+                    // from the constant that IS the default rather than transcribed beside it.
+                    + $"{SubmissionLimits.MaxSubmittedPerDay}. It "
+                    + "exists so that a client looping cannot fill somebody's pipeline with "
+                    + "applications they never made.",
                 statusCode: StatusCodes.Status429TooManyRequests),
             _ => TypedResults.Problem(statusCode: StatusCodes.Status500InternalServerError),
         };

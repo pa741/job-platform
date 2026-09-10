@@ -14,7 +14,9 @@ before building something it does not name, not after. Every row is built - Inge
 API, the Frontend, the candidate profile, matching, applications, Realtime, Submissions and the
 agent surface - the last of which now writes as well as reads. The Applications and Candidate
 profile rows were amended for the CV library *before* it was built, which is the order that
-document is binding in. What stays open there is the
+document is binding in, and the Candidate profile, Job matching, Applications, Submissions and
+Frontend rows were amended for the per-candidate pipeline settings on the same terms - the nine
+levers are a property of the pieces that already exist rather than a new row. What stays open there is the
 questions *channel*: `list_open_questions` is a poll, and pushing a question to the person who can
 answer it needs a per-candidate send the broadcast feed does not have. See
 [`mcp_handoff.md`](mcp_handoff.md) section 1.4.
@@ -138,8 +140,22 @@ worked around.
   `ToParams` before adding a field to a search.
 - `src/JobPlatform.Data/Sql/ScraperSearchRepository.cs` — every search read and write. Takes a
   subject id like the profile repository, with one named exception for the publisher.
+- `src/JobPlatform.Core/Settings/PipelineSettings.cs` — the nine pipeline levers a candidate may
+  set, and `Default`, whose values *are* the constants the code ran before the feature existed.
+  That equality is what the feature is judged on; `PipelineSettingsValidationTests` asserts it
+  field by field, and it is the test to read first if a default ever looks arbitrary.
+- `src/JobPlatform.Core/Settings/PipelineSettingsValidation.cs` — every bound, and the two
+  cross-field rules. Pure and Azure-free like `ScraperSearchValidation`, which it is deliberately
+  modelled on, and which is why the bounds are assertable exactly rather than through an HTTP
+  status. Read the class remarks on the cost hole before raising a ceiling.
+- `src/JobPlatform.Data/Sql/PipelineSettingsRepository.cs` — every settings read and write, and
+  the fourth repository that takes a subject id. It carries the second named by-profile exception
+  after `ScraperSearchRepository`'s publisher: the nightly passes loop over profile ids and hold
+  no subject, so `GetForProfileAsync`/`GetForProfilesAsync` exist for them. Read the remarks on
+  that pair before calling either from anything a browser can reach.
 - `src/JobPlatform.Ingestion/Functions/MatchSweepFunction.cs` — the nightly pass. Scores
-  everything, then spends the model budget on what clears the threshold.
+  everything, then spends the model budget on what clears the threshold. Its budget and its
+  recency reservation are the candidate's own now; the arithmetic is not.
 - `src/JobPlatform.Core/Submissions/SubmissionState.cs` — the fold from an event log to a
   status. Pure and Azure-free like `MatchScorer`, which is what makes its answers assertable
   exactly. There is no status column anywhere; read the remarks before adding one.
@@ -365,6 +381,107 @@ worked around.
 - **There is no coalescing and no cap.** Two users configuring the same search scrape it twice,
   and a run costs the sum of every enabled search across every user. That is a deliberate choice,
   not an oversight; `ScraperSearchValidation` bounds one search and nothing bounds the total.
+
+### Pipeline settings
+
+- **Every default is the constant the code already ran, and that equality is what the feature is
+  judged on.** `PipelineSettings.Default` is a transcription of the constants it replaced - the
+  sweep's own `MaxAssessments` (40) and `AssessmentThreshold` (45), both now deleted from
+  `MatchSweepFunction` rather than left beside their replacements, the sweep's two-thirds reservation over
+  its three-day window, `ApplicationGenerationOptions.DocumentsPerNight` (10), `MinAssessmentScore`
+  (80) and `PostedWithinDays` (null), `SubmissionLimits.MaxSubmittedPerDay` (25) and
+  `SubmissionState.StaleAfter` (14 days) - not a fresh set of opinions that happen to look similar.
+  A deployment that configures nothing must not be able to tell the feature arrived, so **absence
+  resolves to `Default` and never to a `PipelineSettings` assembled field by field**: a candidate
+  with no stored row is not a candidate with zeroes, and an override is
+  `PipelineSettings.Default with { DraftsPerNight = 4 }` rather than nine values copied across by
+  hand. That is also why the record is nine named init properties rather than a positional one -
+  eight `int` and one `int?` in overlapping ranges means a transposed pair of arguments compiles
+  with nothing to catch it, review included, and a
+  property initialiser survives every serialiser where a positional record's defaults depend on the
+  serialiser honouring C# optional parameters. The only member whose *spelling* changed is the
+  recency reservation, a percent here against a numerator over a denominator in the sweep, and it
+  is behaviour-preserving at the shipped budget rather than identical arithmetic: both floor in
+  integer
+  arithmetic, `budget * 67 / 100` and `budget * 2 / 3` agree for every shortlist budget 0..99, and
+  the first disagreement is one row at 100 - which needs `AssessmentsPerNight` at 110 against the
+  shipped 40. Quote that measurement rather than claiming the two spellings are the same.
+- **Four thresholds answer four different questions and exactly two of them are settings. Never
+  label two of the four with the same word.** `MatchRanker.FusionFloor` (80) is where the embedding
+  earns its weight; `PipelineSettings.AssessmentThreshold` (45) is where buying a judgement is
+  worth it; `ApplicationGenerationOptions.MinAssessmentScore` (80) is where writing a document is
+  worth the expensive deployment; `CvVariantSelector.SelectionFloor` (50) is how much of an advert
+  a CV must answer before it is sent at all. The middle two are surfaced, as
+  `PipelineSettings.AssessmentThreshold` and `PipelineSettings.DraftMinAssessmentScore`. **The
+  outer two are not settings, are referenced nowhere in `PipelineSettings`, the DTO, the table or
+  the form, and must not become ones**: `FusionFloor` is fitted - a holdout re-run puts every floor
+  from 70 to 92 ahead of the score and 45 behind it, and 80 is taken from inside that range rather
+  than as an argmax - and a number a candidate can type is a number no measurement can be held to;
+  `SelectionFloor` is reasoned from the partial-credit table, where every adjacency relation is
+  priced below half, so a variant answering every requirement by transferable ground alone tops out
+  at 45 and fails, and a candidate lowering it is sending a CV on resemblance. Two of these were
+  briefly collapsed into one constant because they shared a value and that was already a mistake
+  once; **a settings page is the easiest place in this system to make it a second time**, because
+  two boxes on one form both reading "score threshold" are one box to whoever fills them in. The
+  two that are settings keep the wording of the constants they replace so a search finds both
+  places; the two that are not are named in full wherever they appear. And the two that *are*
+  settings read different columns - the threshold reads the deterministic match score, the drafting
+  floor reads `JobMatches.AssessmentScore` - so "80 is above 45" is arithmetic across two scales,
+  which is why the ordering between them is a stated cross-field rule rather than an obvious one.
+- **The settings live in a table of their own, keyed to the profile, and never as columns on
+  `CandidateProfiles`.** Two mechanical reasons, neither of them tidiness. The profile save is a
+  **replace and not a merge** - the client sends the whole form because a partial update cannot
+  express "delete the third job" - so a lever stored on that row is erased by the first save that
+  does not carry it, and the alternative is making a change to a nightly budget a resubmission of
+  somebody's employment history. And `CandidateProfileEntity.ExtractionInputHash` is a hash over
+  `CandidateProfile.ToDocument()`; `SaveAsync` returns whether it moved and its callers queue
+  extraction on that answer, so a write that touches no profile text must not be able to reach the
+  path where correcting a send cap costs a model call and invalidates every match already scored.
+  The settings repository takes a **subject id and never a profile id**, like
+  `CandidateProfileRepository`: the authorisation boundary expressed as a type rather than as a
+  rule somebody has to remember.
+- **Nothing bounds the sum across candidates, and that is the same hole `ScraperSearchValidation`
+  writes down for searches - repeated here deliberately rather than left to be discovered.**
+  `PipelineSettingsValidation` bounds one candidate at 200 judgements, 25 drafts and 100 recordable
+  sends. The nightly passes iterate profiles and every budget is per profile on purpose, so that a
+  second candidate does not go unjudged because the first filled the batch - which means ten
+  candidates at the ceilings is 2,000 judgements, 250 drafts on the deployment priced roughly
+  twenty-five times the bulk one, and 1,000 applications recordable in a day, and **nothing refuses
+  it**. What actually bounds a run as a whole is the wall clock - the timer's minutes, the HTTP
+  trigger's roughly 230 seconds - and it enforces by cutting the run off, leaving verdicts null
+  with nothing saying why, which is how the first real sweep after the corpus was extracted ended.
+  It is a choice with a known shape rather than an oversight: a per-tenant total needs a notion of
+  tenancy this system does not have, and this deployment has one candidate. Read this bullet as the
+  thing to fix before adding a second, not as reassurance that it was considered.
+- **Where a setting is edited is decided by when it takes effect, not by what it is about.** The
+  seven that change only what the *next nightly pass* buys - the four judgement levers and the
+  three drafting ones - live under **System, next to Searches**, which is already the section for
+  numbers a scheduled run reads rather than the browser. The two whose effect is immediate live on
+  the page whose figures they move: `DailySendCap` bounds the sends `Applications` is the record
+  of, and is the number `SubmissionQuota` burns down for `list_applyable` and `record_event`, while
+  `ChaseAfterDays` decides which of that page's rows read as quiet - both answered on the next read
+  because the status is a fold and staleness is derived from it. **The tempting arrangement is a
+  judgement-budget control on the shortlist and it is the wrong one**: that page already carries a
+  `minScore` slider that re-queries as it moves, so a control standing beside it is read as
+  instant, and a candidate raising the assessment threshold there would sit watching a list that
+  cannot change until the sweep runs at 03:30 UTC tomorrow. It is the reason `PostedWithin` defaults
+  to "Any time" seen from the other side: a control that silently describes a different set from
+  the one on screen reads as the data being wrong rather than as a filter.
+- **The sweep's own account of itself is still surfaced nowhere, and that is known and deferred
+  rather than missed.** `MatchSweepFunction.SweepSummary` carries `Requested`, `Assessed`,
+  `Discarded` and `Unreachable` - the four numbers that say whether a configured budget was
+  actually spent, and the only way to tell "forty requested, forty written" from "forty requested
+  and half the batches discarded whole", which has happened: 90 pairs on 2026-08-28 went out in
+  nine batches of ten, four came back usable, five were discarded entire and 40 of the 90 were
+  written. It is returned from `run-match-sweep` and logged, **and persisted nowhere at all**, so
+  a settings page can hand somebody a budget and show them nothing about what last night did with
+  it. Surfacing it is not a
+  query away, which is the part worth writing down: it is a per-run metric rather than a row of the
+  domain, and dashboard metrics are served from Cosmos precisely so opening a page cannot wait on a
+  database that pauses - so it needs a Cosmos document type and a container decision of its own, on
+  the same reasoning that kept the disclosure log out of `aiCalls`, and not a column on anything in
+  SQL. The settings are usable without it; the shape of the fix is here so that the next reader
+  concludes it was deferred rather than overlooked.
 
 ### The concept vocabulary
 
@@ -632,7 +749,7 @@ mechanism, and it is derived from the corpus rather than guessed at.
   dashboard read is; its own container rather than `aiCalls`, because the two answer different
   questions and their retention is not one decision.
 - **`list_applyable` gates on the model's verdict, not on a score cut, and its threshold is a
-  third constant.** `MatchRanker.FusionFloor` and `MatchSweepFunction.AssessmentThreshold` answer
+  third constant.** `MatchRanker.FusionFloor` and `PipelineSettings.AssessmentThreshold` answer
   different questions and briefly merging those two was already a mistake; do not merge a third
   into either. The reason it is the verdict is the finding behind `MatchRanker` — the score is a
   good filter and a bad final sort.
@@ -1693,7 +1810,7 @@ that is not writing the CV cannot invent a claim in it.
   blocked at all. Three copies of that predicate is the arrangement that drifts, so
   `CvParkQueueTests` pins the single-pair one against the queue's own answer.
 - **The selection floor and margin are their own constants and must not be merged with the
-  matcher's.** `MatchRanker.FusionFloor` and `MatchSweepFunction.AssessmentThreshold` were briefly
+  matcher's.** `MatchRanker.FusionFloor` and `PipelineSettings.AssessmentThreshold` were briefly
   collapsed into one and that was already a mistake; `CvVariantSelector.SelectionFloor` answers a
   fourth question - how much of an advert a document has to actually answer before it is worth
   sending - and it is **reasoned rather than measured**, from the credit table: every partial-credit

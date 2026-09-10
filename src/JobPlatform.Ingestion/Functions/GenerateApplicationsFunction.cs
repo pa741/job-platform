@@ -1,6 +1,7 @@
 ﻿using JobPlatform.Core.Applications;
 using JobPlatform.Core.Dedup;
 using JobPlatform.Core.Model;
+using JobPlatform.Core.Settings;
 using JobPlatform.Core.Submissions;
 using JobPlatform.Data.Sql;
 using JobPlatform.Documents;
@@ -14,7 +15,7 @@ using Microsoft.Extensions.Options;
 namespace JobPlatform.Ingestion.Functions;
 
 /// <summary>
-/// What one night of application writing is allowed to cost.
+/// What one night of application writing is allowed to cost, for a candidate who has not said.
 /// </summary>
 /// <remarks>
 /// <b>Configurable because it is the only number in this file that is a bill.</b> Every other
@@ -23,8 +24,25 @@ namespace JobPlatform.Ingestion.Functions;
 /// "this is spending too much" is a deploy, and the answer to "the loop is starved" is also a
 /// deploy - so it is settings, read the way <c>AiLedgerOptions</c> and <c>CosmosOptions</c> are.
 ///
-/// <b>Both members default to something a clone can run unattended</b>, so a deployment that
+/// <b>Every member defaults to something a clone can run unattended</b>, so a deployment that
 /// binds nothing still gets a bounded pass rather than an unbounded one or a dead one.
+///
+/// <b>This is now the deployment's default rather than the only answer, and the distinction is
+/// the whole of the settings feature.</b> All three members have a per-candidate counterpart -
+/// <see cref="PipelineSettings.DraftsPerNight"/>,
+/// <see cref="PipelineSettings.DraftMinAssessmentScore"/> and
+/// <see cref="PipelineSettings.DraftPostedWithinDays"/> - and a candidate who has configured their
+/// pipeline is answered from those. What is bound here still decides what a candidate who has
+/// configured nothing gets, which is why the values did not move: they are the same numbers
+/// <see cref="PipelineSettings.Default"/> carries, so a deployment that binds nothing and a
+/// candidate who chose nothing arrive at the same night from two directions.
+/// <see cref="GenerateApplicationsFunction"/> owns the precedence and states it in full; read it
+/// there rather than inferring it from these three defaults.
+///
+/// <b>It is deliberately not deleted in favour of the per-candidate record.</b> An operator
+/// turning the writing pass off for a whole deployment - a provider outage, a bill nobody expected
+/// - must not have to edit every candidate's settings row to do it, and this is the lever that
+/// needs no database at all.
 /// </remarks>
 public sealed class ApplicationGenerationOptions
 {
@@ -36,17 +54,30 @@ public sealed class ApplicationGenerationOptions
     /// </summary>
     /// <remarks>
     /// <b>Ten, and the ceiling above it is not arbitrary either.</b>
-    /// <see cref="SubmissionLimits.MaxSubmittedPerDay"/> is how many applications may be recorded
+    /// <see cref="PipelineSettings.DailySendCap"/> - which defaults to
+    /// <see cref="SubmissionLimits.MaxSubmittedPerDay"/> - is how many applications may be recorded
     /// as sent in a UTC day, so a pass that wrote thirty would be buying twenty-five days' worth
     /// of Sol calls for a queue that can only spend a day's - and the corpus is re-scraped
     /// nightly, so several of those documents would be tailored to adverts nothing will ever apply
     /// to. <see cref="GenerateApplicationsFunction"/> clamps to that ceiling rather than trusting
-    /// this value, for the reason the daily cap lives in the repository and not at its call sites.
+    /// this value, for the reason the daily cap lives in the repository and not at its call sites,
+    /// and the clamp is now against <i>that candidate's</i> cap rather than against the constant:
+    /// somebody who lowered their send cap to five has said what a day of theirs is worth, and a
+    /// night writing ten letters for it is buying prose nobody will reach.
     ///
-    /// <b>Per candidate rather than per run</b>, matching <c>MatchSweepFunction.MaxAssessments</c>:
-    /// a second profile must not go without documents because the first one filled the batch. What
-    /// bounds the run as a whole is the wall clock, which is the bound that actually holds when
-    /// the number of profiles is not something this file controls.
+    /// <b>The clamp stays, and it applies harder to a number typed into a browser than to one in
+    /// a config file.</b> What does not happen here is the same clamp standing in for validation:
+    /// <see cref="PipelineSettingsValidation"/> refuses the combination
+    /// <c>DraftsPerNight &gt; DailySendCap</c> outright, so a candidate is told, where an operator
+    /// binding this value silently gets the smaller number. A setting that is quietly clamped is a
+    /// setting that lies to the person who typed it - they ask for forty, the page saves, and the
+    /// pass writes twenty-five every night with nothing anywhere saying why.
+    ///
+    /// <b>Per candidate rather than per run</b>, matching
+    /// <see cref="PipelineSettings.AssessmentsPerNight"/>: a second profile must not go without
+    /// documents because the first one filled the batch. What bounds the run as a whole is the
+    /// wall clock, which is the bound that actually holds when the number of profiles is not
+    /// something this file controls.
     /// </remarks>
     public int DocumentsPerNight { get; set; } = 10;
 
@@ -62,12 +93,24 @@ public sealed class ApplicationGenerationOptions
     ///
     /// <b>This is a fourth number and not a fourth spelling of an existing one.</b>
     /// <c>MatchRanker.FusionFloor</c> is where the embedding earns its weight,
-    /// <c>MatchSweepFunction.AssessmentThreshold</c> is where buying a judgement is worth it, and
-    /// <c>ListApplyableAsync</c>'s <c>Verdict >= Possible</c> is what "worth applying to" means.
-    /// This one asks where writing a document is worth the expensive deployment. Two of those were
-    /// briefly collapsed into one constant on the grounds that they shared a value, and that was a
-    /// mistake; this one is configuration precisely so nobody is tempted to reach for one of the
-    /// three because it happens to read 80 today.
+    /// <see cref="PipelineSettings.AssessmentThreshold"/> is where buying a judgement is worth it,
+    /// and <c>ListApplyableAsync</c>'s <c>Verdict >= Possible</c> is what "worth applying to"
+    /// means. This one asks where writing a document is worth the expensive deployment. Two of
+    /// those were briefly collapsed into one constant on the grounds that they shared a value, and
+    /// that was a mistake; this one is configuration precisely so nobody is tempted to reach for
+    /// one of the three because it happens to read 80 today.
+    ///
+    /// <b>It reads a different column from the threshold it must not sit below.</b> This one
+    /// compares <c>JobMatches.AssessmentScore</c>, the number the model wrote after judging;
+    /// <see cref="PipelineSettings.AssessmentThreshold"/> compares the deterministic match score
+    /// the scorer computes for every pair. Both are 0..100 and they are not the same quantity, so
+    /// "80 is above 45" is arithmetic across two scales - which is why the ordering between them
+    /// is a stated cross-field rule in <see cref="PipelineSettingsValidation"/> rather than
+    /// something a reader is expected to notice.
+    ///
+    /// <b>The per-candidate counterpart is
+    /// <see cref="PipelineSettings.DraftMinAssessmentScore"/>, and this value is what a candidate
+    /// who has configured nothing is written for at.</b>
     /// </remarks>
     public int MinAssessmentScore { get; set; } = 80;
 
@@ -86,7 +129,18 @@ public sealed class ApplicationGenerationOptions
     /// or three would be this file deciding the cadence for every deployment; the cadence belongs
     /// to whoever configures the run. The nightly sweep's reservation is a different question - it
     /// decides where a judgement budget goes and has to answer it every night whatever anyone
-    /// configured.
+    /// configured, which is why <see cref="PipelineSettings.RecentWindowDays"/> is not nullable
+    /// and this is.
+    ///
+    /// <b>Null and zero are different bytes here too.</b> Null means no bound at all; zero through
+    /// <see cref="PostingAge.Cutoff"/> would mean "posted since this instant", which selects
+    /// almost nothing and reads as the pass being broken - so
+    /// <see cref="PipelineSettingsValidation.MinDraftPostedWithinDays"/> refuses zero on the
+    /// per-candidate counterpart, <see cref="PipelineSettings.DraftPostedWithinDays"/>, and an
+    /// empty box on the form has to reach the wire as null rather than as 0. A deployment binding
+    /// this key gets no such check, so binding <c>PostedWithinDays: 0</c> here really does mean
+    /// "since this instant" - the honest reading of a number an operator typed into a config file
+    /// on purpose.
     /// </remarks>
     public int? PostedWithinDays { get; set; }
 }
@@ -114,9 +168,11 @@ public sealed class ApplicationGenerationOptions
 /// The CV is no longer generated per posting - it is chosen from a library the candidate authored,
 /// which costs arithmetic rather than a model call - so this pass buys a cover letter and a
 /// handful of short answers where it used to buy a whole CV as well. The bound stays where it is
-/// deliberately: the ceiling is still <c>SubmissionLimits.MaxSubmittedPerDay</c>, because a night
-/// that writes more letters than a day can send is buying prose for adverts nobody will reach,
-/// whatever each one now costs.
+/// deliberately: the ceiling is still what a day may send, now read as this candidate's
+/// <see cref="PipelineSettings.DailySendCap"/> rather than as
+/// <c>SubmissionLimits.MaxSubmittedPerDay</c> - which is the same twenty-five until somebody says
+/// otherwise - because a night that writes more letters than a day can send is buying prose for
+/// adverts nobody will reach, whatever each one now costs.
 ///
 /// <b>The set it writes for is <c>ApplyableQuery</c>'s and never its own.</b> Reusing the queue
 /// repository is the single most important decision in this file: a second definition of "worth
@@ -124,8 +180,9 @@ public sealed class ApplicationGenerationOptions
 /// deduplication and the verdict gate, and the first time the two drifted this pass would write
 /// documents for postings the run never sees while the ones it does see stay empty - which is
 /// exactly today's failure with the effort spent. The filters are the ones a run passes, the
-/// ordering is the one a run gets, and the floor is settings so the two can be kept equal without
-/// a deploy.
+/// ordering is the one a run gets, and the floor is configuration - now the candidate's own, in
+/// <see cref="PipelineSettings.DraftMinAssessmentScore"/> - so the two can be kept equal without a
+/// deploy, which is the whole of that number's justification.
 ///
 /// <b>Bounded hard, and the bound is the point.</b> A runaway pass here is not a slow night, it is
 /// a bill on the one deployment this architecture deliberately keeps off a schedule - so there is
@@ -139,6 +196,37 @@ public sealed class ApplicationGenerationOptions
 /// no pack store registers nothing and the markdown is stored with null paths, which is the state
 /// <c>get_submission_pack</c> already answers for. Neither is an error, and neither takes the
 /// ingest down with it.
+///
+/// <b>What a night buys is now the candidate's to set, and the precedence is stated here rather
+/// than left to be read out of the code.</b> Four sources answer three questions - how many drafts,
+/// what assessment floor, and what age bound - and they are consulted strictly in this order:
+/// <list type="number">
+///   <item><description>
+///     <b>What this invocation was explicitly asked for.</b> Only the HTTP route can supply it,
+///     and only for that call: it is somebody establishing whether an empty queue is a thin corpus
+///     or a broken pass. It is never persisted and never reaches another candidate.
+///   </description></item>
+///   <item><description>
+///     <b>What the candidate stored</b>, through <see cref="PipelineSettings"/>. This is the
+///     answer for anybody who has opened the settings page.
+///   </description></item>
+///   <item><description>
+///     <b>What the deployment bound</b>, through <see cref="ApplicationGenerationOptions"/>. The
+///     default for a candidate who has chosen nothing, and the lever an operator has when they
+///     need one that needs no database.
+///   </description></item>
+///   <item><description>
+///     <b><see cref="PipelineSettings.Default"/></b>, which is what those bound options themselves
+///     default to - ten drafts, a floor of eighty, no age bound. So the bottom two rungs agree by
+///     construction on a deployment that has configured nothing, which is what makes "an
+///     unconfigured deployment is unchanged" true rather than merely intended.
+///   </description></item>
+/// </list>
+/// <b>Two bounds sit above all four and are not preferences at all.</b>
+/// <see cref="MaxDocumentsPerRequest"/> is the gateway's ~230 seconds and
+/// <see cref="PipelineSettings.DailySendCap"/> is what a day could ever send; both can only lower
+/// what was asked for, never raise it. See <see cref="BudgetFor"/>, which is the single place all
+/// six meet.
 /// </remarks>
 public sealed class GenerateApplicationsFunction(
     JobsDbContext db,
@@ -149,7 +237,12 @@ public sealed class GenerateApplicationsFunction(
     TimeProvider time,
     ILogger<GenerateApplicationsFunction> logger,
     IApplicationWriter? writer = null,
-    IApplicationPackStore? packs = null)
+    IApplicationPackStore? packs = null,
+    // Optional and trailing, like the writer and the pack store above it and for the same reason:
+    // a host that has not registered it - or a database whose settings table the migration has not
+    // reached yet - still writes tonight's drafts, on the bound options, which is what this pass
+    // did before the table existed. See SettingsForAsync.
+    PipelineSettingsRepository? pipelineSettings = null)
 {
     /// <summary>
     /// How many queue rows are read for each document the budget allows.
@@ -245,10 +338,14 @@ public sealed class GenerateApplicationsFunction(
     /// than the trigger itself, and what the log line reports is the same object a test can read.
     /// </remarks>
     public Task<GenerationSummary> RunNightlyAsync(CancellationToken ct = default)
+        // Neither bound is imposed here any more, and both used to be. The nightly cap and the
+        // floor are per candidate now, so they are resolved inside the loop where a candidate is
+        // in hand - see BudgetFor. The timer imposes no ceiling of its own because it has minutes
+        // rather than the gateway's ~230 seconds; what stops it is TimerBudget.
         => GenerateAsync(
             profileId: null,
-            NightlyLimit(options.Value.DocumentsPerNight),
-            options.Value.MinAssessmentScore,
+            documentCeiling: null,
+            floor: null,
             TimerBudget,
             ct);
 
@@ -276,11 +373,16 @@ public sealed class GenerateApplicationsFunction(
 
         var summary = await GenerateAsync(
             body?.ProfileId,
-            // Clamped rather than defaulted from the options, because the bound here is the
+            // Clamped rather than defaulted from the settings, because the bound here is the
             // gateway's and not the budget's: a caller asking for ten over HTTP is asking for a
             // 504, and answering with one document written is more use than answering with none.
-            Math.Clamp(body?.Limit ?? MaxDocumentsPerRequest, 0, MaxDocumentsPerRequest),
-            Math.Clamp(body?.MinAssessmentScore ?? options.Value.MinAssessmentScore, 0, 100),
+            // It is a ceiling over what the candidate configured and never a floor under it, so a
+            // candidate who has switched the pass off stays off on this route too.
+            documentCeiling: Math.Clamp(body?.Limit ?? MaxDocumentsPerRequest, 0, MaxDocumentsPerRequest),
+            // Passed through unresolved, so that "the caller said nothing" reaches the place that
+            // knows this candidate's own floor. Substituting the bound options here would write at
+            // a number the candidate may have overridden.
+            floor: body?.MinAssessmentScore,
             RequestBudget,
             ct);
 
@@ -292,7 +394,10 @@ public sealed class GenerateApplicationsFunction(
     /// Documents to write, bounded by <see cref="MaxDocumentsPerRequest"/> whatever is asked for.
     /// </param>
     /// <param name="MinAssessmentScore">
-    /// Floor on which pairs are written for. Defaults to the configured one.
+    /// Floor on which pairs are written for. Defaults to this candidate's own
+    /// <see cref="PipelineSettings.DraftMinAssessmentScore"/>, which is what the nightly pass
+    /// writes at, and which itself falls back to the bound
+    /// <see cref="ApplicationGenerationOptions.MinAssessmentScore"/>.
     /// </param>
     /// <remarks>
     /// The floor is exposed here for one case: a queue that returns nothing at 80 and somebody
@@ -303,25 +408,112 @@ public sealed class GenerateApplicationsFunction(
     public sealed record GenerateRequest(long? ProfileId, int? Limit = null, int? MinAssessmentScore = null);
 
     /// <summary>
-    /// The nightly cap, clamped to what a day could ever send.
+    /// What this pass may write for one candidate tonight: how many, above what floor, and no
+    /// older than when.
+    /// </summary>
+    /// <param name="Documents">Drafts this candidate may be written for on this run.</param>
+    /// <param name="Floor">
+    /// The <c>JobMatches.AssessmentScore</c> a posting must carry to be written for.
+    /// </param>
+    /// <param name="PostedSince">The age bound, or null for every age. Null is not a date of zero.</param>
+    /// <remarks>
+    /// <b>Three values travelling together because two of them must describe the same set.</b> The
+    /// batch and the backlog count both run through <c>ApplyableQuery</c>, and the whole value of
+    /// the <c>Waiting</c> figure is that it counts what this pass would have written for - so a
+    /// floor or an age bound resolved twice, from a clock read twice, is a count that quietly
+    /// answers about a different set from the one the night drew. Resolving all three once per
+    /// candidate and passing them as one value is what makes that impossible rather than merely
+    /// unlikely.
+    ///
+    /// <b><see cref="PostedSince"/> is an instant rather than a day count on purpose.</b>
+    /// <see cref="PipelineSettings.DraftPostedWithinDays"/> is the number a person sets, because a
+    /// duration is a shape a form cannot render; <see cref="PostingAge.Cutoff"/> turns it into the
+    /// one instant both queries must agree on, and null survives the conversion as null.
+    /// </remarks>
+    private readonly record struct DraftingBudget(int Documents, int Floor, DateTimeOffset? PostedSince);
+
+    /// <summary>
+    /// One candidate's drafting levers, resolved against the deployment's defaults and bounded by
+    /// what a day could ever send.
     /// </summary>
     /// <remarks>
-    /// Clamped here rather than trusted from settings, for the reason
-    /// <c>SubmissionLimits.MaxSubmittedPerDay</c> is enforced in the repository and not at its
-    /// call sites: a misconfigured value is a bill, and the number of documents worth writing in a
-    /// night cannot exceed the number of applications that could be recorded as sent that day.
-    /// A negative or absent value means the pass writes nothing, which is a legitimate way to
-    /// switch it off without redeploying.
+    /// <b>The clamp on the cap is kept and it is now this candidate's own.</b> It used to be
+    /// <see cref="SubmissionLimits.MaxSubmittedPerDay"/>, and the argument for it - the number of
+    /// documents worth writing in a night cannot exceed the number of applications that could be
+    /// recorded as sent the next day - is about the send cap actually in force rather than about
+    /// the constant. It applies harder to a number a person typed into a browser than to one an
+    /// operator bound in a config file, so nothing here trusts either. A cap of zero, from any
+    /// source, means the pass writes nothing for this candidate, which stays a legitimate way to
+    /// switch it off without a deploy.
+    ///
+    /// <b>A clamp here is not a substitute for validation and does not become one.</b>
+    /// <see cref="PipelineSettingsValidation"/> refuses <c>DraftsPerNight &gt; DailySendCap</c>
+    /// when it is typed, so a candidate is told rather than quietly given a smaller number. What
+    /// survives here is the guard for everything that never went through validation: a bound
+    /// option, a row written before a bound moved, an operator with a database client.
+    /// <c>Math.Max</c> on the cap is not decoration either - <c>Math.Clamp</c> throws when the
+    /// ceiling is below the floor, and an unattended pass at half past four must not fail on a
+    /// number nobody re-checked.
+    ///
+    /// <b>"Has this candidate chosen anything" is answered by comparing the whole record, and it
+    /// has to be inferred because the store deliberately cannot say.</b>
+    /// <c>PipelineSettingsRepository</c> answers <see cref="PipelineSettings.Default"/> for an
+    /// absent row and reads a stored row of defaults back identically - that equivalence is the
+    /// feature, and it is what makes resetting a save rather than a delete. So the test is record
+    /// equality over all nine members rather than three: settings are saved whole, a partial save
+    /// is not a thing this store can express, and somebody who has visited the page and moved any
+    /// lever has a configuration of their own that the deployment's defaults should not be
+    /// half-merged into.
+    ///
+    /// <b>The remaining ambiguity is real and resolves in the safe direction.</b> A candidate who
+    /// deliberately saves the shipped defaults on a deployment that bound something smaller gets
+    /// the deployment's number, because those two states are the same bytes. The worst that can
+    /// produce is the behaviour that deployment had before this feature arrived - never more
+    /// spending than it asked for, and never a lever a candidate typed being exceeded.
     /// </remarks>
-    private static int NightlyLimit(int configured)
-        => Math.Clamp(configured, 0, SubmissionLimits.MaxSubmittedPerDay);
-
-    private async Task<GenerationSummary> GenerateAsync(
-        long? profileId, int limit, int floor, TimeSpan budget, CancellationToken ct)
+    private DraftingBudget BudgetFor(
+        PipelineSettings stored, int? documentCeiling, int? floor, DateTimeOffset now)
     {
-        if (limit <= 0)
+        var chosen = stored == PipelineSettings.Default
+            ? PipelineSettings.Default with
+            {
+                DraftsPerNight = options.Value.DocumentsPerNight,
+                DraftMinAssessmentScore = options.Value.MinAssessmentScore,
+                DraftPostedWithinDays = options.Value.PostedWithinDays,
+            }
+            : stored;
+
+        var documents = Math.Clamp(chosen.DraftsPerNight, 0, Math.Max(chosen.DailySendCap, 0));
+
+        return new DraftingBudget(
+            Documents: documentCeiling is { } ceiling
+                ? Math.Min(documents, Math.Max(ceiling, 0))
+                : documents,
+            Floor: Math.Clamp(floor ?? chosen.DraftMinAssessmentScore, 0, 100),
+            PostedSince: chosen.DraftPostedWithinDays is { } days
+                ? PostingAge.Cutoff(now, days)
+                : null);
+    }
+
+    /// <param name="documentCeiling">
+    /// An upper bound the caller imposes on every candidate's own cap, or null for none. The HTTP
+    /// route passes one because the gateway does; the timer passes none.
+    /// </param>
+    /// <param name="floor">
+    /// An assessment floor the caller asked for explicitly, or null to write at each candidate's
+    /// own.
+    /// </param>
+    private async Task<GenerationSummary> GenerateAsync(
+        long? profileId, int? documentCeiling, int? floor, TimeSpan budget, CancellationToken ct)
+    {
+        // The caller's own ceiling, answered before anything is read. A per-candidate cap of zero
+        // is answered per candidate further down, because it says nothing about the others.
+        if (documentCeiling is <= 0)
         {
-            logger.LogInformation("Application generation: the cap is {Limit}; nothing to do.", limit);
+            logger.LogInformation(
+                "Application generation: the caller's cap is {Limit}; nothing to do.",
+                documentCeiling);
+
             return GenerationSummary.Empty;
         }
 
@@ -335,19 +527,31 @@ public sealed class GenerateApplicationsFunction(
             return GenerationSummary.Empty;
         }
 
+        // One clock read and one settings query for the whole run, folded into one budget per
+        // candidate before any of the work starts. The clock because the batch and the backlog
+        // count must answer about the same set; the settings because a read inside the loop would
+        // be a wakeup per candidate against a database billed by wall-clock time, at the top of
+        // the loop, before any of the work that would have justified being awake.
+        var now = time.GetUtcNow();
+        var configured = await SettingsForAsync(profileIds, ct);
+
+        var budgets = profileIds.ToDictionary(
+            id => id,
+            id => BudgetFor(configured[id], documentCeiling, floor, now));
+
         if (writer is null)
         {
             // Not an error, and not silent either. A deployment with no provider is a shape this
             // system ships in, but "no documents exist" is also what a broken pass looks like, so
             // the log line says which - and says how many postings are waiting, because that
             // number is the whole argument for configuring a provider.
-            var waiting = await WaitingAsync(profileIds, floor, ct);
+            var waiting = await WaitingAsync(profileIds, budgets, ct);
 
             logger.LogInformation(
                 "Application generation: no AI provider is configured, so no documents can be "
                 + "written. {Waiting} posting(s) across {Profiles} profile(s) are in the apply "
-                + "queue at {Floor}+ with nothing to send.",
-                waiting, profileIds.Count, floor);
+                + "queue at each candidate's own drafting floor with nothing to send.",
+                waiting, profileIds.Count);
 
             return GenerationSummary.Empty with { Profiles = profileIds.Count, Waiting = waiting };
         }
@@ -362,7 +566,7 @@ public sealed class GenerateApplicationsFunction(
                 break;
             }
 
-            var written = await GenerateForProfileAsync(id, limit, floor, started, budget, ct);
+            var written = await GenerateForProfileAsync(id, budgets[id], started, budget, ct);
 
             tally = Fold(tally, written);
 
@@ -374,19 +578,75 @@ public sealed class GenerateApplicationsFunction(
             }
         }
 
-        tally = tally with { Waiting = await WaitingAsync(profileIds, floor, ct) };
+        tally = tally with { Waiting = await WaitingAsync(profileIds, budgets, ct) };
 
         // Considered beside written, and what is still waiting beside both. A written count on its
         // own cannot show a night that skipped everything it read, and neither count can answer
         // the question somebody actually has when a run finds an empty queue.
+        //
+        // The floor is no longer named in this line and cannot be: it is per candidate now, and
+        // one number here would be a claim about a set it does not describe. Each candidate's
+        // resolved budget is logged as their batch starts, which is also the line that answers
+        // "did the number I typed reach the pass".
         logger.LogInformation(
             "Application generation complete: {Written} draft(s) written of {Considered} "
             + "considered, {Rendered} rendered, {Skipped} skipped, {Failed} failed. {Waiting} "
-            + "posting(s) still have no documents at {Floor}+.",
+            + "posting(s) still have no documents at their candidate's drafting floor.",
             tally.Written, tally.Considered, tally.Rendered, tally.Skipped, tally.Failed,
-            tally.Waiting, floor);
+            tally.Waiting);
 
         return tally;
+    }
+
+    /// <summary>
+    /// Every profile's settings in one query, and <see cref="PipelineSettings.Default"/> for all of
+    /// them where that query cannot be made at all.
+    /// </summary>
+    /// <remarks>
+    /// <b>The same shape, and the same argument, as <c>MatchSweepFunction.SettingsForAsync</c>.</b>
+    /// The duplication is two short methods on two functions that share no base class and no
+    /// composition root, against a helper that would have to live somewhere neither of them owns;
+    /// what actually matters is that both degrade the same way, and both say so.
+    ///
+    /// <b>Absent settings degrade rather than fail, which is how every other dependency in this
+    /// pass behaves</b> - no writer still counts the backlog, no pack store still stores the
+    /// markdown. This is the weakest of the three, because the answer when it is missing is the
+    /// deployment's own bound options, which is exactly what this pass ran on before the table
+    /// existed.
+    ///
+    /// <b>The catch covers a state this repository is documented to deploy in</b> rather than a
+    /// hypothetical: <c>deploy.yml</c> skips migrations on an ordinary push, so a build that knows
+    /// about a table reaches production before the table does. A pass that threw there would write
+    /// nothing all night to avoid writing what it would have written anyway.
+    /// </remarks>
+    private async Task<IReadOnlyDictionary<long, PipelineSettings>> SettingsForAsync(
+        IReadOnlyList<long> profileIds, CancellationToken ct)
+    {
+        if (pipelineSettings is null)
+        {
+            return Defaults(profileIds);
+        }
+
+        try
+        {
+            // Every requested id is present in the answer, mapped to the defaults where no row
+            // exists - so nothing downstream has to decide what a miss means.
+            return await pipelineSettings.GetForProfilesAsync(profileIds, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(
+                ex,
+                "Application generation: pipeline settings could not be read, so all {Profiles} "
+                + "profile(s) are written for on this deployment's configured defaults - which is "
+                + "what a candidate who has configured nothing gets.",
+                profileIds.Count);
+
+            return Defaults(profileIds);
+        }
+
+        static Dictionary<long, PipelineSettings> Defaults(IReadOnlyList<long> ids)
+            => ids.Distinct().ToDictionary(id => id, _ => PipelineSettings.Default);
     }
 
     /// <summary>
@@ -406,8 +666,30 @@ public sealed class GenerateApplicationsFunction(
     /// "the queue is empty" and "the queue is full of things we step over" distinguishable.
     /// </remarks>
     private async Task<GenerationTally> GenerateForProfileAsync(
-        long profileId, int limit, int floor, long started, TimeSpan budget, CancellationToken ct)
+        long profileId,
+        DraftingBudget drafting,
+        long started,
+        TimeSpan budget,
+        CancellationToken ct)
     {
+        // Zero is a real value and it is this candidate's off switch, answered before a single
+        // query is spent on them. It is not the same fact as an empty queue and it must not read
+        // like one, so the line says which - and it is the line somebody checks after typing a
+        // number into the settings page, which is why the whole resolved budget is on it rather
+        // than only the count.
+        logger.LogInformation(
+            "Application generation for profile {ProfileId}: at most {Documents} draft(s) at "
+            + "{Floor}+, for postings posted since {PostedSince}.",
+            profileId,
+            drafting.Documents,
+            drafting.Floor,
+            drafting.PostedSince?.ToString("yyyy-MM-dd") ?? "any date");
+
+        if (drafting.Documents <= 0)
+        {
+            return GenerationTally.Empty;
+        }
+
         var subjectId = await db.CandidateProfiles
             .AsNoTracking()
             .Where(p => p.Id == profileId)
@@ -449,17 +731,17 @@ public sealed class GenerateApplicationsFunction(
                 // writing a tailored CV for a posting whose apply route is "open the job board and
                 // look" spends the writing deployment on a document nothing can attach.
                 ReachableByBrowser = true,
-                MinAssessmentScore = floor,
+                MinAssessmentScore = drafting.Floor,
 
-                // Whatever the run is configured to pull. Unset unless somebody says so - see
-                // ApplicationGenerationOptions.PostedWithinDays for why this is not a default.
-                PostedSince = AgeBound(),
+                // Whatever this candidate's run is configured to pull. Unset unless somebody says
+                // so - see PipelineSettings.DraftPostedWithinDays for why null is not zero here.
+                PostedSince = drafting.PostedSince,
 
                 // Left at the default deliberately. This is the ordering a run gets, and writing
                 // in a different order would mean the documents exist for the postings the run
                 // reaches last.
                 Sort = ApplyableSort.Rank,
-                Limit = limit * CandidateWindow,
+                Limit = drafting.Documents * CandidateWindow,
             },
             ct);
 
@@ -474,7 +756,7 @@ public sealed class GenerateApplicationsFunction(
 
         foreach (var row in queue)
         {
-            if (tally.Written >= limit || time.GetElapsedTime(started) >= budget)
+            if (tally.Written >= drafting.Documents || time.GetElapsedTime(started) >= budget)
             {
                 break;
             }
@@ -817,37 +1099,44 @@ public sealed class GenerateApplicationsFunction(
     /// Counted through the same query the batch was drawn from, one page wide rather than
     /// unbounded - a count is not worth an unbounded read against a database billed on wall-clock
     /// time, and "at least this many" answers the question a cap is set against.
+    ///
+    /// <b>Each candidate is counted at their own floor and their own age bound</b>, from the same
+    /// <see cref="DraftingBudget"/> their batch was drawn under. One floor for the run would be a
+    /// number describing a set nobody's queue matches, and a clock read a second time would move
+    /// the age bound between the batch and the count - both of which turn this figure into an
+    /// answer about a different set from the one the night wrote for.
     /// </remarks>
-    /// <summary>
-    /// The age bound both queries run under, resolved once per call from the clock.
-    /// </summary>
-    /// <remarks>
-    /// Written here rather than at the two call sites so the batch and the backlog count cannot
-    /// answer about different sets - the whole value of that figure is that it counts what this
-    /// pass would write for.
-    /// </remarks>
-    private DateTimeOffset? AgeBound()
-        => options.Value.PostedWithinDays is { } days
-            ? PostingAge.Cutoff(time.GetUtcNow(), days)
-            : null;
-
-    private async Task<int> WaitingAsync(IReadOnlyList<long> profileIds, int floor, CancellationToken ct)
+    private async Task<int> WaitingAsync(
+        IReadOnlyList<long> profileIds,
+        IReadOnlyDictionary<long, DraftingBudget> budgets,
+        CancellationToken ct)
     {
         var waiting = 0;
 
         foreach (var profileId in profileIds)
         {
+            var drafting = budgets[profileId];
+
+            // A candidate whose cap is zero has switched the pass off, so nothing is waiting on
+            // it: counting their queue would put a permanent floor under this figure for exactly
+            // the reason an aggregator link is not counted either - a night that has caught up
+            // would be indistinguishable from one that is stuck.
+            if (drafting.Documents <= 0)
+            {
+                continue;
+            }
+
             var rows = await matches.ListApplyableAsync(
                 profileId,
                 new ApplyableQuery
                 {
                     DocumentsReady = false,
                     ReachableByBrowser = true,
-                    MinAssessmentScore = floor,
-                    // The same bound the batch was drawn under. A count over a wider set would
-                    // report a backlog this pass is not going to write for, which is the one thing
-                    // this figure exists not to do.
-                    PostedSince = AgeBound(),
+                    MinAssessmentScore = drafting.Floor,
+                    // The same bound the batch was drawn under, from the same resolved budget. A
+                    // count over a wider set would report a backlog this pass is not going to
+                    // write for, which is the one thing this figure exists not to do.
+                    PostedSince = drafting.PostedSince,
                     Limit = WaitingCeiling,
                 },
                 ct);

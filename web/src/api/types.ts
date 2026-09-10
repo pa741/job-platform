@@ -1389,3 +1389,259 @@ export interface ReauthorCvVariantRequest {
 export interface ArchiveCvVariantRequest {
   archived: boolean;
 }
+
+// --- pipeline settings ------------------------------------------------------
+//
+// The nine levers one candidate may set on their own pipeline, mirroring
+// `JobPlatform.Core.Settings.PipelineSettings` field for field. Per-principal like the profile
+// and the searches, and scoped the same way: the API resolves whose settings these are from the
+// token's `oid` claim, and there is deliberately no field in either shape below that could name
+// somebody else's pipeline.
+//
+// Which control renders on which page, and why they are split across two, is on
+// `PipelineSettingsRequest` below rather than here. A `//` banner is read by somebody already
+// in this file; a JSDoc block is what an editor shows the person building the form, and that
+// note is aimed at them.
+
+/**
+ * The nine levers, as a save sends them.
+ *
+ * **Where each control renders, and why the split is not decoration.** The seven judgement and
+ * drafting levers belong on the Pipeline page under System, beside Searches and Model calls;
+ * `dailySendCap` and `chaseAfterDays` belong on the Applications page. What separates them is
+ * *when a saved value takes effect*, and that is the only line worth drawing here:
+ *
+ * - The seven change what the **next nightly pass buys**. The match sweep runs at 03:30 UTC and
+ *   the writing pass at 04:30 UTC, so a value saved at noon changes nothing anybody can see
+ *   until the following morning. Grouping those beside a read-time filter is a trap rather than
+ *   an untidiness: the shortlist's `minScore` (see `MatchQuery.minScore`) is a number on 0-100
+ *   that re-renders the list as it is dragged, and `assessmentThreshold` is a number on 0-100
+ *   that looks exactly like it and answers fifteen hours later. Somebody who cannot tell those
+ *   apart concludes the control is broken, and the next thing they do is change it again - so
+ *   the two never share a page, and the page that carries these says when its values land.
+ * - `dailySendCap` and `chaseAfterDays` take effect **on the next write and the next read**.
+ *   The cap is enforced in the submission repository the instant the next `Submitted` event
+ *   arrives; staleness is a fold over the event log rather than a stored column, so lowering
+ *   the chase window makes quiet applications stale on the very next render, with nothing
+ *   migrated and nothing to migrate. Both are about the list they would sit beside, and a
+ *   control whose effect is visible on the page carrying it is one nobody has to be told about.
+ *
+ * System is also where the honest framing of the whole record belongs: these are levers on what
+ * the pipeline *buys*, and not one of them changes what a match means. Neither of the two
+ * thresholds that are **not** settings - `MatchRanker.FusionFloor` and
+ * `CvVariantSelector.SelectionFloor` - appears in these shapes, and neither may ever appear on
+ * a form built from them. Both are reasoned from measurements that a number somebody typed
+ * cannot be held to.
+ *
+ * **Every field is required, and that is a guard rather than ceremony.** The PUT replaces the
+ * stored row, and the C# record fills an absent property from its own initialiser - so a body
+ * that omits `chaseAfterDays` does not leave it as it was, it resets it to the shipped
+ * fourteen. That is exactly right for an override built on purpose, which is what
+ * `PipelineSettings.Default with { ... }` spells, and exactly wrong for a form that dropped a
+ * field on the way to `JSON.stringify`. Both are the same bytes on the wire, so the compiler is
+ * the last place they can still be told apart, and optional properties here would spend that.
+ *
+ * The bounds are deliberately not restated in this file. The server is the only thing that
+ * validates, and a second copy of a number here is a second thing to forget when
+ * `PipelineSettingsValidation` moves - the same reason `CreateCvVariantRequest` carries none
+ * either. What a form needs beyond the bounds is what a refusal says, and a refusal says all of
+ * it at once.
+ */
+export interface PipelineSettingsRequest {
+  // Judgement. Consumed by the nightly match sweep - 03:30 UTC.
+
+  /**
+   * How many postings the model judges per night. 0-200, default 40.
+   *
+   * The number that is a bill. Zero is a real value and it is the off switch: the sweep's
+   * scoring pass needs no model at all and still writes ranked matches, so zero here keeps the
+   * shortlist and stops buying verdicts.
+   */
+  assessmentsPerNight: number;
+
+  /**
+   * The **deterministic match score** a pair must clear before a judgement is bought. 0-100,
+   * default 45.
+   *
+   * Low by design: the arithmetic under-scores a candidate whose relevant experience is in
+   * prose the extractor read cautiously, and the model exists to catch exactly that. Zero does
+   * not mean "judge everything" - it means every scored pair is a candidate and
+   * `assessmentsPerNight` alone decides how many are drawn.
+   *
+   * Not the same quantity as `draftMinAssessmentScore`, which reads the model's score. Two
+   * numbers on 0-100 measuring different things, which is why the ordering between them is a
+   * stated rule the server enforces rather than something a form may treat as obvious.
+   */
+  assessmentThreshold: number;
+
+  /**
+   * The percentage of each night's shortlist reserved for postings inside `recentWindowDays`.
+   * 0-100, default 67.
+   *
+   * A reservation and never an ordering: the recent draw is sorted by score like every other
+   * draw, and whatever the reservation cannot fill goes back to the top-down draw over the
+   * whole corpus, so a quiet day costs nothing and a backlog still drains. Zero is a real value
+   * - no reservation, pure top-down - and 100 is legal and stops the backlog draining at all on
+   * any day with enough arrivals to fill the shortlist.
+   *
+   * A percent rather than the numerator and denominator it replaces, because a settings form
+   * cannot sensibly ask for two fields that must be read together and will therefore be
+   * half-edited.
+   */
+  recentSharePercent: number;
+
+  /**
+   * What that reservation counts as "recent", in days. 1-30, default 3.
+   *
+   * **This is the sweep's own reservation window and not the system-wide age rule.** Every age
+   * *filter* in the product - the shortlist's, the corpus search's, the apply queue's - answers
+   * to `PostingAge.DailyWindowDays`, which this does not replace, is not coupled to, and must
+   * never be labelled as. The default merely equals it, because that is what the sweep passes
+   * today and an unconfigured deployment has to be unchanged.
+   *
+   * Floor 1 rather than 0: a window of zero would leave the reservation unfilled every night
+   * and falling back to the top-down draw, which is indistinguishable from the feature having
+   * been switched off. The control that actually switches it off is `recentSharePercent` at
+   * zero, and a person should have to type that one.
+   */
+  recentWindowDays: number;
+
+  // Drafting. Consumed by the nightly application generation pass - 04:30 UTC.
+
+  /**
+   * How many drafts one nightly pass writes. 0-25, default 10.
+   *
+   * The other bill, and the expensive one: these calls go to the writing deployment priced
+   * roughly twenty-five times the bulk one. Its effective ceiling is the lower of 25 and this
+   * candidate's own `dailySendCap` - a night that writes more letters than a day can send is
+   * buying prose for adverts nobody will reach - and the server refuses that combination rather
+   * than clamping it, because a setting that is silently clamped is a setting that lies to the
+   * person who typed it. Zero switches the pass off.
+   */
+  draftsPerNight: number;
+
+  /**
+   * The **model's assessment score** a posting must carry before a document is written for it.
+   * 0-100, default 80.
+   *
+   * It has to be able to equal the floor the unattended run pulls with: set above it and the
+   * queue offers postings whose documents were never written, set below it and the pass buys
+   * drafts nothing will look at.
+   *
+   * Must be at least `assessmentThreshold`, which the server enforces and which is not the
+   * arithmetic it looks like - the two read different columns. A posting below the threshold is
+   * never sent to the assessor, so it carries no assessment score for this floor to read, and a
+   * floor set beneath the threshold widens the drafting band by nothing at all.
+   *
+   * Zero is not "no floor": a pair the model scored no number for clears no floor at any value,
+   * so zero means "anything actually judged".
+   */
+  draftMinAssessmentScore: number;
+
+  /**
+   * Only draft for postings posted within this many days, or `null` for postings of every age.
+   * 1-90 when set. Default `null`.
+   *
+   * **The only nullable lever, and `null` is not `0`.** Null means "no age bound"; zero would
+   * mean "posted since this instant" through `PostingAge.Cutoff`, selects almost nothing, reads
+   * as the writing pass being broken, and is refused. So a cleared box must serialise to `null`
+   * - never to `0`, and never by being omitted. `Number('')` is `0`, which is precisely the one
+   * transcription that turns an empty input into a refused save, and the reason this is
+   * `number | null` rather than an optional property.
+   *
+   * The same rule the scraper config already runs under: "did not choose" and "chose nothing"
+   * have to be different bytes on the wire.
+   */
+  draftPostedWithinDays: number | null;
+
+  // Sending. Consumed by the submission write path and by the fold over the event log.
+
+  /**
+   * How many applications may be recorded as *sent* in one UTC day. 0-100, default 25.
+   *
+   * A bound on the blast radius of a client that loops, set well above what a person does in a
+   * day and well below what a loop does in a minute. It bounds `Submitted` events alone -
+   * recording that a hundred applications exist is fine, claiming a hundred were sent today is
+   * not - and it is enforced in the submission repository, which is the only thing that
+   * enforces it. Zero pauses the loop.
+   *
+   * Also the ceiling on `draftsPerNight`, which is why the two are validated together even
+   * though they render on different pages.
+   */
+  dailySendCap: number;
+
+  /**
+   * Silence for this many days makes an application stale. 1-365, default 14.
+   *
+   * A day count rather than a duration, deliberately: a `TimeSpan` is a shape a form cannot
+   * render and the wire spells several ways - `"14.00:00:00"`, `"P14D"`, `1209600000` - so it
+   * would be three contracts wearing one type. The fold keeps its `TimeSpan` and builds it from
+   * this number.
+   *
+   * Changing it re-reads history rather than rewriting it: staleness is derived and never
+   * stored, so lowering this makes older quiet applications stale immediately and raising it
+   * makes them live again, with nothing migrated. A closed application is never stale at any
+   * value - an employer who stopped replying has gone quiet, one who said no has not.
+   */
+  chaseAfterDays: number;
+}
+
+/**
+ * The nine levers as they will run tonight, with one fact a request has no use for.
+ *
+ * Extends the request rather than restating it, the same way `ScraperSearchResponse` extends
+ * `ScraperSearchRequest`: nine numbers written out twice is nine chances for a rename to reach
+ * one copy and not the other.
+ */
+export interface PipelineSettingsResponse extends PipelineSettingsRequest {
+  /**
+   * When these were last saved, or `null` where nothing has ever been stored.
+   *
+   * **The whole of the "has anybody configured this" answer, and one field rather than two on
+   * purpose** - a boolean beside a timestamp is two things that have to agree, and a page would
+   * have to pick one to believe on the day they do not.
+   *
+   * Null does not mean the read failed and it does not mean the nine values are missing: an
+   * unconfigured candidate runs on `PipelineSettings.Default`, whose every value is the
+   * constant the shipped code already used, so the API answers all nine numbers and this
+   * timestamp says only whether anybody chose them. That distinction is what lets a page say
+   * "these are the shipped defaults" instead of showing an empty form - and it is why this
+   * route has no 404, unlike the profile.
+   */
+  updatedUtc: string | null;
+}
+
+/**
+ * How a refused save arrives: an RFC 9457 problem document, and never a field on a success.
+ *
+ * This is the shape the searches routes already answer a bad save with - `SearchEndpoints`
+ * joins everything `ScraperSearchValidation.Validate` returned into one `detail` and answers
+ * 400 - and the settings routes follow it rather than inventing a second spelling of failure.
+ * `JobPlatformApi.request` parses this into an `ApiError` carrying `status` and `detail`, and
+ * `ErrorNote` already renders that pair, so a page written against this contract writes no
+ * error handling of its own.
+ *
+ * **There is deliberately no success-shaped `{ ok, problems[] }` union.** A client with two
+ * ways for a save to fail is a client where every caller has to handle both and half of them
+ * handle one - and the half that gets missed is the one that fails silently, because a rejected
+ * save that *resolves* looks exactly like a successful one to a `.then`.
+ *
+ * `detail` carries **every** problem rather than the first, because a form with four bad fields
+ * should say so once rather than over four saves. It is one string with the problems joined by
+ * a space, exactly as the searches routes send it. Splitting it back into a list here would be
+ * this client parsing prose, which is how the full stop inside a message becomes two problems.
+ *
+ * Named for this route because this is the first place the client needed to describe the shape.
+ * It is the API's general problem document, so a second route that needs it should widen this
+ * name rather than add a second copy of it.
+ */
+export interface PipelineSettingsProblem {
+  /** 400 for a value out of bounds or a broken cross-field rule; 401 for a token with no `oid`. */
+  status: number;
+
+  /** The status phrase the server filled in - "Bad Request". Rarely the useful half. */
+  title?: string;
+
+  /** Every problem, joined into one string. The half worth showing somebody. */
+  detail?: string;
+}

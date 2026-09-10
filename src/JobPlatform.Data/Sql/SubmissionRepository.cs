@@ -1,8 +1,10 @@
 ﻿using System.Text.Json;
 using JobPlatform.Core.Applications;
+using JobPlatform.Core.Settings;
 using JobPlatform.Core.Submissions;
 using JobPlatform.Data.Sql.Entities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace JobPlatform.Data.Sql;
 
@@ -129,9 +131,68 @@ public sealed record SubmissionWriteResult(
 /// written when something actually happened. It must never become a polling path - that is what
 /// the MCP feature's own rate-limit policy is for - and <b>nothing here may join a client's
 /// bootstrap sequence</b>.
+///
+/// <b>The two sending levers are read here, because this is where they are enforced.</b>
+/// <c>PipelineSettings.DailySendCap</c> bounds the <c>Submitted</c> events this class refuses
+/// past, and <c>PipelineSettings.ChaseAfterDays</c> is the window
+/// <see cref="SubmissionState.Fold"/> calls silence with. Both were constants until the settings
+/// record existed and both keep their shipped values as defaults, so a candidate who has
+/// configured nothing is served exactly what they were served before.
+///
+/// <b>They are loaded here rather than passed in by the caller, and that is the one real design
+/// decision in this file.</b> Handing the cap in as an argument is the arrangement this codebase
+/// already rejected once for the cap itself: "the daily cap lives in
+/// <see cref="SubmissionRepository"/>, not at the call sites" is written down because a rule
+/// spelled out at the call sites survives exactly until somebody adds another one, and there are
+/// three today - the submissions routes, the MCP tools and the question queue. A fourth call site
+/// that forgot the argument would not fail; it would enforce twenty-five against a candidate who
+/// asked for six, silently, and only for that one path. <b>Worse, the burn-down and the refusal
+/// would come from different numbers</b>: <see cref="GetQuotaAsync"/> is what a run plans its
+/// batch against and <see cref="AddEventAsync"/> is what refuses it, and a configurable answer
+/// over an unconfigured enforcement is worse than neither, because the run finds out at
+/// <c>record_event</c> - after the browser has already sent the form. Reading both from one place
+/// makes that disagreement unrepresentable rather than merely unlikely.
+///
+/// <b>The authorisation boundary is untouched by that choice.</b> The settings are loaded for the
+/// same <c>profileId</c> whose events are being counted and written - the id the caller already
+/// resolved from a subject id, which is exactly the shape
+/// <c>PipelineSettingsRepository.GetForProfileAsync</c> names as its permitted caller. No method
+/// here gained a parameter, so there is nothing new for a route to bind or for a model to fill
+/// in, and no way for one candidate's cap to be applied to another's log: the cap and the count
+/// are read with the same argument, on the same line of reasoning that keeps a submission id
+/// alone from being enough.
+///
+/// <b>Composed over the same <see cref="JobsDbContext"/> rather than injected as an optional
+/// dependency.</b> <c>MatchSweepFunction</c> takes <c>PipelineSettingsRepository?</c> and runs on
+/// the defaults when it is null, which is right there - a night on the shipped constants is the
+/// behaviour that predates the table. It is wrong here: the null branch would mean a host that
+/// forgot one registration enforcing twenty-five against a candidate who typed six, which is
+/// precisely the failure this class exists to prevent, and it would look like the feature
+/// working. So there is no branch. <c>PipelineSettingsRepository</c> is a projection of the
+/// context this class already holds rather than a service with an alternative implementation -
+/// there is nothing a test would substitute for it that is not a row in the same database - so
+/// constructing it costs an allocation and removes a way to get this wrong.
 /// </remarks>
-public sealed class SubmissionRepository(JobsDbContext db)
+public sealed class SubmissionRepository(
+    JobsDbContext db,
+    // Optional and trailing, like PostingExtractionWriter's: a caller that constructs this
+    // directly - every test in the suite does - still writes, and loses only the warning below.
+    // Nothing here logs on a path that succeeds.
+    ILogger<SubmissionRepository>? logger = null)
 {
+    /// <summary>
+    /// Where this candidate's own send cap and chase window come from.
+    /// </summary>
+    /// <remarks>
+    /// <b>Read through the repository rather than off <c>db.PipelineSettings</c> directly</b>,
+    /// because "an absent row means <see cref="PipelineSettings.Default"/>" is a decision that
+    /// class exists to make once. Spelling the fallback out here would be a second answer to it,
+    /// free to drift from the one the settings page reports - and a page describing a pipeline
+    /// the enforcement does not run is the same fault as an unenforced cap, arriving from the
+    /// other side. See <see cref="SettingsForAsync"/> for what happens when the read fails.
+    /// </remarks>
+    private readonly PipelineSettingsRepository _pipelineSettings = new(db);
+
     /// <summary>
     /// The caller's submissions, most recently active first, each folded to a status.
     /// </summary>
@@ -150,9 +211,33 @@ public sealed class SubmissionRepository(JobsDbContext db)
     /// <c>SubmissionStatus.LastActivityUtc</c> - a derived value with no column to sort on. That
     /// is affordable exactly because the set is one person's applications and not the corpus; if
     /// it ever stops being, the fix is a bounded page rather than a stored status.
+    ///
+    /// <b>The chase window is this candidate's, read once for the page rather than once per
+    /// row.</b> <c>PipelineSettings.ChaseAfterDays</c> is what silence has to last before a row
+    /// reads as quiet, and one settings read per call is the shape this database can afford where
+    /// a read per submission is the per-row round trip the whole codebase avoids. Nothing is
+    /// cached between calls, deliberately: the property that makes this setting safe to expose is
+    /// that lowering it makes older quiet applications stale <i>on the next read</i> with nothing
+    /// migrated, and a repository that remembered the number would be the stored status this fold
+    /// exists instead of, one indirection further back.
     /// </remarks>
     public async Task<IReadOnlyList<SubmissionRow>> ListAsync(
         long profileId, DateTimeOffset now, CancellationToken ct = default)
+        => await ListRowsAsync(profileId, now, await SettingsForAsync(profileId, ct), ct);
+
+    /// <summary>
+    /// <see cref="ListAsync"/>, for a caller that has already read this candidate's settings.
+    /// </summary>
+    /// <remarks>
+    /// <b>A distinct name rather than an overload, so a caller cannot fall back to the public
+    /// one by leaving an argument off.</b> Every write path here ends by projecting the row it
+    /// just wrote, and each of them has already read the settings for the cap - so threading them
+    /// through is what keeps a write to one settings read rather than two. An overload would make
+    /// that a silent extra round trip on a database billed by wall-clock time; a different name
+    /// makes it a compile error.
+    /// </remarks>
+    private async Task<IReadOnlyList<SubmissionRow>> ListRowsAsync(
+        long profileId, DateTimeOffset now, PipelineSettings settings, CancellationToken ct)
     {
         var rows = await db.Submissions
             .AsNoTracking()
@@ -188,10 +273,24 @@ public sealed class SubmissionRepository(JobsDbContext db)
                     r.Channel,
                     r.ApplyUrl,
                     r.CreatedAtUtc,
+                    // The window is named rather than left to the fold's own default, so a
+                    // candidate who set a chase of three days gets three and not the shipped
+                    // fortnight. TimeSpan.FromDays here rather than a duration in the settings:
+                    // the fold subtracts two instants and wants a TimeSpan, a form can only
+                    // render one number, and this is the single place the two meet.
+                    //
+                    // Safe outside an expression tree and only there. This projection runs over
+                    // `rows`, which ToListAsync has already materialised, so the lambda is a
+                    // delegate rather than something EF translates - CS0854, which forbids an
+                    // omitted optional argument inside an expression tree, is the rule this call
+                    // would otherwise be caught by. It is why SubmissionEvent.Evidence is an
+                    // init property and why SubmissionQuota.For could take a trailing optional
+                    // at all; the same reasoning, checked again here rather than assumed.
                     SubmissionState.Fold(
                         r.CreatedAtUtc,
                         [.. r.Events.Select(e => new SubmissionEvent(e.AtUtc, e.Type, e.Stage, e.Source, e.Note))],
-                        now),
+                        now,
+                        TimeSpan.FromDays(settings.ChaseAfterDays)),
                     r.ParkedReason,
                     r.ParkedAtUtc,
                     r.UnparkedAtUtc,
@@ -212,7 +311,24 @@ public sealed class SubmissionRepository(JobsDbContext db)
     /// </remarks>
     public async Task<SubmissionRow?> GetAsync(
         long profileId, long submissionId, DateTimeOffset now, CancellationToken ct = default)
-        => (await ListAsync(profileId, now, ct)).FirstOrDefault(s => s.Id == submissionId);
+        => await GetRowAsync(profileId, submissionId, await SettingsForAsync(profileId, ct), now, ct);
+
+    /// <summary>
+    /// <see cref="GetAsync"/>, for a caller that has already read this candidate's settings.
+    /// </summary>
+    /// <remarks>
+    /// Named rather than overloaded for the reason <see cref="ListRowsAsync"/> is, and this is
+    /// the method every write here ends on: the row a create, a park or an unpark answers with is
+    /// folded against the same chase window the caller's other work was done under, and read in
+    /// the same round trip budget.
+    /// </remarks>
+    private async Task<SubmissionRow?> GetRowAsync(
+        long profileId,
+        long submissionId,
+        PipelineSettings settings,
+        DateTimeOffset now,
+        CancellationToken ct)
+        => (await ListRowsAsync(profileId, now, settings, ct)).FirstOrDefault(s => s.Id == submissionId);
 
     /// <summary>
     /// The full log for one of the caller's submissions, oldest first, with what was captured.
@@ -283,12 +399,34 @@ public sealed class SubmissionRepository(JobsDbContext db)
     /// <b>Not a reservation.</b> Nothing is held back, so two clients sharing a candidate can
     /// each be told six. The cap in <see cref="AddEventAsync"/> remains the authority; this is
     /// for planning a batch while it is still free to choose one.
+    ///
+    /// <b>And it is the candidate's own cap, read from the same place that authority reads
+    /// it.</b> <c>PipelineSettings.DailySendCap</c> arrives as <see cref="SubmissionQuota.DailyCap"/>,
+    /// so a client planning against six is planning against the number
+    /// <see cref="DailyCapReachedAsync"/> will refuse it at. The alternative - a burn-down
+    /// answering the shipped twenty-five over an enforcement that fires at six - is worse than
+    /// having no burn-down at all: the run would size a batch it cannot record, and would find
+    /// that out at <c>record_event</c>, which by the loop's design runs after the form has gone.
+    /// The count and the cap are read here in one method for the same reason the count itself is
+    /// one function: two numbers that have to agree are two numbers that will not, unless nothing
+    /// can spell them apart.
     /// </remarks>
     /// <param name="profileId">The candidate, resolved by the caller.</param>
     /// <param name="atUtc">Any instant inside the day being asked about. Read in UTC, whatever offset it carries.</param>
     public async Task<SubmissionQuota> GetQuotaAsync(
         long profileId, DateTimeOffset atUtc, CancellationToken ct = default)
-        => SubmissionQuota.For(atUtc, await CountSubmittedOnDayAsync(profileId, atUtc, ct));
+    {
+        var settings = await SettingsForAsync(profileId, ct);
+
+        // The cap is named at the call rather than passed positionally. It sits beside a count
+        // and both are small non-negative ints, so a transposition compiles, throws nothing and
+        // answers a plausible number - the hazard SubmissionQuota.For asks callers to name it
+        // over, and the one PipelineSettings itself refuses a positional constructor over.
+        return SubmissionQuota.For(
+            atUtc,
+            await CountSubmittedOnDayAsync(profileId, atUtc, ct),
+            dailyCap: settings.DailySendCap);
+    }
 
     /// <summary>
     /// Records that an application was sent, or returns the one already recorded.
@@ -320,6 +458,13 @@ public sealed class SubmissionRepository(JobsDbContext db)
         long? cvVariantId = null,
         CancellationToken ct = default)
     {
+        // Read once for the whole call, though nothing here spends quota: this method creates a
+        // row and claims nothing, so no cap applies to it - but the row it answers with carries a
+        // folded status, and that fold has to use the same chase window every other read of this
+        // table uses. A row that came back live from a create and quiet from the next list would
+        // be a settings read this method skipped.
+        var settings = await SettingsForAsync(profileId, ct);
+
         var existing = await db.Submissions
             .AsNoTracking()
             .Where(s => s.ProfileId == profileId && s.PostingId == postingId)
@@ -339,7 +484,7 @@ public sealed class SubmissionRepository(JobsDbContext db)
                 await db.SaveChangesAsync(ct);
             }
 
-            var already = await GetAsync(profileId, existing, now, ct);
+            var already = await GetRowAsync(profileId, existing, settings, now, ct);
 
             // Non-null in practice: the row was just read under the same profile id.
             return (already!, false);
@@ -359,7 +504,7 @@ public sealed class SubmissionRepository(JobsDbContext db)
         db.Submissions.Add(entity);
         await db.SaveChangesAsync(ct);
 
-        var row = await GetAsync(profileId, entity.Id, now, ct);
+        var row = await GetRowAsync(profileId, entity.Id, settings, now, ct);
 
         return (row!, true);
     }
@@ -391,10 +536,13 @@ public sealed class SubmissionRepository(JobsDbContext db)
     /// no submission there can be no event carrying that key, so "the submission already exists"
     /// is the only shape a retry can take.
     ///
-    /// <b>On the retry path the event goes through <see cref="AddEventAsync"/>.</b> The row is
-    /// already there, so there is no insert to inline it into - and that method is where the
-    /// idempotency probe and the cap are ordered against each other. Repeating that ordering
-    /// here would be a second copy of it, free to drift from the first.
+    /// <b>On the retry path the event goes through the same append <see cref="AddEventAsync"/>
+    /// uses.</b> The row is already there, so there is no insert to inline it into - and that
+    /// method is where the idempotency probe and the cap are ordered against each other.
+    /// Repeating that ordering here would be a second copy of it, free to drift from the first.
+    /// The candidate's settings are read once at the top and handed to it, so the cap the retry
+    /// is measured against is the one this call already resolved rather than a second read that
+    /// could answer differently.
     ///
     /// <b>Nothing is written when the cap refuses</b>, not even the submission. See
     /// <see cref="SubmissionWriteResult"/>: a row whose event was refused takes the posting out
@@ -450,6 +598,12 @@ public sealed class SubmissionRepository(JobsDbContext db)
         ArgumentNullException.ThrowIfNull(submissionEvent);
         ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
 
+        // One read for the whole call, whichever of the two paths below it takes. Both need it:
+        // the retry path appends through the cap, and both end by folding the row they answer
+        // with. Threading it is what keeps this at one settings query rather than the two an
+        // append followed by a projection would otherwise make.
+        var settings = await SettingsForAsync(profileId, ct);
+
         var existing = await db.Submissions
             .AsNoTracking()
             .Where(s => s.ProfileId == profileId && s.PostingId == postingId)
@@ -459,21 +613,22 @@ public sealed class SubmissionRepository(JobsDbContext db)
         if (existing != 0)
         {
             // Tracked, and read before the event is appended, so the fill below rides on the same
-            // SaveChanges AddEventAsync performs rather than costing a second round trip.
+            // SaveChanges the append performs rather than costing a second round trip.
             var parked = await db.Submissions
                 .AsTracking()
                 .FirstAsync(s => s.Id == existing, ct);
 
             FillChosenVariant(parked, cvVariantId);
 
-            var recorded = await AddEventAsync(profileId, existing, submissionEvent, idempotencyKey, ct);
-            var already = await GetAsync(profileId, existing, now, ct);
+            var recorded = await AppendEventAsync(
+                profileId, existing, submissionEvent, idempotencyKey, settings, ct);
+            var already = await GetRowAsync(profileId, existing, settings, now, ct);
 
             // Non-null in practice: the row was just read under the same profile id.
             return new SubmissionWriteResult(already!, false, recorded);
         }
 
-        if (await DailyCapReachedAsync(profileId, submissionEvent, ct))
+        if (await DailyCapReachedAsync(profileId, submissionEvent, settings, ct))
         {
             return new SubmissionWriteResult(null, false, SubmissionEventResult.DailyLimitReached);
         }
@@ -505,7 +660,7 @@ public sealed class SubmissionRepository(JobsDbContext db)
         db.Submissions.Add(entity);
         await db.SaveChangesAsync(ct);
 
-        var row = await GetAsync(profileId, entity.Id, now, ct);
+        var row = await GetRowAsync(profileId, entity.Id, settings, now, ct);
 
         return new SubmissionWriteResult(row!, true, SubmissionEventResult.Recorded);
     }
@@ -686,7 +841,14 @@ public sealed class SubmissionRepository(JobsDbContext db)
         // gaps landed in a second write that failed is a posting held with nothing saying why.
         await db.SaveChangesAsync(ct);
 
-        var row = await GetAsync(profileId, entity.Id, now, ct);
+        // Read after the write rather than before it: a park spends no quota, so nothing here
+        // needs the settings until the row is folded for the answer. It is still read rather than
+        // defaulted, because the row this returns is the same shape ListAsync returns and a
+        // status folded against a different window on the two paths is the drift the whole
+        // arrangement is written to make impossible.
+        var settings = await SettingsForAsync(profileId, ct);
+
+        var row = await GetRowAsync(profileId, entity.Id, settings, now, ct);
 
         return (row!, created);
     }
@@ -736,7 +898,7 @@ public sealed class SubmissionRepository(JobsDbContext db)
             await db.SaveChangesAsync(ct);
         }
 
-        return await GetAsync(profileId, entity.Id, now, ct);
+        return await GetRowAsync(profileId, entity.Id, await SettingsForAsync(profileId, ct), now, ct);
     }
 
     /// <summary>
@@ -754,6 +916,15 @@ public sealed class SubmissionRepository(JobsDbContext db)
     /// reports, so the bound and the burn-down describing it cannot disagree. Bounding it in the
     /// sink is the same rule <c>AiCallRecord.Create</c> follows: two call sites reach this today
     /// and a third will, and a guard written at the call sites survives until then.
+    ///
+    /// <b>The number is this candidate's <c>PipelineSettings.DailySendCap</c>, and making it
+    /// configurable moved nothing.</b> It defaults to <see cref="SubmissionLimits.MaxSubmittedPerDay"/>,
+    /// so a candidate who has stored nothing is refused at exactly the twenty-fifth event they
+    /// were always refused at. What a configured cap must never become is a number the answer
+    /// knows and the refusal does not: a run that planned six and is refused at twenty-five is
+    /// over-applying under a cap it can see, and a run that planned twenty-five and is refused at
+    /// six discovers that at <c>record_event</c>, after the browser has sent the form. Both come
+    /// from one read, made by whichever entrance the call arrived through.
     ///
     /// <b>Counted by <c>AtUtc</c>, not by when the row was written.</b> That is what the event
     /// claims happened, so backdating a hundred events into one day is the same assertion as
@@ -777,9 +948,49 @@ public sealed class SubmissionRepository(JobsDbContext db)
         string idempotencyKey,
         CancellationToken ct = default)
     {
+        // Guarded before the settings are read, so a caller's null costs an exception rather than
+        // an exception and a query.
         ArgumentNullException.ThrowIfNull(submissionEvent);
         ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
 
+        return await AppendEventAsync(
+            profileId,
+            submissionId,
+            submissionEvent,
+            idempotencyKey,
+            await SettingsForAsync(profileId, ct),
+            ct);
+    }
+
+    /// <summary>
+    /// <see cref="AddEventAsync"/>, for a caller that has already read this candidate's settings.
+    /// </summary>
+    /// <remarks>
+    /// <b>The one place an event is appended, and therefore the one place the cap fires.</b>
+    /// <see cref="AddEventAsync"/> and <see cref="CreateWithEventAsync"/> are two entrances to
+    /// this body rather than two implementations of it, which is what makes "enforced here and
+    /// nowhere else" a fact about the code rather than a convention - and it is why the cap
+    /// became configurable without moving: the number changed, the line it fires on did not.
+    ///
+    /// <b>It takes the settings rather than reading them, so the cap a call refuses at is the cap
+    /// that same call reported.</b> A second read inside here could answer differently from the
+    /// one <see cref="CreateWithEventAsync"/> made a moment earlier - the candidate may be saving
+    /// the settings form as the run writes - and a create refused at a number the same call had
+    /// planned against is exactly the disagreement between the burn-down and the bound that this
+    /// arrangement exists to rule out.
+    ///
+    /// <b>The arguments are guarded by both entrances rather than here</b>, because both of them
+    /// have to guard before they read anything, and a third check on a path that cannot reach it
+    /// with a null would read as though it could.
+    /// </remarks>
+    private async Task<SubmissionEventResult> AppendEventAsync(
+        long profileId,
+        long submissionId,
+        SubmissionEvent submissionEvent,
+        string idempotencyKey,
+        PipelineSettings settings,
+        CancellationToken ct)
+    {
         // AsTracking, explicitly, because this row is about to be mutated. It reads as
         // redundant against EF's default and is not: the API host set NoTracking globally on
         // the argument that it never wrote to SQL, and under that a read-then-mutate saves
@@ -820,7 +1031,7 @@ public sealed class SubmissionRepository(JobsDbContext db)
             return SubmissionEventResult.AlreadyRecorded;
         }
 
-        if (await DailyCapReachedAsync(profileId, submissionEvent, ct))
+        if (await DailyCapReachedAsync(profileId, submissionEvent, settings, ct))
         {
             return SubmissionEventResult.DailyLimitReached;
         }
@@ -987,11 +1198,72 @@ public sealed class SubmissionRepository(JobsDbContext db)
     }
 
     /// <summary>
+    /// What this candidate's pipeline is configured to do, or the shipped defaults where that
+    /// cannot be read at all.
+    /// </summary>
+    /// <remarks>
+    /// <b>Two of the nine settings are read here and the other seven are not.</b>
+    /// <c>PipelineSettings.DailySendCap</c> is the bound this class enforces and
+    /// <c>PipelineSettings.ChaseAfterDays</c> is the window it folds against; the judgement and
+    /// drafting levers belong to the nightly passes and nothing on this path reads them. The
+    /// whole record comes back because that is what the repository answers, not because anything
+    /// here is entitled to the rest of it.
+    ///
+    /// <b>A missing settings row is already the defaults, so the only failure this can have is a
+    /// missing table - and it degrades rather than throwing.</b> <c>deploy.yml</c> skips
+    /// migrations on an ordinary push, which is written down under "seed before reparsing" and
+    /// has already cost a run: a build that knows about a table reaches production before the
+    /// table does. On this path a throw would be the worst outcome the whole pipeline has -
+    /// <see cref="AddEventAsync"/> runs <i>after</i> a browser has sent somebody's application,
+    /// so an exception here produces an application that exists in the world and cannot be
+    /// recorded, and every later decision reads the log rather than the world. And it would buy
+    /// nothing: where the table is absent nobody can have configured anything, so
+    /// <see cref="PipelineSettings.Default"/> is not a guess at the candidate's cap, it is
+    /// provably the candidate's cap. <c>MatchSweepFunction.SettingsForAsync</c> makes the same
+    /// decision against the same hazard.
+    ///
+    /// <b>The catch cannot turn a broken database into a false success.</b> Every caller goes on
+    /// to count, insert or project through the same context, so a connection that is genuinely
+    /// down fails on the next statement rather than quietly enforcing twenty-five. What this
+    /// swallows is one query's worth of "that table is not there yet".
+    ///
+    /// <b>Cancellation is rethrown</b>, because a cancelled request is not a deployment in which
+    /// nobody configured anything, and swallowing it would make a client's disconnect look like a
+    /// candidate on the defaults.
+    /// </remarks>
+    private async Task<PipelineSettings> SettingsForAsync(long profileId, CancellationToken ct)
+    {
+        try
+        {
+            // GetForProfileAsync rather than GetAsync: the caller resolved this profile id from
+            // a subject id one layer up, exactly as the submission rows themselves were, and that
+            // is the named exception this method is permitted under. Nothing here accepts a
+            // profile id from a route or from a model's argument, so there is no path by which
+            // one candidate's cap reaches another's log.
+            return await _pipelineSettings.GetForProfileAsync(profileId, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger?.LogWarning(
+                ex,
+                "Pipeline settings could not be read for profile {ProfileId}, so this call runs "
+                + "on the shipped defaults - a daily send cap of {DailySendCap} and a chase "
+                + "window of {ChaseAfterDays} days, which is what a candidate who has configured "
+                + "nothing runs. Nothing else about the submission is affected.",
+                profileId,
+                PipelineSettings.Default.DailySendCap,
+                PipelineSettings.Default.ChaseAfterDays);
+
+            return PipelineSettings.Default;
+        }
+    }
+
+    /// <summary>
     /// Whether this event is a claim of sending that the day has no room left for.
     /// </summary>
     /// <remarks>
     /// <b>One function, so the two write paths cannot come to enforce two different caps.</b>
-    /// <see cref="AddEventAsync"/> and <see cref="CreateWithEventAsync"/> both ask this before
+    /// <see cref="AppendEventAsync"/> and <see cref="CreateWithEventAsync"/> both ask this before
     /// they insert, and each would otherwise carry a copy of the same three facts: that the bound
     /// is on <c>Submitted</c> alone, that the day is the event's own, and where the count comes
     /// from.
@@ -999,12 +1271,33 @@ public sealed class SubmissionRepository(JobsDbContext db)
     /// <b>It bounds <c>Submitted</c> alone.</b> Recording that a hundred applications exist is
     /// fine - somebody may be importing a history - and claiming a hundred were sent today is
     /// not.
+    ///
+    /// <b>The cap is handed in rather than read, and it is the candidate's own.</b>
+    /// <c>PipelineSettings.DailySendCap</c> replaces the constant this comparison used to name,
+    /// and defaults to it, so an unconfigured candidate is refused at the same event as before.
+    /// Taking it as an argument is what keeps a call to one settings read: this is asked on the
+    /// path where the caller has already resolved them for the row it is about to answer with.
+    ///
+    /// <b>Zero refuses every <c>Submitted</c> event, and that is a setting rather than an
+    /// accident.</b> It is the pause switch, and it reads correctly by arithmetic - a count of
+    /// none is not below a cap of none - so no special case exists for it. The count is still
+    /// made in that state, which costs one query to keep one code path.
+    ///
+    /// <b>A negative cap cannot be stored and would refuse rather than admit if it were.</b>
+    /// <c>PipelineSettingsValidation</c> floors this setting at zero and the endpoint refuses
+    /// below it; a number that reached the table by some other route would make this comparison
+    /// true for every event, which is the safe direction - and <see cref="GetQuotaAsync"/> throws
+    /// on it outright, because <c>SubmissionQuota.For</c> guards a negative cap rather than
+    /// letting <c>Remaining</c>'s floor swallow it into an ordinary-looking "the day is spent".
     /// </remarks>
     private async Task<bool> DailyCapReachedAsync(
-        long profileId, SubmissionEvent submissionEvent, CancellationToken ct)
+        long profileId,
+        SubmissionEvent submissionEvent,
+        PipelineSettings settings,
+        CancellationToken ct)
         => submissionEvent.Type is SubmissionEventType.Submitted
             && await CountSubmittedOnDayAsync(profileId, submissionEvent.AtUtc, ct)
-                >= SubmissionLimits.MaxSubmittedPerDay;
+                >= settings.DailySendCap;
 
     /// <summary>
     /// How many applications this candidate has claimed to send inside the UTC day holding an instant.

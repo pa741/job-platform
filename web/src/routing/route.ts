@@ -1,5 +1,5 @@
 /**
- * The ten pages, and what each one is called in a URL.
+ * The eleven pages, and what each one is called in a URL.
  *
  * A page id is unique across sections, so a path needs only the page and not the section it
  * sits in - `/shortlist`, not `/you/shortlist`. The section is derived, which also means
@@ -8,7 +8,7 @@
 export type PageId =
   | 'shortlist' | 'applications' | 'questions' | 'profile' | 'cvs'
   | 'briefing' | 'postings' | 'vocabulary'
-  | 'searches' | 'calls';
+  | 'searches' | 'pipeline' | 'calls';
 
 export type SectionId = 'you' | 'market' | 'system';
 
@@ -54,6 +54,11 @@ export const SECTIONS: readonly Section[] = [
     label: 'System',
     pages: [
       { id: 'searches', label: 'Searches' },
+      // Next to Searches because System is already the section for numbers a scheduled run
+      // reads rather than the browser: what gets scraped, and then what the night is allowed
+      // to spend judging and drafting it. The two levers whose effect is immediate are not
+      // here - they are on Applications, beside the figures they move.
+      { id: 'pipeline', label: 'Pipeline' },
       { id: 'calls', label: 'Model calls' },
     ],
   },
@@ -74,6 +79,7 @@ const PATHS: Record<PageId, string> = {
   postings: '/market/postings',
   vocabulary: '/market/vocabulary',
   searches: '/system/searches',
+  pipeline: '/system/pipeline',
   calls: '/system/calls',
 };
 

@@ -49,6 +49,20 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
     public DbSet<ProfileConceptEntity> ProfileConcepts => Set<ProfileConceptEntity>();
     public DbSet<ProfileMentionEntity> ProfileMentions => Set<ProfileMentionEntity>();
 
+    /// <summary>
+    /// What one candidate has chosen their pipeline should do, at most one row each.
+    /// </summary>
+    /// <remarks>
+    /// A table beside <see cref="CandidateProfiles"/> rather than columns on it, and both reasons
+    /// are on <see cref="PipelineSettingsEntity"/>: a profile save is a replace, so a preference
+    /// stored there is one an ordinary save can blank, and <c>ExtractionInputHash</c> is computed
+    /// over the profile document, so a preference on that entity is one edit away from deciding
+    /// whether a model call is bought. <b>A missing row is not a missing answer</b> - it is the
+    /// shipped defaults, which is what keeps an unconfigured deployment unchanged. See
+    /// <see cref="ConfigurePipelineSettings"/>.
+    /// </remarks>
+    public DbSet<PipelineSettingsEntity> PipelineSettings => Set<PipelineSettingsEntity>();
+
     public DbSet<ExtractionBatchEntity> ExtractionBatches => Set<ExtractionBatchEntity>();
     public DbSet<ExtractionBatchItemEntity> ExtractionBatchItems => Set<ExtractionBatchItemEntity>();
 
@@ -330,6 +344,7 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
         ConfigureFormAnswers(modelBuilder);
         ConfigureExtractionBatches(modelBuilder);
         ConfigureScraperSearches(modelBuilder);
+        ConfigurePipelineSettings(modelBuilder);
 
         modelBuilder.Entity<JobPostingSearchTerm>(entity =>
         {
@@ -716,6 +731,62 @@ public sealed class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbC
             entity.HasOne(e => e.Search)
                 .WithMany(s => s.Filters)
                 .HasForeignKey(e => e.SearchId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+    }
+
+    /// <summary>
+    /// The nine levers one candidate has chosen, at most one row each.
+    /// </summary>
+    /// <remarks>
+    /// <b>The primary key is the foreign key, which is what makes "one row per candidate" a
+    /// constraint rather than an intention.</b> A second row could only ever be a stale first, and
+    /// the key refuses it at the database rather than leaving the upsert as the only thing between
+    /// a candidate and two configurations. <c>ProfileEmbeddings</c> is keyed the same way on the
+    /// same reasoning, and it also means the set-based read the nightly passes use - every
+    /// candidate's settings in one query - lands on the key rather than on a scan.
+    ///
+    /// <b>Cascade, unlike almost everything else that points at a profile.</b> Submissions and
+    /// matches cascade from the profile too, and the reason is the same one: this row describes a
+    /// pipeline, and a preference about a pipeline that no longer exists is not history worth
+    /// keeping. There is only the one cascade path into this table, so none of the SQL Server
+    /// multiple-path arithmetic that shapes <see cref="ConfigureSubmissions"/> applies.
+    ///
+    /// <b>No column has a database default, deliberately.</b> The defaults are on
+    /// <c>PipelineSettings.Default</c> and nowhere else, because they have to equal the constants
+    /// the shipped code already runs and a second copy in the schema is a second copy free to
+    /// drift - with a migration between the two spellings rather than a diff. They would also
+    /// never be read: the upsert writes every column on every save, and the case the feature is
+    /// actually judged on is the row that does not exist at all, which no column default can
+    /// answer. That case is answered in <c>PipelineSettingsRepository.GetAsync</c>.
+    ///
+    /// <b>And no check constraint.</b> The bounds live in <c>PipelineSettingsValidation</c> and are
+    /// applied at the endpoint, where a refusal can name every problem at once and reach the person
+    /// who typed the number. A CHECK would be a third spelling of twelve bounds, it would surface
+    /// as a failed save nobody can act on rather than as a list, and moving a bound would become a
+    /// migration instead of an edit.
+    ///
+    /// <b>Nothing here is indexed beyond the key, and nothing needs to be.</b> Every read is by
+    /// profile id - one row, or a set of them by an <c>IN</c> over the same column - and there is
+    /// no query anywhere that filters on what a setting's value is. If one is ever wanted, "who
+    /// raised their send cap" is an operator's question for a console command rather than a route.
+    ///
+    /// <b>The whole row is nine numbers and two timestamps, with no string column at all</b>,
+    /// which is what makes reading every candidate's settings at the top of a nightly pass cheap
+    /// enough to do unconditionally. Only <c>DraftPostedWithinDays</c> is nullable, and that
+    /// nullability is the CLR type's rather than anything configured here - see the remarks on it
+    /// for why NULL and 0 must stay different bytes.
+    /// </remarks>
+    private static void ConfigurePipelineSettings(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<PipelineSettingsEntity>(entity =>
+        {
+            entity.ToTable("PipelineSettings");
+            entity.HasKey(e => e.ProfileId);
+
+            entity.HasOne(e => e.Profile)
+                .WithMany()
+                .HasForeignKey(e => e.ProfileId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
     }

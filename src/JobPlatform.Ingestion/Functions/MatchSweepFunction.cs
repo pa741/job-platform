@@ -2,6 +2,7 @@
 using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Matching;
 using JobPlatform.Core.Model;
+using JobPlatform.Core.Settings;
 using JobPlatform.Data.Sql;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -42,6 +43,29 @@ namespace JobPlatform.Ingestion.Functions;
 /// rule and the measurement behind it are in <c>PostingReachability</c>; it is applied by the
 /// shortlist query rather than here, because a selection applied after the draw would be a silent
 /// reduction of the budget rather than a filter.
+///
+/// <b>Four of this pass's numbers are per-candidate settings now, and this file holds none of
+/// them.</b> <c>MaxAssessments</c> (40) is <see cref="PipelineSettings.AssessmentsPerNight"/>,
+/// <c>AssessmentThreshold</c> (45) is <see cref="PipelineSettings.AssessmentThreshold"/>,
+/// <c>RecentShareNumerator</c> over <c>RecentShareDenominator</c> (two thirds) is
+/// <see cref="PipelineSettings.RecentSharePercent"/> over a hundred, and the reservation window
+/// that read <see cref="PostingAge.DailyWindowDays"/> straight is
+/// <see cref="PipelineSettings.RecentWindowDays"/> - which merely <i>defaults</i> to it, because
+/// that constant remains the system-wide definition of a recent posting that every other age
+/// filter answers to. The old names are written out here so that a search for one still lands
+/// somewhere; what is deliberately not written out is a second copy of any of the numbers. Each
+/// default lives on the record once and the argument for it moved there with it, since a constant
+/// kept alongside "for reference" is how two spellings of one decision start to drift.
+///
+/// <b>Every one of those four is a claim on the budget, which is why they were the four that could
+/// be made settings at all.</b> They decide how many pairs are drawn, what a pair must score to be
+/// eligible for the draw, and how much of the draw is held for recent postings. Nothing
+/// configurable is handed to <c>MatchScorer</c> or <c>MatchRanker</c>, and nothing here could be
+/// without changing what a match <i>means</i> rather than what a night costs: a candidate must not
+/// be able to type their way to a better score. <c>MatchRanker.FusionFloor</c> in particular is
+/// not a setting, is not read here, and is a different question from
+/// <see cref="PipelineSettings.AssessmentThreshold"/> - the two were briefly one constant on the
+/// grounds that they shared a value and that was a mistake.
 /// </remarks>
 public sealed class MatchSweepFunction(
     JobsDbContext db,
@@ -51,7 +75,12 @@ public sealed class MatchSweepFunction(
     TimeProvider time,
     ILogger<MatchSweepFunction> logger,
     ICandidacyAssessor? assessor = null,
-    ITextEmbedder? embedder = null)
+    ITextEmbedder? embedder = null,
+    // Optional and trailing, like the assessor and the embedder above it and for the same reason:
+    // a host that has not registered it - or a database whose settings table the migration has
+    // not reached yet - still sweeps, on the defaults, which is the behaviour that shipped before
+    // the table existed. See SettingsForAsync.
+    PipelineSettingsRepository? pipelineSettings = null)
 {
     /// <summary>
     /// How far back the scoring pass looks.
@@ -71,42 +100,6 @@ public sealed class MatchSweepFunction(
     private const int MaxPostings = 20_000;
 
     /// <summary>
-    /// The score a match must clear before the model is asked about it.
-    /// </summary>
-    /// <remarks>
-    /// The single most important number in this file, because it is the one that decides what
-    /// gets paid for. Deliberately not high: the arithmetic under-scores a candidate whose
-    /// relevant experience is in prose the extractor read cautiously, and the model exists
-    /// precisely to catch that. A threshold tuned to look efficient would filter out the cases
-    /// worth judging.
-    /// </remarks>
-    /// <remarks>
-    /// <b>Not <c>MatchRanker.FusionFloor</c>, and tying it to that was a mistake.</b> The two
-    /// were briefly one constant on the reasoning that "the band the model is spent on and the
-    /// band the embedding re-orders are the same band". They are not the same question. This one
-    /// asks where a judgement is worth buying, and the answer is "wherever the arithmetic might
-    /// be wrong", which is low by design. The other asks where the embedding carries signal, and
-    /// the holdout put that at 80 - so coupling them would have silently stopped the model from
-    /// ever looking at anything below 80, and with it the only source of labels that can show
-    /// whether the score works down there.
-    ///
-    /// Two constants that happened to share a value are not one constant.
-    /// </remarks>
-    private const int AssessmentThreshold = 45;
-
-    /// <summary>Ceiling on how many pairs one sweep sends to the model, per profile.</summary>
-    /// <remarks>
-    /// Briefly 90, for the run on 2026-08-28, to build an assessed set worth measuring a
-    /// verdict-aware ranking against. Back to 40, and the run is worth recording: 90 pairs went
-    /// out in nine batches of ten, four came back usable and five were discarded whole. 40 of 90
-    /// written, and nothing failed - see HANDOFF.md 4.2.
-    ///
-    /// <see cref="MeasurementAssessments"/> of these are spent on the sample rather than on the
-    /// shortlist, so the total cost of a night has not moved.
-    /// </remarks>
-    private const int MaxAssessments = 40;
-
-    /// <summary>
     /// How many of the budget go to the measurement sample instead of to the shortlist.
     /// </summary>
     /// <remarks>
@@ -124,44 +117,20 @@ public sealed class MatchSweepFunction(
     /// adverts' worth of tokens; a separate stratified pass would have paid for the profile again.
     /// Measured against the last three nights, a night is four batches of ten either way.
     ///
-    /// The cost that is real is the shortlist losing ten of its forty. That is affordable because
-    /// the shortlist is not a queue that empties - it is the top of a ranking that is re-drawn
-    /// nightly, so a row not judged tonight is judged tomorrow unless something better arrives,
-    /// in which case judging the better one first was correct.
+    /// The cost that is real is the shortlist losing ten of its forty - forty being what
+    /// <see cref="PipelineSettings.AssessmentsPerNight"/> defaults to, and a quarter of whatever
+    /// it is set to otherwise. That is affordable because the shortlist is not a queue that
+    /// empties - it is the top of a ranking that is re-drawn nightly, so a row not judged tonight
+    /// is judged tomorrow unless something better arrives, in which case judging the better one
+    /// first was correct.
+    ///
+    /// <b>Not a setting, unlike the budget it is taken out of.</b> It is a research sample rather
+    /// than a preference: it exists to answer whether the score works below the band the shortlist
+    /// ever reaches, and a candidate turning it off would remove the only evidence that could
+    /// settle that - while paying nothing for it, because these rows ride along in batches that
+    /// are being sent anyway.
     /// </remarks>
     private const int MeasurementAssessments = 10;
-
-    /// <summary>
-    /// The share of the shortlist reserved for postings that arrived in the last few days.
-    /// </summary>
-    /// <remarks>
-    /// <b>Two thirds, and it is a reservation rather than an ordering.</b> The system exists to
-    /// answer a day's postings on the day they appear: an application sent a week after the
-    /// advert went up is competing against a shortlist the employer has already drawn, so a
-    /// judgement bought a week late has bought very little. Selecting top-down by score alone
-    /// does not deliver that. The pairs above the threshold accumulate, the highest of them are
-    /// judged first whatever their age, and a corpus with a backlog spends every night on the
-    /// backlog - which is exactly the state a first sweep over forty-five days of postings
-    /// starts in.
-    ///
-    /// <b>Ordering by age instead would be worse, and it is the obvious thing to reach for.</b>
-    /// Age says nothing about whether the candidate fits: a fresh posting scoring 46 is not a
-    /// better use of a judgement than a three-day-old one scoring 97, and sorting by age puts it
-    /// first anyway. Worse, it is absorbing - once the daily arrivals exceed the budget, nothing
-    /// older is ever judged again, and the rows above the threshold that were not reached the
-    /// first night are not reached on any night after it.
-    ///
-    /// So the budget splits, the way it already splits for the measurement sample. The recent
-    /// draw is ordered by score like every other, it is capped at this share, and whatever it
-    /// cannot fill goes back to the top-down draw over the whole corpus - so a quiet day costs
-    /// nothing and a backlog still drains at the remaining third a night. Neither the score nor
-    /// the ranking reads a date anywhere: recency is a claim on what gets judged, never on what
-    /// the judgement is.
-    /// </remarks>
-    private const int RecentShareNumerator = 2;
-
-    /// <summary>The denominator of <see cref="RecentShareNumerator"/>.</summary>
-    private const int RecentShareDenominator = 3;
 
     /// <summary>
     /// The bands the measurement sample is drawn from, below the shortlist's usual reach.
@@ -169,8 +138,20 @@ public sealed class MatchSweepFunction(
     /// <remarks>
     /// Stops at 89 deliberately: the top band is what the shortlist already covers every night, so
     /// spending measurement budget there buys a fourth copy of the only evidence the system has.
-    /// The floor matches <see cref="AssessmentThreshold"/> - below it no pair is a candidate for
-    /// judgement at all, so a band down there would return nothing and quietly waste its slot.
+    /// The floor is 45 because that is what
+    /// <see cref="PipelineSettings.AssessmentThreshold"/> defaults to, and below a candidate's
+    /// threshold no pair is a candidate for judgement at all - so a band under it returns nothing
+    /// and quietly wastes its slot, which is why a band entirely below the floor in force is
+    /// skipped rather than queried.
+    ///
+    /// <b>The bands are fixed while the threshold is not, and that is a known consequence rather
+    /// than an oversight.</b> A candidate who lowers their threshold below 45 opens a band this
+    /// sample does not cover: the shortlist will judge down there and the stratified sample will
+    /// not, so the labels stay a statement about 45 and up. That is a gap in the evidence rather
+    /// than a fault in the run, and it is worth knowing before somebody reads those labels as
+    /// describing the whole range. Widening the bands to follow a setting would make the sample
+    /// mean something different for every candidate, which is the one thing a measurement series
+    /// cannot survive.
     /// </remarks>
     private static readonly (int Min, int Max)[] MeasurementBands =
         [(45, 59), (60, 69), (70, 79), (80, 89)];
@@ -198,6 +179,11 @@ public sealed class MatchSweepFunction(
     /// memory, it finishes in seconds for the whole corpus, and stopping it half way would
     /// leave a profile ranked against an arbitrary subset - which is worse than not ranking
     /// it at all.
+    ///
+    /// <b>A ceiling over <see cref="PipelineSettings.AssessmentsPerNight"/> and never a budget of
+    /// its own</b> - see <see cref="BudgetFor"/>. It is deliberately not a setting: the number is
+    /// the gateway's timeout, so it is a fact about the platform rather than a preference, and
+    /// nobody should be able to type their way past it into a 504 that carries no answer back.
     /// </remarks>
     private const int MaxAssessmentsPerRequest = 10;
 
@@ -207,7 +193,16 @@ public sealed class MatchSweepFunction(
         // have drained, and before anybody in the UK opens the dashboard.
         [TimerTrigger("0 30 3 * * *")] TimerInfo timer,
         CancellationToken ct)
-        => await SweepAsync(profileId: null, MaxAssessments, AssessmentThreshold, maxScore: null, ct);
+        // No ceiling and no floor of its own. The timer has minutes rather than the HTTP
+        // trigger's ~230 seconds, so what a night buys is entirely what each candidate asked for:
+        // their AssessmentsPerNight, their AssessmentThreshold, their reservation and their
+        // window, resolved per profile inside the loop.
+        => await SweepAsync(
+            profileId: null,
+            assessmentCeiling: null,
+            minScore: null,
+            maxScore: null,
+            ct);
 
     /// <summary>
     /// The same sweep, on demand.
@@ -232,9 +227,16 @@ public sealed class MatchSweepFunction(
 
         var summary = await SweepAsync(
             body?.ProfileId,
-            MaxAssessmentsPerRequest,
-            Math.Max(body?.MinScore ?? AssessmentThreshold, 0),
-            body?.MaxScore,
+            // A ceiling over what each candidate configured rather than a budget of its own, so a
+            // profile whose AssessmentsPerNight is lower than this still buys only what it asked
+            // for - and one that has switched the judgement pass off stays off. The number is the
+            // gateway's, not a preference.
+            assessmentCeiling: MaxAssessmentsPerRequest,
+            // Passed through unresolved, so that "the caller said nothing" reaches the place that
+            // knows this candidate's own threshold. Substituting a floor here would sweep at a
+            // number nobody configured.
+            minScore: body?.MinScore,
+            maxScore: body?.MaxScore,
             ct);
 
         return new OkObjectResult(summary);
@@ -242,7 +244,8 @@ public sealed class MatchSweepFunction(
 
     /// <param name="ProfileId">Restrict to one profile. Null sweeps every profile.</param>
     /// <param name="MinScore">
-    /// Floor on which pairs the model may be spent on. Defaults to the standing threshold.
+    /// Floor on which pairs the model may be spent on. Defaults to this candidate's own
+    /// <see cref="PipelineSettings.AssessmentThreshold"/>, which is what the timer sweeps at.
     /// </param>
     /// <param name="MaxScore">
     /// Ceiling, for drawing a sample from one score band instead of off the top.
@@ -258,8 +261,20 @@ public sealed class MatchSweepFunction(
     /// </remarks>
     public sealed record SweepRequest(long? ProfileId, int? MinScore = null, int? MaxScore = null);
 
+    /// <param name="assessmentCeiling">
+    /// An upper bound the caller imposes on every profile's own budget, or null for none. The HTTP
+    /// route passes one because the gateway does; the timer passes none.
+    /// </param>
+    /// <param name="minScore">
+    /// A floor the caller asked for explicitly, or null to sweep at each candidate's own
+    /// threshold.
+    /// </param>
     private async Task<SweepSummary> SweepAsync(
-        long? profileId, int assessmentLimit, int minScore, int? maxScore, CancellationToken ct)
+        long? profileId,
+        int? assessmentCeiling,
+        int? minScore,
+        int? maxScore,
+        CancellationToken ct)
     {
         var now = time.GetUtcNow();
         var since = now.AddDays(-LookbackDays);
@@ -273,6 +288,13 @@ public sealed class MatchSweepFunction(
             logger.LogInformation("Match sweep: no profiles to score.");
             return new SweepSummary(0, 0, 0, 0, 0, 0);
         }
+
+        // Once for the whole sweep, like the two reads below it and for the same reason with a
+        // sharper edge: this one would otherwise sit at the very top of the per-profile loop,
+        // spending a wakeup on a database billed by wall-clock time before any of the work that
+        // would have justified being awake. One query for every candidate costs what one query
+        // for the first candidate costs.
+        var configured = await SettingsForAsync(profileIds, ct);
 
         // Fetched once for the whole sweep. Every profile is scored against the same slice, and
         // re-reading tens of thousands of rows per profile would turn a nightly job into the
@@ -294,8 +316,18 @@ public sealed class MatchSweepFunction(
 
         foreach (var id in profileIds)
         {
+            // Scoring is unaffected by any of this, and that is the invariant the whole file is
+            // built around: it runs for every profile at the same cost whatever anybody
+            // configured, because a setting may decide what is judged and never what a match is.
             scored += await ScoreAsync(id, postings, vectors, now, ct);
-            assessed += await AssessAsync(id, assessmentLimit, minScore, maxScore, now, ct);
+
+            // Resolved per profile rather than per run. The budget is per candidate on purpose -
+            // a second profile must not go unjudged because the first filled the batch - and
+            // nothing bounds the sum across candidates, which is the same hole
+            // ScraperSearchValidation writes down for searches.
+            var budget = BudgetFor(configured[id], assessmentCeiling, minScore);
+
+            assessed += await AssessAsync(id, budget, maxScore, now, ct);
         }
 
         // Requested is reported beside written, always, because the two diverging is the whole
@@ -325,6 +357,139 @@ public sealed class MatchSweepFunction(
             assessed.Requested,
             assessed.Discarded,
             assessed.Unreachable);
+    }
+
+    /// <summary>
+    /// What one profile's judgement pass may draw, once this candidate's settings and the caller's
+    /// own bounds have been resolved against each other.
+    /// </summary>
+    /// <param name="Assessments">Pairs this profile may send to the model on this run.</param>
+    /// <param name="MinScore">The score a pair must clear to be a candidate for the draw.</param>
+    /// <param name="RecentSharePercent">
+    /// The percentage of the shortlist held for postings inside
+    /// <see cref="RecentWindowDays"/>.
+    /// </param>
+    /// <param name="RecentWindowDays">
+    /// How far back that reservation counts as recent. <b>Not
+    /// <see cref="PostingAge.DailyWindowDays"/></b>, which stays the system-wide age definition
+    /// every other filter answers to; this one merely defaults to it.
+    /// </param>
+    /// <remarks>
+    /// <b>Four ints travelling as one named value rather than as four positional arguments.</b>
+    /// <see cref="PipelineSettings"/> makes that argument about nine of them and it holds at four:
+    /// these pass through two signatures that already carry a limit, a floor and a ceiling, every
+    /// one of them a small non-negative int, so a transposed pair would compile, pass review and
+    /// quietly reconfigure somebody's night. It is constructed in exactly one place, with every
+    /// argument named.
+    ///
+    /// <b>Every member is a claim on the budget and no member could be a claim on the match.</b>
+    /// Nothing on this type is passed to <c>MatchScorer</c> or <c>MatchRanker</c> - it says how
+    /// many pairs are drawn, what a pair must score to be eligible for the draw, and how much of
+    /// the draw is held for recent postings, and there is nowhere in it to put a number that would
+    /// move a score. If a fifth member ever seems to belong here, that is the test it has to pass.
+    /// </remarks>
+    private readonly record struct SweepBudget(
+        int Assessments, int MinScore, int RecentSharePercent, int RecentWindowDays);
+
+    /// <summary>
+    /// One candidate's settings, bounded by whatever the caller is entitled to impose on top of
+    /// them.
+    /// </summary>
+    /// <remarks>
+    /// <b>The caller's ceiling is a ceiling and never a floor.</b>
+    /// <see cref="MaxAssessmentsPerRequest"/> is the gateway's ~230 seconds expressed as a row
+    /// count, so it can only ever lower what the candidate configured. The consequence is
+    /// deliberate: a candidate whose <see cref="PipelineSettings.AssessmentsPerNight"/> is zero
+    /// has switched the judgement pass off, and the on-demand route must not be a way round
+    /// somebody's own off switch - the same reasoning that keeps the daily send cap enforced in
+    /// one place rather than at each call site.
+    ///
+    /// <b>An explicit floor from the caller replaces the setting rather than bounding it.</b> That
+    /// route exists to draw a score band by hand for a stratified sample, so its
+    /// <c>MinScore</c> is somebody deliberately asking about pairs the standing threshold refuses;
+    /// taking the larger of the two would silently answer about a different band from the one
+    /// requested, which is the one thing a sample cannot survive. Absent, this candidate's own
+    /// <see cref="PipelineSettings.AssessmentThreshold"/> stands, so the route sweeps at the same
+    /// floor the timer would.
+    ///
+    /// <b>Floored at zero here rather than validated, and the two are different jobs.</b>
+    /// <see cref="PipelineSettingsValidation"/> owns the bounds and refuses a negative before it
+    /// can be stored, with a message reaching the person who typed it; nothing revalidates a row
+    /// on the way out, and this is an unattended pass at half past three in the morning, so a
+    /// value that got past validation somehow has to read as "buy nothing" rather than throw. The
+    /// other two members are left exactly as stored on purpose: a share above a hundred cannot
+    /// reserve more than the shortlist, because the merge trims to the budget, and a window at or
+    /// below zero goes through <see cref="PostingAge.Cutoff"/>, which clamps it and reads it as
+    /// "since now" - so both degrade into the top-down draw rather than into an exception.
+    /// </remarks>
+    private static SweepBudget BudgetFor(
+        PipelineSettings settings, int? assessmentCeiling, int? minScore)
+    {
+        var assessments = Math.Max(settings.AssessmentsPerNight, 0);
+
+        return new SweepBudget(
+            Assessments: assessmentCeiling is { } ceiling
+                ? Math.Min(assessments, Math.Max(ceiling, 0))
+                : assessments,
+            MinScore: Math.Max(minScore ?? settings.AssessmentThreshold, 0),
+            RecentSharePercent: settings.RecentSharePercent,
+            RecentWindowDays: settings.RecentWindowDays);
+    }
+
+    /// <summary>
+    /// Every profile's settings in one query, and <see cref="PipelineSettings.Default"/> for all of
+    /// them where that query cannot be made at all.
+    /// </summary>
+    /// <remarks>
+    /// <b>Missing settings degrade rather than fail, which is how every other dependency in this
+    /// host behaves.</b> The sweep already has three degraded modes - no AI provider still scores,
+    /// no embedder still ranks, no profile vector still writes matches - and this is the weakest
+    /// dependency of the four, because the answer when it is absent is precisely the behaviour
+    /// that shipped before the table existed. A candidate running on
+    /// <see cref="PipelineSettings.Default"/> for one night is a candidate running on the
+    /// constants this file used to hold.
+    ///
+    /// <b>The catch is not defensive programming; it is a state this repository is documented to
+    /// deploy in.</b> <c>deploy.yml</c> skips migrations on an ordinary push, so a build that
+    /// knows about a table reaches production before the table does - the same ordering hazard
+    /// written down under "seed before reparsing", and one that has already cost a run here. A
+    /// sweep that threw on it would take the whole night's scoring down to avoid running on the
+    /// numbers it would have run on anyway, and it would do so at 03:30 with nobody watching.
+    ///
+    /// <b>Warning rather than error, and once per sweep rather than once per profile.</b> What is
+    /// lost is configuration, not data: every pair is still scored, ranked and written, the
+    /// judgement budget is still spent, and tomorrow's sweep reads the settings again from
+    /// scratch.
+    /// </remarks>
+    private async Task<IReadOnlyDictionary<long, PipelineSettings>> SettingsForAsync(
+        IReadOnlyList<long> profileIds, CancellationToken ct)
+    {
+        if (pipelineSettings is null)
+        {
+            return Defaults(profileIds);
+        }
+
+        try
+        {
+            // Every requested id is present in the answer, mapped to the defaults where no row
+            // exists - so the loop below never has to decide what a miss means, which is the
+            // decision the repository exists to make once.
+            return await pipelineSettings.GetForProfilesAsync(profileIds, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(
+                ex,
+                "Match sweep: pipeline settings could not be read, so all {Profiles} profile(s) "
+                + "run this sweep on the shipped defaults - which is what a candidate who has "
+                + "configured nothing runs. Scoring and ranking are unaffected.",
+                profileIds.Count);
+
+            return Defaults(profileIds);
+        }
+
+        static Dictionary<long, PipelineSettings> Defaults(IReadOnlyList<long> ids)
+            => ids.Distinct().ToDictionary(id => id, _ => PipelineSettings.Default);
     }
 
     private async Task<int> ScoreAsync(
@@ -513,32 +678,67 @@ public sealed class MatchSweepFunction(
     /// reserving part of it for recent postings would do the same thing one dimension over.
     ///
     /// Otherwise the budget splits twice, and the two splits are independent: a reserved share for
-    /// postings inside <see cref="PostingAge.DailyWindowDays"/>, so a day's arrivals are judged on
-    /// the day they arrive rather than behind a backlog, and a reserved share for the measurement
-    /// sample. Both merges are in <see cref="StratifiedShortlist"/> rather than here, because
-    /// interleaving with a deduplication is the part that is easy to get subtly wrong and it is
-    /// only assertable exactly while it needs nothing but lists.
+    /// postings inside <see cref="SweepBudget.RecentWindowDays"/>, so a day's arrivals are judged
+    /// on the day they arrive rather than behind a backlog, and a reserved share for the
+    /// measurement sample. Both merges are in <see cref="StratifiedShortlist"/> rather than here,
+    /// because interleaving with a deduplication is the part that is easy to get subtly wrong and
+    /// it is only assertable exactly while it needs nothing but lists.
+    ///
+    /// <b>The reservation is a reservation and not an ordering, which is the whole design and the
+    /// part a setting must not be allowed to erode.</b> The system exists to answer a day's
+    /// postings on the day they appear: an application sent a week after the advert went up
+    /// competes against a shortlist the employer has already drawn. Selecting top-down by score
+    /// alone does not deliver that - pairs above the threshold accumulate, the highest are judged
+    /// first whatever their age, and a corpus with a backlog spends every night on the backlog,
+    /// which is exactly the state a first sweep over forty-five days of postings starts in.
+    /// Ordering by age instead is the obvious thing to reach for and is worse: age says nothing
+    /// about whether the candidate fits, and it is absorbing - once daily arrivals exceed the
+    /// budget, nothing older is judged again. So the budget splits, both draws are ordered by
+    /// score, and whatever the reservation cannot fill returns to the top-down draw over the whole
+    /// corpus: a quiet day costs nothing and a backlog still drains at the remaining share a
+    /// night. The window decides which rows are <i>eligible</i> for the reserved share and never
+    /// which of them is best, so widening it promotes nothing and is not a way past the threshold.
     /// </remarks>
     private async Task<IReadOnlyList<CandidacyRequest>> BuildShortlistAsync(
-        long profileId, int limit, int minScore, int? maxScore, DateTimeOffset now, CancellationToken ct)
+        long profileId, SweepBudget budget, int? maxScore, DateTimeOffset now, CancellationToken ct)
     {
+        var limit = budget.Assessments;
+        var minScore = budget.MinScore;
+
         if (maxScore is not null)
         {
             return await matches.GetUnassessedAsync(profileId, minScore, limit, maxScore, ct: ct);
         }
 
-        // Never more than a quarter of the budget. The nightly forty is unaffected - a quarter of
-        // it is exactly the ten this wants - but the HTTP route's ten drops to two, and that
+        // Never more than a quarter of the budget, whatever the budget now is. At the default
+        // forty the sample is unaffected - a quarter of it is exactly the ten this wants - and a
+        // candidate who lowers their budget lowers both halves of it, which is the honest
+        // arithmetic: the sample is a share of what a night buys and not a fixed tax on it. The
+        // HTTP route's ten drops to two by the same rule, and that
         // matters: that route exists for somebody who has just filled in their profile and has
         // nothing to look at until tomorrow morning. Spending half of their one call on a
         // measurement sample would be taking the shortlist away from the only person it was for.
         var measurement = Math.Min(MeasurementAssessments, limit / 4);
 
         var shortlistBudget = limit - measurement;
-        var recentBudget = shortlistBudget * RecentShareNumerator / RecentShareDenominator;
+
+        // The percent spelling of the two thirds this file used to hold as a numerator over a
+        // denominator, and the arithmetic keeps the same shape: integer division, so it floors.
+        // Behaviour-preserving rather than identical - `budget * 67 / 100` and `budget * 2 / 3`
+        // agree for every shortlist budget from 0 to 99, and first disagree by a single row at a
+        // hundred, which needs AssessmentsPerNight at 110 against the shipped forty. Quote it that
+        // way round rather than claiming the two spellings are the same.
+        var recentBudget = shortlistBudget * budget.RecentSharePercent / 100;
 
         // Ordered by score inside the window, exactly like the draw below it. The window decides
         // which rows are eligible for the reserved share; it never decides which of them is best.
+        //
+        // The window is this candidate's own and not PostingAge.DailyWindowDays, which stays
+        // exactly where it is as the system-wide definition of a recent posting - the shortlist,
+        // the corpus search and the apply queue all still answer to it. This one defaults to it
+        // and is free to diverge afterwards, because "how far back may a posting be and still
+        // have a claim on tonight's reserved share" is a different question from "what counts as
+        // posted about twenty-four hours ago".
         var recent = recentBudget <= 0
             ? []
             : await matches.GetUnassessedAsync(
@@ -546,7 +746,7 @@ public sealed class MatchSweepFunction(
                 minScore,
                 recentBudget,
                 maximumScore: null,
-                PostingAge.Cutoff(now, PostingAge.DailyWindowDays),
+                PostingAge.Cutoff(now, budget.RecentWindowDays),
                 ct);
 
         // The whole corpus, unbounded by date, and asked for the whole shortlist rather than for
@@ -588,8 +788,7 @@ public sealed class MatchSweepFunction(
 
     private async Task<AssessmentTally> AssessAsync(
         long profileId,
-        int assessmentLimit,
-        int minScore,
+        SweepBudget budget,
         int? maxScore,
         DateTimeOffset now,
         CancellationToken ct)
@@ -599,11 +798,24 @@ public sealed class MatchSweepFunction(
             return AssessmentTally.Empty;
         }
 
-        // Bounded by the caller's budget rather than by the nightly ceiling. Anything left
-        // over stays unassessed and is picked up next time - the shortlist query selects on
-        // exactly that, so a partial pass resumes rather than restarting.
-        var shortlist = await BuildShortlistAsync(
-            profileId, assessmentLimit, minScore, maxScore, now, ct);
+        // Zero is a real setting and it is the off switch, so this profile is answered before any
+        // query is issued for it. The scoring pass above has already run and written its matches -
+        // what is switched off is the buying of verdicts, and nothing else.
+        //
+        // Answered before the unreachable count rather than after it, unlike the empty shortlist
+        // below. That count exists to explain a night that drew nothing it wanted to judge; a
+        // night that was told to judge nothing is already explained, and counting anyway would
+        // spend a COUNT per profile on a database billed by wall-clock time to describe a draw
+        // that was never going to happen.
+        if (budget.Assessments <= 0)
+        {
+            return AssessmentTally.Empty;
+        }
+
+        // Bounded by this candidate's own budget, and by the caller's ceiling where there is one.
+        // Anything left over stays unassessed and is picked up next time - the shortlist query
+        // selects on exactly that, so a partial pass resumes rather than restarting.
+        var shortlist = await BuildShortlistAsync(profileId, budget, maxScore, now, ct);
 
         // One count per profile per sweep, taken over the same eligible set the top-down draw
         // runs over, and taken here rather than inside the draw because it is a measurement of
@@ -612,7 +824,7 @@ public sealed class MatchSweepFunction(
         // checkable instead of remembered. Unbounded by the recent window on purpose: the window
         // is a reservation inside the budget, and this is asking how far the rule reaches.
         var unreachable = new AssessmentTally(
-            0, 0, 0, await matches.CountUnreachableAsync(profileId, minScore, maxScore, ct: ct));
+            0, 0, 0, await matches.CountUnreachableAsync(profileId, budget.MinScore, maxScore, ct: ct));
 
         // Before the empty check rather than after it, because the empty shortlist is the case
         // the count exists to explain: a night that drew nothing because everything left was

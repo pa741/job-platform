@@ -1,10 +1,11 @@
 ﻿import { useCallback, useEffect, useState } from 'react';
 import { ApiError, type JobPlatformApi } from '../api/client';
 import type {
-  ApplicationDetail, ApplicationSummary, OpenQuestion, Submission, SubmissionEvent,
+  ApplicationDetail, ApplicationSummary, OpenQuestion, PipelineSettingsRequest,
+  PipelineSettingsResponse, Submission, SubmissionEvent,
 } from '../api/types';
 import { ChosenCv } from '../components/ChosenCv';
-import { ErrorNote } from '../components/Primitives';
+import { Card, ErrorNote, Field } from '../components/Primitives';
 import { useApiResource } from '../components/useApiResource';
 import { WakingRegion, LoadingRegion } from '../components/WakingRegion';
 import type { PageId } from '../routing/route';
@@ -110,6 +111,22 @@ type PipelineRow = Submission & ParkColumns;
 type LoggedEvent = SubmissionEvent & { evidence?: Evidence | null };
 
 /**
+ * This candidate's nine levers, or `null` where the read did not answer.
+ *
+ * Two of the nine are edited here and the other seven are never shown, but all nine are held,
+ * because a save is a whole-record replace and the seven have to travel back untouched — see
+ * `SendingLimits`.
+ *
+ * **Null is a third state and never a licence to substitute the shipped 25 and 14.** The route
+ * has no 404 and never answers null itself, so the only way this is null is a failure, and a
+ * failure is exactly when a printed number would be somebody else's: a page that says "the cap
+ * is 25" to a candidate who set it to 3 has invented the figure. Every row's own `isStale` is
+ * still the server's answer under whatever window is really stored, so nothing on this page
+ * becomes wrong when this is null — only the words that would have named the window.
+ */
+type Levers = PipelineSettingsResponse | null;
+
+/**
  * When a parked posting comes back — mirrored from `ParkReasonPolicy.Requeue`, member for member.
  *
  * **This table and Core's must agree, and nothing in either build enforces it.** Core decides
@@ -178,7 +195,7 @@ const PARK: Record<string, { stamp: string; label: string; hint: string }> = {
   OutOfQuota: {
     stamp: 'cap spent',
     label: "the day's cap was already spent",
-    hint: 'The cap resets at midnight UTC. The vacancy was never the problem — this is the one reason that is about this system rather than about the posting.',
+    hint: 'The cap resets at midnight UTC, and it is yours to set under Sending limits at the top of this page. The vacancy was never the problem — this is the one reason that is about this system rather than about the posting.',
   },
 };
 
@@ -310,6 +327,85 @@ function shortDate(iso: string): string {
 }
 
 /**
+ * A configured day count, in the words this page has always used for it.
+ *
+ * Fourteen reads as "a fortnight" because that is the sentence these rows carried for as long as
+ * fourteen was the only value they could carry, and fourteen is still the default — so a
+ * candidate who configures nothing reads exactly the page they read before this control existed,
+ * which is the property the whole settings feature is judged on. Anything else reads as a plain
+ * figure: "a fortnight" against a chase window somebody set to thirty is a word that is now
+ * wrong, and a wrong word is worse than an unlovely number.
+ */
+function inDays(days: number): string {
+  if (days === 1) return 'a day';
+  if (days === 7) return 'a week';
+  if (days === 14) return 'a fortnight';
+  return `${days} days`;
+}
+
+/**
+ * How long silence has to last before a row reads as quiet, named where it can be.
+ *
+ * The unreadable arm names the window rather than guessing at it. `isStale` came off the server
+ * and is right either way, so the sentence still says the true thing about this row — it just
+ * cannot say how many days that took.
+ */
+function chaseWindow(settings: Levers): string {
+  return settings ? inDays(settings.chaseAfterDays) : 'the chase window';
+}
+
+/**
+ * A typed box as a number, or null where it is not one.
+ *
+ * **`Number('')` is `0`, and zero is a legal value on the send cap** — it pauses the loop. So an
+ * empty box transcribed rather than refused would save "stop sending" without anybody having
+ * typed a zero, and it is the one lever whose zero has no visible symptom until an unattended
+ * run parks everything it meets as cap spent. The chase window floors at 1 and the server
+ * refuses a zero out loud; the cap would take it silently, which is why this guard is here
+ * rather than left to the refusal.
+ *
+ * Whole numbers only. Both levers are counts — of applications and of days — and neither is a
+ * fraction of anything, so `14.5` is a typing accident rather than a value.
+ */
+function wholeNumber(value: string): number | null {
+  const trimmed = value.trim();
+  if (trimmed === '') return null;
+
+  const parsed = Number(trimmed);
+  return Number.isInteger(parsed) ? parsed : null;
+}
+
+/**
+ * The nine as a save sends them: everything the read answered except the one thing it answers
+ * that a save has no use for.
+ *
+ * `updatedUtc` is the server's record of when these were last stored and is not a lever; sending
+ * it back would be this page asserting a timestamp the repository is about to write from its own
+ * `TimeProvider`.
+ */
+function toRequest(settings: PipelineSettingsResponse): PipelineSettingsRequest {
+  const { updatedUtc, ...levers } = settings;
+  return levers;
+}
+
+/**
+ * The two numbers, and whether anybody chose them.
+ *
+ * `updatedUtc` is the whole of the "has this been configured" answer — there is deliberately no
+ * boolean beside it — and null does not mean the read came back empty: an unconfigured candidate
+ * runs on the shipped constants, so the numbers above it are real either way and only their
+ * authorship differs.
+ */
+function limitsSummary(settings: PipelineSettingsResponse): string {
+  const authorship = settings.updatedUtc
+    ? `Last saved on ${shortDate(settings.updatedUtc)}.`
+    : 'Never configured — these are the numbers this pipeline has always run on.';
+
+  return `At most ${settings.dailySendCap} applications recorded as sent in a day, and an `
+    + `application reads as gone quiet after ${inDays(settings.chaseAfterDays)}. ${authorship}`;
+}
+
+/**
  * What was written, what was actually sent, and what was put down without being sent.
  *
  * Three lists that belong together. `GET /applications` returns the generated documents and
@@ -340,9 +436,16 @@ export function Applications({ api, go }: { api: JobPlatformApi; go: (page: Page
       // rather than taking the applications down with it: a MissingAnswer park still says it is
       // held on a question and still points at the queue, it just cannot quote the wording.
       api.openQuestions().catch(() => ({ items: [] as OpenQuestion[] })),
+
+      // The two levers this page carries, degrading on their own for a sharper version of the
+      // same reason: this route is newer than the page, a bundle can meet a server that has not
+      // shipped it, and the park columns above already record what that trade is worth — a
+      // dashboard that throws on a field it asked for early is worse than one that shows
+      // nothing. Nothing is substituted in its place; see `Levers`.
+      api.pipelineSettings().catch((): PipelineSettingsResponse | null => null),
     ])
-      .then(([s, a, q]) => ({
-        submissions: s.items as PipelineRow[], drafts: a.items, questions: q.items,
+      .then(([s, a, q, settings]) => ({
+        submissions: s.items as PipelineRow[], drafts: a.items, questions: q.items, settings,
       })),
     [api],
   );
@@ -357,14 +460,14 @@ export function Applications({ api, go }: { api: JobPlatformApi; go: (page: Page
   }
   if (data.state.status === 'loading') return <LoadingRegion what="your applications" />;
 
-  const { submissions, drafts, questions } = data.state.data;
+  const { submissions, drafts, questions, settings } = data.state.data;
 
   const parked = submissions.filter(isParked);
   const sent = submissions.filter(isSent);
 
   // Only a sent application can have gone quiet. Staleness is measured from the row's creation
-  // where there are no events, so a park left standing a fortnight reads as stale - which would
-  // put "no employer has replied" against a posting no employer was ever written to.
+  // where there are no events, so a park left standing past the chase window reads as stale -
+  // which would put "no employer has replied" against a posting no employer was ever written to.
   const quiet = sent.filter((s) => s.isStale);
 
   // A draft for a posting already recorded as sent is history, not a to-do. A parked posting's
@@ -391,11 +494,13 @@ export function Applications({ api, go }: { api: JobPlatformApi; go: (page: Page
         applying: it is not an application sent, and it is not counted as one.
       </p>
 
+      <SendingLimits api={api} settings={settings} go={go} reload={data.reload} />
+
       {waiting.length > 0 && (
         <section className="appgroup">
           <h2>Written and unsent</h2>
           {waiting.map((draft) => (
-            <Draft key={draft.id} api={api} draft={draft} onSent={data.reload} />
+            <Draft key={draft.id} api={api} draft={draft} settings={settings} onSent={data.reload} />
           ))}
         </section>
       )}
@@ -413,6 +518,7 @@ export function Applications({ api, go }: { api: JobPlatformApi; go: (page: Page
                 key={submission.id}
                 api={api}
                 submission={submission}
+                settings={settings}
                 question={questionFor(submission, questions)}
                 tone={group.tone}
                 go={go}
@@ -440,6 +546,7 @@ export function Applications({ api, go }: { api: JobPlatformApi; go: (page: Page
                 key={submission.id}
                 api={api}
                 submission={submission}
+                settings={settings}
                 expanded={expanded === submission.id}
                 onToggle={() => toggle(submission.id)}
                 onChanged={data.reload}
@@ -461,14 +568,215 @@ export function Applications({ api, go }: { api: JobPlatformApi; go: (page: Page
 }
 
 /**
+ * The two levers whose effect is immediate, on the page whose figures they move.
+ *
+ * **Here rather than beside the other seven because of *when* a saved value lands, not because
+ * of what it is about.** The four judgement levers and the three drafting ones change what the
+ * next nightly pass buys and answer at 03:30 and 04:30 UTC tomorrow, so they live under System
+ * next to Searches. These two answer on the next write and the next read: the cap is enforced in
+ * the submission repository as each `Sent` event is written, and staleness is a fold over the
+ * event log computed on read rather than a stored column — which is the sentence the lede-note
+ * directly above already makes about this page's own figures. So the number somebody reads and
+ * the number they can change are one control in one place, rather than two accounts of one rule
+ * on two pages that have to be kept agreeing by hand.
+ *
+ * **The other seven are read here and sent straight back.** The PUT is a whole-record replace
+ * and an absent property is filled from the record's own initialiser server-side, so a body
+ * carrying only these two would not leave the drafting budget alone — it would reset it to the
+ * shipped ten, from a page that never showed it and a person who never touched it. Spreading
+ * what was read is what keeps a change to the send cap from silently rewriting the pipeline
+ * page, and it is why this component holds all nine and edits two. The residual is the same one
+ * the pipeline page records against its own save and is stated rather than hidden: the seven go
+ * back **as they were read**, so a drafting budget changed there in another tab since this page
+ * loaded is overwritten by a save here. Re-reading immediately before the PUT would narrow that
+ * window without closing it, and buy a round trip on every save against one person's own
+ * settings edited from one place at a time.
+ *
+ * **A refusal is shown whole rather than split across the two boxes.** `ApiError.detail` carries
+ * every problem the server found joined into one string, and `ErrorNote` already renders it —
+ * splitting it back into per-field messages would be this page parsing prose, which is how the
+ * full stop inside a sentence becomes two problems. With two controls there is no room for the
+ * reader to lose which one a message is about.
+ *
+ * **A collapsed card and never a page.** Both numbers are on the summary line whether or not
+ * anybody opens it, because the reading is the common case and the edit is the rare one: this
+ * page is the record of what was sent, and a form standing open above that record would make a
+ * settings screen out of it.
+ *
+ * **No remaining-today figure, deliberately.** `SubmissionQuota` burns the cap down for
+ * `list_applyable` and `record_event`, and no route publishes it to a browser. It cannot be
+ * counted from what this page holds either: `Submission` carries `lastActivityUtc` and a folded
+ * phase rather than the date of the `Sent` event the cap actually counts, and the cap counts by
+ * the event's own timestamp so a backdated import spends it too — a count taken from these rows
+ * would be wrong in the direction that reads as headroom. That is the same reason the burn-down
+ * was taken off `create_submission` and left on the two calls that can still act on it: **a
+ * figure that does not move while somebody works is worse than no figure at all.**
+ */
+function SendingLimits({ api, settings, go, reload }: {
+  api: JobPlatformApi;
+  settings: Levers;
+  go: (page: PageId) => void;
+  reload: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  // Held as typed text rather than as numbers, so that a half-typed box is a half-typed box and
+  // not a zero. `wholeNumber` is the only thing that turns either into a value.
+  const [cap, setCap] = useState(() => (settings ? String(settings.dailySendCap) : ''));
+  const [chase, setChase] = useState(() => (settings ? String(settings.chaseAfterDays) : ''));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<unknown>();
+
+  if (!settings) {
+    return (
+      <Card title="Sending limits" subtitle="These could not be read.">
+        <p className="note">
+          The daily send cap and the chase window are set per candidate, and this read did not
+          answer. Nothing here has put the shipped values in their place — the pipeline is running
+          on whatever is stored, and every row below still reads as quiet or live on the server's
+          answer rather than on a number this browser guessed.
+        </p>
+        <div className="row-actions">
+          <button className="btn" onClick={reload}>Retry</button>
+        </div>
+      </Card>
+    );
+  }
+
+  const capValue = wholeNumber(cap);
+  const chaseValue = wholeNumber(chase);
+
+  const usable = capValue !== null && chaseValue !== null;
+  const dirty = capValue !== settings.dailySendCap || chaseValue !== settings.chaseAfterDays;
+
+  const save = () => {
+    if (capValue === null || chaseValue === null) return;
+
+    setSaving(true);
+    setError(undefined);
+
+    api.savePipelineSettings({
+      ...toRequest(settings),
+      dailySendCap: capValue,
+      chaseAfterDays: chaseValue,
+    })
+      .then((saved) => {
+        setCap(String(saved.dailySendCap));
+        setChase(String(saved.chaseAfterDays));
+        setOpen(false);
+
+        // **The reload is what makes "immediately" true rather than asserted.** Staleness is
+        // derived server-side from the fold, so which rows read as quiet under the new window is
+        // the server's answer and not an arithmetic this page could redo — and the lede counts
+        // them. A save that left the list alone would be a control that claims to take effect at
+        // once and visibly does not until somebody presses refresh.
+        reload();
+      })
+      .catch(setError)
+      .finally(() => setSaving(false));
+  };
+
+  // Closing discards rather than remembering. A kept edit that was never saved is a page showing
+  // a number the pipeline is not running on, and the summary line above is read as the truth.
+  const close = () => {
+    setCap(String(settings.dailySendCap));
+    setChase(String(settings.chaseAfterDays));
+    setError(undefined);
+    setOpen(false);
+  };
+
+  return (
+    <Card
+      title="Sending limits"
+      subtitle={limitsSummary(settings)}
+      actions={
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {open && dirty && <span className="pill warning">Unsaved</span>}
+          <button className="btn" onClick={() => (open ? close() : setOpen(true))}>
+            {open ? 'Close' : 'Change'}
+          </button>
+        </div>
+      }
+    >
+      <p className="note" style={{ marginTop: 0 }}>
+        Both take effect immediately, which is what separates them from the seven on the{' '}
+        <button className="linkish" onClick={() => go('pipeline')}>pipeline</button> page: those
+        decide what tonight's passes buy and say nothing until tomorrow morning. The cap is
+        enforced in the repository as the next application is recorded, and which rows read as
+        quiet is the fold described directly above, computed on every read — so saving here
+        re-reads this page and there is nothing to migrate, because there is no stored column
+        that could be wrong in the meantime.
+      </p>
+
+      {open && (
+        <>
+          <div className="form-grid">
+            <Field
+              label="Daily send cap"
+              hint={'Applications that may be recorded as sent in one UTC day. Counted by the '
+                + 'date on the event rather than by when it was recorded, so backdating a history '
+                + 'reaches it too. Zero pauses the loop.'}
+            >
+              <input
+                type="number" inputMode="numeric" value={cap}
+                onChange={(e) => setCap(e.target.value)}
+              />
+            </Field>
+
+            <Field
+              label="Chase me after (days)"
+              hint={'Silence for this long makes an application read as gone quiet above. A '
+                + 'closed one never does at any value: an employer who stopped replying has gone '
+                + 'quiet, one who said no has not.'}
+            >
+              <input
+                type="number" inputMode="numeric" value={chase}
+                onChange={(e) => setChase(e.target.value)}
+              />
+            </Field>
+          </div>
+
+          {/* The bounds are not restated here, deliberately: the server is the only thing that
+              validates, and a second copy of a number in a form is a second thing to forget when
+              the validation moves. What is worth saying is the rule this page cannot show, since
+              a refusal naming a field that is not on screen reads as a bug in the form. */}
+          <p className="note" style={{ marginTop: 0 }}>
+            A save can be refused for a rule that spans both pages: a night may not write more
+            letters than a day can send, because the surplus is prose tailored to adverts that
+            will have gone before the queue could reach them. So a cap set below the drafts per
+            night on the pipeline page is refused rather than quietly clamped, and the message
+            names both numbers.
+          </p>
+
+          {error ? <ErrorNote error={error} /> : null}
+
+          <div className="row-actions">
+            <button className="btn primary" onClick={save} disabled={saving || !dirty || !usable}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+            {!usable && (
+              <span className="muted">
+                Both are whole numbers and neither box may be left empty — an empty one would send
+                a zero, and zero is a real value on the cap rather than a blank: it pauses the
+                loop.
+              </span>
+            )}
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
+/**
  * One generated application, with the documents it produced.
  *
  * The download is the point. `MarkdownPdfRenderer` is a whole subsystem — an embedded font
  * resolver and all — built because the markdown is the record and the PDF is rendered per
  * request, and until now nothing in the UI asked it for one.
  */
-function Draft({ api, draft, onSent }: {
-  api: JobPlatformApi; draft: ApplicationSummary; onSent: () => void;
+function Draft({ api, draft, settings, onSent }: {
+  api: JobPlatformApi; draft: ApplicationSummary; settings: Levers; onSent: () => void;
 }) {
   const [detail, setDetail] = useState<ApplicationDetail>();
   const [downloading, setDownloading] = useState<string>();
@@ -518,7 +826,7 @@ function Draft({ api, draft, onSent }: {
         </span>
       </div>
 
-      {error ? <WriteError error={error} /> : null}
+      {error ? <WriteError error={error} settings={settings} /> : null}
 
       {draft.instructions && (
         <p className="note">Written with your steer: &ldquo;{draft.instructions}&rdquo;</p>
@@ -586,9 +894,10 @@ function Draft({ api, draft, onSent }: {
   );
 }
 
-function Row({ api, submission, expanded, onToggle, onChanged }: {
+function Row({ api, submission, settings, expanded, onToggle, onChanged }: {
   api: JobPlatformApi;
   submission: PipelineRow;
+  settings: Levers;
   expanded: boolean;
   onToggle: () => void;
   onChanged: () => void;
@@ -612,7 +921,14 @@ function Row({ api, submission, expanded, onToggle, onChanged }: {
 
         <span className="right">
           {quiet && (
-            <span className="stamp warn" title="No event for a fortnight. Derived from the log, not a stored flag.">
+            // The window is the candidate's own and is named from what was read rather than from
+            // the fourteen this said while fourteen was the only value it could be. The flag
+            // itself is still the server's: it folded the log under the window actually stored,
+            // so the stamp is right even where the words cannot say how long.
+            <span
+              className="stamp warn"
+              title={`No event for ${chaseWindow(settings)}. Derived from the log, not a stored flag.`}
+            >
               gone quiet
             </span>
           )}
@@ -628,10 +944,10 @@ function Row({ api, submission, expanded, onToggle, onChanged }: {
 
       <p className="note">
         Goes to <span title={channel.hint}>{channel.label}</span>.
-        {quiet && ' Nothing has arrived for a fortnight.'}
+        {quiet && ` Nothing has arrived for ${chaseWindow(settings)}.`}
       </p>
 
-      {expanded && <Log api={api} submission={submission} onChanged={onChanged} />}
+      {expanded && <Log api={api} submission={submission} settings={settings} onChanged={onChanged} />}
     </div>
   );
 }
@@ -647,9 +963,10 @@ function Row({ api, submission, expanded, onToggle, onChanged }: {
  * The log stays reachable where there is one. A parked row normally has no events, but the
  * combination is exactly the case worth being able to open.
  */
-function ParkedRow({ api, submission, question, tone, go, expanded, onToggle, onChanged }: {
+function ParkedRow({ api, submission, settings, question, tone, go, expanded, onToggle, onChanged }: {
   api: JobPlatformApi;
   submission: PipelineRow;
+  settings: Levers;
   question: OpenQuestion | undefined;
   tone: string;
   go: (page: PageId) => void;
@@ -723,13 +1040,13 @@ function ParkedRow({ api, submission, question, tone, go, expanded, onToggle, on
         </p>
       )}
 
-      {expanded && <Log api={api} submission={submission} onChanged={onChanged} />}
+      {expanded && <Log api={api} submission={submission} settings={settings} onChanged={onChanged} />}
     </div>
   );
 }
 
-function Log({ api, submission, onChanged }: {
-  api: JobPlatformApi; submission: PipelineRow; onChanged: () => void;
+function Log({ api, submission, settings, onChanged }: {
+  api: JobPlatformApi; submission: PipelineRow; settings: Levers; onChanged: () => void;
 }) {
   const [events, setEvents] = useState<LoggedEvent[]>();
   const [type, setType] = useState('Acknowledged');
@@ -766,7 +1083,7 @@ function Log({ api, submission, onChanged }: {
 
   return (
     <div className="log-wrap">
-      {error ? <WriteError error={error} /> : null}
+      {error ? <WriteError error={error} settings={settings} /> : null}
 
       {events && (
         <ol className="timeline">
@@ -892,17 +1209,30 @@ function hostOf(url: string): string {
  * The daily cap answers 429, and a 429 is not a mistake: the request is well formed and would
  * be accepted tomorrow. It counts by the event's own timestamp, so importing a real history
  * can reach it too — which is worth saying, because otherwise the number looks arbitrary.
+ *
+ * **The number is quoted from the settings rather than written into the sentence.** It said
+ * "twenty-fifth" for as long as twenty-five was the only value the cap could hold; now that the
+ * cap is this candidate's to set, a spelled-out figure would be a refusal explained by a number
+ * that is not the one that refused it — and the one place somebody looks after being refused is
+ * the sentence explaining why. Where the settings could not be read the sentence says the cap is
+ * spent without naming it, because naming a wrong one is the failure this avoids.
  */
-function WriteError({ error }: { error: unknown }) {
+function WriteError({ error, settings }: { error: unknown; settings: Levers }) {
   if (error instanceof ApiError && error.status === 429) {
     return (
       <div className="err">
-        <strong>That is today&rsquo;s twenty-fifth application.</strong>
+        <strong>
+          {settings
+            ? `Today’s cap of ${settings.dailySendCap} applications is already spent.`
+            : 'Today’s cap on applications is already spent.'}
+        </strong>
         <div className="muted" style={{ marginTop: 4 }}>
           The cap counts <em>Sent</em> events by the date on the event rather than by when it was
           recorded, so backdating a history reaches it too. Nothing was lost — record the rest
           tomorrow, or spread the dates to match when they actually went. An unattended run parks
           what it could not send as <em>OutOfQuota</em>, which is how those postings come back.
+          The cap is yours to set, under <em>Sending limits</em> at the top of this page, and a
+          new one applies to the very next attempt rather than to tomorrow.
         </div>
       </div>
     );

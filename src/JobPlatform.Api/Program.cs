@@ -115,6 +115,29 @@ builder.Services.AddDbContext<JobsDbContext>(options =>
 builder.Services.AddScoped<JobPostingQueryRepository>();
 builder.Services.AddScoped<CandidateProfileRepository>();
 builder.Services.AddScoped<ScraperSearchRepository>();
+
+// What this candidate's pipeline is allowed to spend, scoped beside the two repositories above
+// because it is read on exactly their terms: by a subject id off the token, never by a profile id
+// out of a route. The type is the authorisation boundary, so the registration is the only thing
+// that has to be right here.
+//
+// Unlike the two nightly passes in src/JobPlatform.Ingestion/Program.cs, which take this as a
+// nullable constructor parameter and fall back to PipelineSettings.Default, GET and PUT
+// /pipeline-settings resolve it as required, and that asymmetry is right rather than an
+// oversight. An unattended pass degrading to the shipped defaults for one night loses nothing a
+// candidate can see; a settings page doing the same would show somebody the defaults while their
+// stored row said otherwise, and the save that followed would write those defaults back over it.
+// So the cost of this line being absent is not a degraded read - it is a pair of routes that
+// compile, pass review and deploy, and then throw on the first request from the settings page.
+// That is the failure the CV library registration below is annotated against, and it is the one
+// shape of bug a build cannot catch in a composition root.
+//
+// Unconditional, like the profile and search repositories beside it and like the Ingestion host's
+// copy: same DbContext, same managed identity, nothing to probe for. A deployment whose migration
+// has not yet reached the PipelineSettings table fails where the table is read rather than by
+// being left out here, so the two hosts cannot come to disagree about whether the feature exists.
+builder.Services.AddScoped<PipelineSettingsRepository>();
+
 builder.Services.AddScoped<JobMatchRepository>();
 builder.Services.AddScoped<SubmissionRepository>();
 

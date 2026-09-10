@@ -139,7 +139,10 @@ and each is a place where a first real session says something a test cannot:
 - **`record_event` retried under one key** answers `AlreadyRecorded` and appends nothing. The
   idempotency check runs *before* the cap deliberately: a client retrying a write it is unsure
   landed must not be refused for a quota that very event already spent.
-- **The daily cap** is `SubmissionLimits.MaxSubmittedPerDay` (25), counted by the event's own
+- **The daily cap** is the candidate's own `PipelineSettings.DailySendCap`, of which
+  `SubmissionLimits.MaxSubmittedPerDay` (25) is now only the default and `PipelineSettingsValidation`
+  bounds the range at 0 to 100. Every figure below quoting 25 is the default rather than the bound
+  in force, and a client must read the cap off the burn-down rather than assume it. Counted by the event's own
   `AtUtc` across every submission, so it cannot be sidestepped by spreading writes over postings
   or by backdating them. The burn-down is now reported by `list_applyable`, by `record_event`, and
   by `create_submission` on the arm that spends it - watch it fall rather than discovering the cap
@@ -629,12 +632,15 @@ than in a scheduled pass on the NAS.
 | ...with no employer link recovered | 1,272, at 615 employers |
 | Daily inflow, offsite | 336 (09-09), 420 (09-08) |
 | Daily inflow at `Score >= 80` | **22, 53** |
-| `SubmissionLimits.MaxSubmittedPerDay` | **25** |
+| `PipelineSettings.DailySendCap` (default; 0-100 configurable) | **25** |
 
 **The cap binds and the corpus does not**, which is what makes this cheap. A bulk enrichment pass
 would fetch 327-409 LinkedIn pages a night to store links against postings nothing was going to
 apply to that day; the repository's own ceiling for an authenticated account is ~100-200 detail
-views a day. The loop opens at most 25, each one followed by a real outbound click to an employer's
+views a day. The loop opens at most the candidate's `DailySendCap` - 25 unless they raised it,
+and this argument is sensitive to that: at the validator's ceiling of 100 the loop's daily reads
+are comparable to the repository's own account ceiling, so re-run the comparison before quoting
+it for a configured candidate. Each one is followed by a real outbound click to an employer's
 form. That is the same session doing a tenth of the work in the shape a person's browsing already
 has.
 

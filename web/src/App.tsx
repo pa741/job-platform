@@ -8,6 +8,7 @@ import { Briefing } from './pages/Briefing';
 import { Postings } from './pages/Postings';
 import { Profile } from './pages/Profile';
 import { Searches } from './pages/Searches';
+import { Pipeline } from './pages/Pipeline';
 import { Shortlist } from './pages/Shortlist';
 import { Applications } from './pages/Applications';
 import { Questions } from './pages/Questions';
@@ -254,7 +255,7 @@ function Dashboard({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => 
 }
 
 /**
- * The ten pages `route.ts` declares, each with a case here.
+ * The eleven pages `route.ts` declares, each with a case here.
  *
  * <b>The return type is what makes the switch exhaustive, and it is load-bearing rather than
  * documentation.</b> A `PageId` with no case falls out of the bottom and returns undefined,
@@ -344,6 +345,10 @@ function Page({ page, api, searchTerm, go, route, replace, back }: {
       />
     );
     case 'searches': return <Searches api={api} />;
+    // `go` because the page has to be able to send somebody to Applications: the two levers it
+    // does not render live there, and one of them is the ceiling on a number it does render, so
+    // a save here can be refused over a value set on that page.
+    case 'pipeline': return <Pipeline api={api} go={go} />;
     case 'calls': return <AiCalls api={api} />;
   }
 }

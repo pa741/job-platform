@@ -5,6 +5,7 @@ using JobPlatform.Api.Features.CvVariants;
 using JobPlatform.Api.Features.Matches;
 using JobPlatform.Api.Features.Meta;
 using JobPlatform.Api.Features.Metrics;
+using JobPlatform.Api.Features.Pipeline;
 using JobPlatform.Api.Features.Postings;
 using JobPlatform.Api.Features.Profiles;
 using JobPlatform.Api.Features.Questions;
@@ -27,6 +28,7 @@ public static class EndpointGroupExtensions
         new ProfileEndpoints(),
         new CvVariantEndpoints(),
         new SearchEndpoints(),
+        new PipelineEndpoints(),
         new MatchEndpoints(),
         new ApplicationEndpoints(),
         new SubmissionEndpoints(),

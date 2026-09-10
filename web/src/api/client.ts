@@ -8,6 +8,7 @@
   SkillGapResponse, Submission, SubmissionEvent,
   AnswerQuestionRequest, AnswerQuestionResponse, OpenQuestion,
   CreateCvVariantRequest, CvChoice, CvGapBriefResponse, CvLibraryResponse, CvVariantDetail,
+  PipelineSettingsRequest, PipelineSettingsResponse,
 } from './types';
 
 /** Thrown for any non-2xx response, carrying the RFC 9457 detail the API returns. */
@@ -545,6 +546,58 @@ export class JobPlatformApi {
    */
   applicationPdf = (id: number, kind: 'cv' | 'cover-letter'): Promise<DownloadedFile> =>
     this.download(this.applicationPdfUrl(id, kind), 'application/pdf');
+
+  // --- pipeline settings ----------------------------------------------------
+  //
+  // Per-principal like the profile, and resolved the same way: neither method takes an
+  // argument naming whose pipeline is being configured, because the API reads that from the
+  // token's `oid` claim and there must be no way to ask for somebody else's. SQL-backed, so
+  // both are read when a settings page opens - never on the bootstrap, never on a poll - and
+  // neither route may carry an output cache.
+  //
+  // Where the controls built on these render, and why they are split across two pages, is on
+  // `PipelineSettingsRequest` in `types.ts`: seven of them land on the next nightly pass and
+  // two of them land on the next write, and a control that looks like a read-time filter and
+  // answers fifteen hours later is a trap rather than an untidiness.
+
+  /**
+   * The nine levers this candidate's pipeline will run on tonight.
+   *
+   * **Never null, and never a 404** - the one way this differs from `profile()`. Somebody who
+   * has configured nothing is not missing an answer: they run on `PipelineSettings.Default`,
+   * whose every value is the constant the shipped code already used, so the API answers those
+   * nine numbers with `updatedUtc: null`. There is nothing here for a caller to catch, which is
+   * the point - a page forced to tell "no settings" from "a failure" by inspecting a status
+   * code is a page that eventually shows an error to somebody whose pipeline is working.
+   */
+  pipelineSettings = () => this.request<PipelineSettingsResponse>('/api/v1/pipeline-settings');
+
+  /**
+   * Replaces the nine levers, and answers with what will now run.
+   *
+   * A PUT and a whole-record replace, like `saveProfile`. The body carries all nine because an
+   * omitted property is filled from the record's own initialiser server-side, so a partial body
+   * is a reset to the shipped defaults rather than a no-op - which is the right behaviour for
+   * an override built deliberately and the wrong one for a form that dropped a field.
+   * `PipelineSettingsRequest` requires every field for exactly that reason.
+   *
+   * **A refused save arrives as a thrown `ApiError`, not as a value**, exactly as `createSearch`
+   * and `updateSearch` do: the API answers 400 with an RFC 9457 document whose `detail` carries
+   * every problem `PipelineSettingsValidation` found, joined into one string, and `request`
+   * lifts that onto `ApiError.detail` where `ErrorNote` already renders it. No success-shaped
+   * `{ ok, problems }` union is introduced here - see `PipelineSettingsProblem`.
+   *
+   * Two of the rules it can refuse are cross-field, so a save can be rejected with every
+   * individual number in range: the drafting floor may not sit below the assessment threshold,
+   * and a night may not write more letters than a day can send. That is why the response to a
+   * save is worth reading rather than assuming, and why a form must show `detail` rather than a
+   * message of its own devising.
+   */
+  savePipelineSettings = (settings: PipelineSettingsRequest) =>
+    this.request<PipelineSettingsResponse>('/api/v1/pipeline-settings', {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+    });
 
   /**
    * One authenticated file fetch, for every download in the product.

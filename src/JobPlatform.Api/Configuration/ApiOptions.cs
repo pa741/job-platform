@@ -62,9 +62,15 @@ public sealed class RateLimitOptions
     /// polling every few seconds would exhaust it and pause the database for everything else.
     ///
     /// <b>The arithmetic still fits, which is why the number did not move.</b> The real bound on
-    /// this loop is <c>SubmissionLimits.MaxSubmittedPerDay</c>, and twenty-five applications at a
-    /// few dozen tool calls each is under a thousand calls in a day - well under one a minute
-    /// averaged over one. What grew is not the total but its <i>shape</i>: an application is a
+    /// this loop is the candidate's <c>PipelineSettings.DailySendCap</c> - which
+    /// <c>SubmissionLimits.MaxSubmittedPerDay</c> is only the default of - and twenty-five
+    /// applications at a few dozen tool calls each is under a thousand calls in a day, well under
+    /// one a minute averaged over one. <b>That headroom survives the setting being raised, which
+    /// is worth checking rather than assuming</b>: <c>PipelineSettingsValidation.MaxDailySendCap</c>
+    /// is a hundred, four times the arithmetic above, so the worst configured day is roughly four
+    /// thousand calls against the twenty-eight thousand this sustained rate allows in twenty-four
+    /// hours. The bound that binds first is still the send cap and not this one, at every value a
+    /// candidate may type. What grew is not the total but its <i>shape</i>: an application is a
     /// pack read, a field resolution per input on somebody's form and then a write, all inside a
     /// few seconds, followed by minutes of a browser doing something a database never hears
     /// about. <see cref="McpBurst"/> is what absorbs that, and <c>RateLimitSetup.McpPolicy</c> is

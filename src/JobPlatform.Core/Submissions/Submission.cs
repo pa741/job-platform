@@ -137,6 +137,28 @@ public static class SubmissionLimits
     /// It bounds <c>Submitted</c> alone. Recording that a hundred applications exist is fine -
     /// somebody may be importing a history - and claiming a hundred were sent today is not.
     /// Set well above what a person does in a day and well below what a loop does in a minute.
+    ///
+    /// <b>This is now the default rather than the only value.</b>
+    /// <c>PipelineSettings.DailySendCap</c> is the per-candidate setting that supersedes it, and
+    /// that setting's own default is this constant - so a candidate with nothing configured is
+    /// capped exactly as every candidate was before the setting existed, which is the property
+    /// the whole feature is judged on. It keeps its name because it is that default, because
+    /// <see cref="SubmissionQuota.For"/> falls back to it when a caller has no settings to hand,
+    /// and because a refusal message has to quote a number from somewhere.
+    ///
+    /// <b>Making it configurable does not move where it is enforced</b>, and the paragraph above
+    /// is unchanged rather than merely still true: a per-candidate cap is a different number
+    /// reaching the same check in <c>SubmissionRepository</c>, not a second check somewhere
+    /// nearer the caller. A settings-aware guard at a call site would be the third spelling of a
+    /// rule that already has one place to live, and it would leave the two existing paths - and
+    /// the third that is coming - enforcing whichever number they happened to read.
+    ///
+    /// <b>Do not write another bound in terms of this one.</b>
+    /// <c>PipelineSettingsValidation.MaxDraftsPerNight</c> is twenty-five as well and is
+    /// deliberately its own constant: a candidate may raise their send cap as far as
+    /// <c>PipelineSettingsValidation.MaxDailySendCap</c>, and a drafting ceiling written as a
+    /// reference to this number would silently raise the expensive deployment's nightly bill
+    /// with it. Sending is cheap and drafting is not, so the two move for different reasons.
     /// </remarks>
     public const int MaxSubmittedPerDay = 25;
 

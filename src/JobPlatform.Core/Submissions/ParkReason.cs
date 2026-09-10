@@ -121,13 +121,22 @@ public enum ParkReason
     /// </remarks>
     FormError = 7,
 
-    /// <summary><see cref="SubmissionLimits.MaxSubmittedPerDay"/> is spent for the day.</summary>
+    /// <summary>The candidate's daily send cap is spent for the day.</summary>
     /// <remarks>
     /// The one reason that is about this system rather than about the posting, and therefore the
     /// one that must never be permanent: the cap resets at midnight UTC and the vacancy was
     /// never the problem. Parking on it is also how the cap becomes <i>visible</i> - a loop that
-    /// simply stops at the twenty-fifth application leaves nothing behind saying why, and a cap
+    /// simply stops at its last allowed application leaves nothing behind saying why, and a cap
     /// nobody can see is one somebody eventually removes as a mystery.
+    ///
+    /// <b>The cap is <c>PipelineSettings.DailySendCap</c>;
+    /// <see cref="SubmissionLimits.MaxSubmittedPerDay"/> is what that setting defaults to and is
+    /// no longer the whole answer.</b> It is nought to a hundred and per candidate, so twenty-five
+    /// is the number an unconfigured candidate is refused at rather than the number this reason
+    /// means - and a run reading "the twenty-fifth application" would be reading one deployment's
+    /// default as the rule. <b>Where it is enforced did not move with it</b>:
+    /// <c>SubmissionRepository</c> counts <c>Submitted</c> events by their own <c>AtUtc</c> and
+    /// refuses there, and this park is what a run leaves behind when it is refused.
     /// </remarks>
     OutOfQuota = 8,
 

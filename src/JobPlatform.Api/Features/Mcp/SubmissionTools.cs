@@ -1999,8 +1999,16 @@ public sealed class SubmissionTools(
                 SubmissionEventResult.AlreadyRecorded =>
                     "That key is already on this submission, so the earlier call landed. Nothing "
                     + "was duplicated and nothing needs retrying.",
-                _ => $"This candidate has already recorded {SubmissionLimits.MaxSubmittedPerDay} "
-                    + "applications as sent for that day, which is the cap, and NOTHING was "
+                // The cap in force for THIS candidate, off the quota block above, rather than the
+                // shipped constant. The cap is per-candidate configuration now, so a message
+                // naming the default would tell a model "25" for somebody capped at six - and the
+                // number it reads in a refusal is the number it will plan the rest of the run
+                // against. The same figure as the 'dailyCap' in the quota block above,
+                // deliberately: the explanation and the burn-down beside it are read together, and
+                // two different numbers there would be read as a bug in the cap rather than in
+                // the message.
+                _ => $"This candidate has already recorded {quota.DailyCap} "
+                    + "applications as sent for that day, which is their cap, and NOTHING was "
                     + "written - not even the submission, deliberately: a row whose send was "
                     + "refused would take this posting out of the queue for good while asserting "
                     + "nothing about an application. If the application really was sent, park it "
@@ -2110,8 +2118,14 @@ public sealed class SubmissionTools(
                 SubmissionEventResult.NotFound =>
                     $"No submission {submissionId} for this candidate. Use list_submissions, or "
                     + "create_submission first.",
-                _ => $"This candidate has already recorded {SubmissionLimits.MaxSubmittedPerDay} "
-                    + "applications as sent for that day, which is the cap. Stop rather than "
+                // quota.DailyCap and never SubmissionLimits.MaxSubmittedPerDay: the cap is this
+                // candidate's PipelineSettings.DailySendCap, which defaults to the constant and
+                // may be any of nought to a hundred. A refusal quoting the default would be the
+                // one place in this surface where the number a model is told and the number it is
+                // held to are different, and it is the worst place for that - the model reads
+                // this after the form has already gone.
+                _ => $"This candidate has already recorded {quota.DailyCap} "
+                    + "applications as sent for that day, which is their cap. Stop rather than "
                     + "retrying: the limit exists so a client looping cannot fill somebody's "
                     + "pipeline with applications never made. If the application really was sent, "
                     + "park the posting with reason 'OutOfQuota' so the attempt is visible.",
