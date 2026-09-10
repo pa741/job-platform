@@ -338,6 +338,36 @@ public sealed record ApplyableQuery
     /// </remarks>
     public bool ExcludeAggregators { get; init; }
 
+    /// <summary>
+    /// Keep only the rows a run that drives a browser could reach an employer's own form from.
+    /// </summary>
+    /// <remarks>
+    /// <b>This is <c>ApplyRoute.ReachesAnEmployer</c> spelled in SQL, and the second spelling is
+    /// forced rather than chosen.</b> The rule reads a provenance and a channel, both of which are
+    /// computed expressions here rather than columns, so EF cannot translate a call to the
+    /// function - the limitation <c>AtsVendorDetector.Detect</c> has and the channel filter pays
+    /// for. What holds the two together is
+    /// <c>The_reachable_filter_admits_exactly_what_ApplyRoute_does</c>, which asserts them equal
+    /// row by row rather than trusting a reader to keep them in step.
+    ///
+    /// <b>It replaces <c>ApplyUrlSource = Posting</c> at the one caller that needed widening.</b>
+    /// The generation pass asked for a published employer link because that was the only route a
+    /// document could be attached at the end of. An offsite listing whose address the board
+    /// withheld is a second such route - the apply link is on the posting page, published to the
+    /// client that opens it - so the filter had to become a question about the route rather than
+    /// about the provenance. <c>ApplyUrlSource</c> is untouched and still means one exact
+    /// provenance, because the tool surface exposes it and a caller asking for <c>Posting</c> means
+    /// <c>Posting</c>.
+    ///
+    /// <b>What it admits, in the order the ladder is read.</b> A published link, whoever is at the
+    /// end of it - the aggregator case is caught after materialisation, where the vendor is
+    /// readable, exactly as it was before. And a posting with no address at all whose own board
+    /// said the application happens on the employer's system. What it refuses is everything else:
+    /// a board-hosted listing, a route nothing has established, and an inference - a link borrowed
+    /// from the same job on another board is still not a document this pass will pay to tailor.
+    /// </remarks>
+    public bool ReachableByBrowser { get; init; }
+
     /// <summary>How the queue is ordered. <see cref="ApplyableSort.Rank"/> unless asked otherwise.</summary>
     public ApplyableSort Sort { get; init; } = ApplyableSort.Rank;
 
@@ -1464,6 +1494,27 @@ public sealed class JobMatchRepository(JobsDbContext db)
                         && other.JobUrlDirect != null))),
             _ => matches,
         };
+
+        if (query.ReachableByBrowser)
+        {
+            // ApplyRoute.ReachesAnEmployer, in the only language this layer can ask the question
+            // in. Three arms, and they are the ladder minus its last rung: a link the board
+            // published, an address the employer's own board answered with, and a listing the
+            // board said is offsite without saying where. What is refused is a board-hosted
+            // listing, a route nothing has established, and the last rung - a link borrowed from
+            // a listing that merely resembles this one, which is an inference and not something a
+            // tailored document is bought on.
+            //
+            // The second arm is why this is not `EmployerAtsApplyUrl == null`, which is what it
+            // said first. A recovered link is the strongest provenance after a published one -
+            // the employer's own board answered with it - and dropping it here meant apply-link
+            // recovery produced addresses that never became applications. That was already true
+            // under `ApplyUrlSource = Posting`; widening the filter is what made it visible.
+            matches = matches.Where(m =>
+                m.Posting!.JobUrlDirect != null
+                || m.Posting.EmployerAtsApplyUrl != null
+                || m.Posting.OffsiteApply == true);
+        }
 
         // The third filter written out against the same ladder, and the only one that cannot read
         // the rung it cares about. AtsVendorDetector.Detect reads a URL rather than compares one,

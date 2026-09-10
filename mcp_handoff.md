@@ -600,6 +600,165 @@ the employer on the advert - so a probed token is confirmed against a posting be
 and the recovered link is marked as the inference it is, exactly as `MatchedOnAnotherBoard` is.
 And Workday, at 69 employers, has no clean public board listing, so it stays out.
 
+### 3.2b The loop drives a browser, so the link does not have to be recovered at all
+
+**Decision, 2026-09-10: the apply loop acts on a LinkedIn offsite posting directly, and apply-link
+recovery stops being the only way to reach one.** 3.2 and 3.2a framed the choice as *how do we
+learn the URL before the tab opens*. The tab opens anyway. An unattended run that drives a browser
+can read the apply anchor at the moment it applies, which is the one moment the cost is already
+being paid.
+
+**What the anchor looks like**, captured from a real posting:
+
+```
+https://www.linkedin.com/safety/go/?url=https%3A%2F%2Fjobs.recruit.charliehr.com%2Fpubx%2F...
+    &urlhash=I2Gb&mt=...&isSdui=true&lipi=urn%3Ali%3Apage%3Ad_flagship3_nlsearch_srp_jobs...
+```
+
+Three properties decide the design. **The destination is in the href**, url-encoded in `url=`, so
+nothing has to follow the redirect - resolving it is a string operation on a page the browser has
+already loaded. **It is rendered only to a signed-in client**: re-verified 2026-09-10 on job
+`4464431771`, the guest page carries `apply-link-offsite` markers, no `<code id="applyUrl">`, no
+JSON-LD and no non-LinkedIn URL outside the description prose. **And the client already holds a
+session**, because it is a browser a person set up, which is where the credential belongs rather
+than in a scheduled pass on the NAS.
+
+| | |
+| --- | ---: |
+| LinkedIn offsite postings held | **1,322** |
+| ...with no employer link recovered | 1,272, at 615 employers |
+| Daily inflow, offsite | 336 (09-09), 420 (09-08) |
+| Daily inflow at `Score >= 80` | **22, 53** |
+| `SubmissionLimits.MaxSubmittedPerDay` | **25** |
+
+**The cap binds and the corpus does not**, which is what makes this cheap. A bulk enrichment pass
+would fetch 327-409 LinkedIn pages a night to store links against postings nothing was going to
+apply to that day; the repository's own ceiling for an authenticated account is ~100-200 detail
+views a day. The loop opens at most 25, each one followed by a real outbound click to an employer's
+form. That is the same session doing a tenth of the work in the shape a person's browsing already
+has.
+
+**This is not "allow aggregators", and the distinction is the whole safety of it.** `ApplyVendor`
+reads `Aggregator` on 6,980 rows, and they are four different situations:
+
+| | postings | what the loop would meet |
+| --- | ---: | --- |
+| LinkedIn, `OffsiteApply = true` | **1,272** | the apply anchor, one hop to an employer's form |
+| LinkedIn, `OffsiteApply = false` | 914 | Easy Apply - see below |
+| LinkedIn, `OffsiteApply = null` | 4,148 | unknown; reclassifies when re-seen |
+| freehire / Indeed, link published | 646 | whatjobs 459, Indeed 77, adzuna 72, reed 26 |
+
+That last row is the *"second search results page"* the skip was written for, and it stays skipped.
+
+**So the predicate is two facts about the row and never the board's name.** `Channel == Ats` and
+`AtsVendor == Aggregator`: the board says the application happens on the employer's own system, and
+the only URL held is a board page. It is exact on this corpus without naming LinkedIn at all -
+Indeed and freehire publish a direct link every time, so they never read `Ats` and `Aggregator`
+together; Easy Apply reads `Board`; a route-unknown row reads `Unknown`. **Naming the site instead
+would have been the same rule spelled a worse way**, and it would go wrong the day another board
+starts withholding.
+
+**Where it changes, and where it deliberately does not.**
+
+- **`GenerateApplicationsFunction` blocks it twice, and the first draft of this section said once.**
+  Corrected here rather than quietly, because the error is the instructive part: the materialised
+  `!row.AtsVendor.IsEmployerAts()` skip is the visible block, and above it the same file asks
+  `ListApplyableAsync` for `ApplyUrlSource = Posting`, which drops every board-page row in SQL
+  before the skip can see one. Changing only the skip left every test green and moved nothing at
+  all - a fixture row seeded for the new behaviour simply never arrived. **A filter you can read
+  and a filter in the query are not the same surface, and this file has now been wrong about that
+  twice.**
+- **So the query gained `ReachableByBrowser` and the pass stopped naming a provenance.** The
+  question it needs answered is about the route rather than about where the address came from, and
+  a provenance filter could not express "published, or withheld by a board that said offsite".
+  `ApplyUrlSource` is untouched: the tool surface exposes it, and a caller asking for `Posting`
+  means `Posting`.
+- **`ApplyRoute` is the rule, and it is spelled twice because EF forces it.** The channel and the
+  provenance are computed expressions rather than columns, so the filter cannot call the function.
+  `ReachableByBrowserTests` holds the two together by naming both differences as exact sets - the
+  SQL is wider by a published aggregator, which it cannot judge without the vendor, and narrower by
+  a borrowed link, which is refused on purpose. The materialised skip and the `waiting` count both
+  read the function, so those two at least cannot drift.
+- **The predicate is the provenance and the channel, not the vendor - and that was the second
+  mistake.** Written first as `Channel == Ats && AtsVendor == Aggregator`, it admitted a published
+  WhatJobs link, because the channel reads `Ats` the moment any direct link exists and the vendor
+  reads `Aggregator` either way. `ApplyUrlSource` is the only field that separates "the board
+  withheld the address" from "the board published one and it goes to another board".
+  `GenerateApplicationsTests` already carried that row as a fixture and caught it.
+- **`list_applyable`'s description**, which currently tells every client that following an
+  `Aggregator` "spends a day's cap arriving at a second search results page". True of 646 rows and
+  now false of 1,272, so it has to say which is which.
+- **Not the query.** `ExcludeAggregators` stays off by default and keeps its meaning: a caller that
+  wants employer links only still asks for them.
+- **Not `PostingReachability`.** It gates the judgement budget and holds back `OffsiteApply == false`
+  alone; an offsite posting already keeps its place in the draw.
+- **Not the server's role.** It records that a submission was sent and still never sends one. This
+  is a change to what the client is willing to open, not to what the server does.
+
+**The loop is then also the cheapest recovery pass in the system, and the column for it exists.**
+`SubmissionEvent.FinalUrl` - *"where the browser ended up when the claim was made"* - already
+carries the destination through `record_event`. Feeding those into the token-learning step that
+today reads `JobUrlDirect` means every application teaches one employer's board token, which
+unblocks that employer's other postings through the nightly board fetch that already runs. **No new
+tool**, so the `McpEndpointTests` surface equality does not move, and no new request anywhere.
+
+**What it does not fix.** It only ever resolves a posting somebody applies to, so the shortlist and
+the dashboard keep showing these 1,272 as board links until the facet is revisited. Recovery still
+earns its place for everything the loop will not reach this month.
+
+**And one thing it fixed that nobody was looking for.** `ApplyUrlSource = Posting` also dropped
+`MatchedOnEmployerAts` - the address the employer's own board answered with - so **apply-link
+recovery has been producing links that never became documents and therefore never became
+applications**. 248 postings carry a recovered link today. The provenance was added to the enum
+after that filter was written, and the switch beside it already warns in a comment that an arm
+which only adds itself keeps answering the old values wrong; this was the same drift one layer up.
+`ReachableByBrowser` admits it, and `ReachableByBrowserTests` is what surfaced it - the assertion
+that the SQL must not silently drop what the function admits failed on the recovered row the first
+time it ran.
+
+**Sentences that go stale and should be amended rather than left to rot.** `model.md`'s Frontend row
+says the facet drops board links *"which is the same rule the apply loop already skips on"* - it no
+longer is. That is the architecture doc, so it is an amendment somebody signs rather than a
+consequence of this change.
+
+#### Easy Apply: costed 2026-09-10, and deferred
+
+**The recorded objection dies, and it should be said plainly.** 3.2a's reason was
+*"Easy Apply submits the logged-in profile's data, so a burner cannot send this candidate's
+application"* - which is an argument about burners. On the candidate's own session it inverts: the
+logged-in profile *is* the candidate. `PostingReachability`'s *"nothing unattended can drive that
+form"* becomes false, and `model.md`'s *"unreachable here however easy it is by hand"* with it.
+
+**It is still deferred, and the measurement is why.** At `Score >= 80` the two routes together
+supply 41 and 98 postings a day against a cap of 25. **Easy Apply adds choice, not throughput** -
+offsite alone already oversupplies the cap by two to four times - so deferring it costs nothing
+that can be measured today. Four costs sit against that nothing:
+
+- **It worsens the bottleneck that is actually binding.** 904 of the 914 have never been assessed,
+  and the nightly judgement has produced 162 assessments in total since 2026-08-27, about twelve a
+  day. Relaxing `PermanentlyUnreachable` pours 904 rows into the queue that is already starving.
+- **It is the most legible automation to LinkedIn.** Clicking out to an employer is a click. An
+  Easy Apply submission is a first-class action on their platform with its own anti-abuse and its
+  own daily limits. Same cookie, different exposure; pricing them as one risk is the error.
+- **The cap is a recording cap, not a sending cap.** `SubmissionRepository` bounds `Submitted`
+  events; nothing bounds the browser. A multi-page ATS form is slow, and that slowness has been
+  doing real work as an accidental brake. Easy Apply is a two-click modal, so a loop bug reaches a
+  hundred real applications before the twenty-sixth *record* is refused - the worst state this
+  system has, at speed.
+- **It routes around the CV library.** Selection from at most six variants, uploaded under one
+  filename, with a letter written for the advert, is what Applications is. Easy Apply largely sends
+  the LinkedIn profile - a document nothing here models, scores or versions - and
+  `ChosenCvVariantId` would record a choice that mattered less than it claims.
+
+**What would reopen it:** the offsite inflow at the chosen threshold falling below the cap, so that
+the loop runs out of work. And it should be reopened only with a sending-side bound inside the
+client, because the recording cap will not be enough once an application costs two clicks.
+
+**Read this next to the fact that `Submissions` and `SubmissionEvents` are both still zero.**
+Nothing in this pipeline has met a real employer. Every fold, cap, park reason and staleness rule
+here has only ever run against test data, which is the argument for taking the narrow change first
+and letting twenty-five applications say what the wider one is worth.
+
 ---
 
 ## 4. What the plan claimed, and what the code refuted

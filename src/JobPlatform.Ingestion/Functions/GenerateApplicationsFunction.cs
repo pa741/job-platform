@@ -443,11 +443,12 @@ public sealed class GenerateApplicationsFunction(
                 // there.
                 DocumentsReady = false,
 
-                // A link the board published as the employer's own. The other two provenances are
-                // an inference and a board page; writing a tailored CV for a posting whose apply
-                // route is "open the job board and look" spends the writing deployment on a
-                // document nothing can attach.
-                ApplyUrlSource = ApplyUrlSource.Posting,
+                // The rows a run can reach an employer's form from: a link the board published,
+                // or an offsite listing whose address it withheld, where the apply link is on the
+                // posting page the run opens. An inference and a board-hosted listing stay out -
+                // writing a tailored CV for a posting whose apply route is "open the job board and
+                // look" spends the writing deployment on a document nothing can attach.
+                ReachableByBrowser = true,
                 MinAssessmentScore = floor,
 
                 // Whatever the run is configured to pull. Unset unless somebody says so - see
@@ -480,14 +481,19 @@ public sealed class GenerateApplicationsFunction(
 
             var posted = postings.GetValueOrDefault(row.PostingId);
 
-            // Two skips, both decided before a round trip is spent on the posting. An aggregator
-            // behind a "direct" link has not reached an employer, and a CV tailored for one would
-            // be spent arriving at a second search results page - the skip AtsVendor.Aggregator
-            // exists for, applied where the money is rather than only where the tab would open.
+            // Two skips, both decided before a round trip is spent on the posting. A row that
+            // reaches no employer has nowhere to send a tailored CV: a published link into another
+            // job board arrives at a second search results page, which is the skip
+            // AtsVendor.Aggregator exists for, applied where the money is rather than only where
+            // the tab would open. An offsite listing whose only address is the board's own page
+            // does reach one, through the apply link the board publishes to the client that opens
+            // it - see ApplyRoute, which is the whole rule and which the `waiting` count below
+            // reads rather than restates.
             // An advert whose body the scraper never read is worse than useless: a document
             // written against it is a generic CV bought at the tailored price, and it would then
             // satisfy `DocumentsReady` and take the posting out of this pass's queue for good.
-            if (!row.AtsVendor.IsEmployerAts() || !posted.HasAdvert)
+            if (!ApplyRoute.ReachesAnEmployer(row.Channel, row.ApplyUrlSource, row.AtsVendor)
+                || !posted.HasAdvert)
             {
                 tally = tally with { Skipped = tally.Skipped + 1 };
                 continue;
@@ -836,7 +842,7 @@ public sealed class GenerateApplicationsFunction(
                 new ApplyableQuery
                 {
                     DocumentsReady = false,
-                    ApplyUrlSource = ApplyUrlSource.Posting,
+                    ReachableByBrowser = true,
                     MinAssessmentScore = floor,
                     // The same bound the batch was drawn under. A count over a wider set would
                     // report a backlog this pass is not going to write for, which is the one thing
@@ -854,7 +860,8 @@ public sealed class GenerateApplicationsFunction(
             var postings = await DescribeAsync(rows, ct);
 
             waiting += rows.Count(row =>
-                row.AtsVendor.IsEmployerAts() && postings.GetValueOrDefault(row.PostingId).HasAdvert);
+                ApplyRoute.ReachesAnEmployer(row.Channel, row.ApplyUrlSource, row.AtsVendor)
+                && postings.GetValueOrDefault(row.PostingId).HasAdvert);
         }
 
         return waiting;

@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using JobPlatform.Core.Applications;
 using JobPlatform.Core.Matching;
 using JobPlatform.Core.Profiles;
@@ -68,6 +68,19 @@ public sealed class GenerateApplicationsTests : IDisposable
     /// <summary>No employer link: the board says it hosts the application.</summary>
     private const long BoardHosted = 14;
 
+    /// <summary>
+    /// No employer link either, and the opposite answer: the board says the application happens
+    /// on the employer's own system without saying where.
+    /// </summary>
+    /// <remarks>
+    /// The LinkedIn offsite shape, which is 1,272 postings on the live corpus. It sits beside
+    /// <see cref="BoardHosted"/> and <see cref="Aggregated"/> deliberately - all three lack an
+    /// employer address, and the pass has to give three different answers. This one is written
+    /// for: the board publishes an apply link to the client that opens the posting page, so a run
+    /// that drives a browser reaches the employer's form one hop away. See <c>ApplyRoute</c>.
+    /// </remarks>
+    private const long Offsite = 20;
+
     /// <summary>Already has a draft. The one posting in the live database that did.</summary>
     private const long Written = 15;
 
@@ -127,6 +140,7 @@ public sealed class GenerateApplicationsTests : IDisposable
         Add(db, Applied, "Manager", "Eta", direct: "https://boards.greenhouse.io/eta/jobs/17");
         Add(db, Third, "Consultant", "Theta", direct: "https://jobs.lever.co/theta/18");
         Add(db, Fourth, "Engineer", "Iota", direct: "https://boards.greenhouse.io/iota/jobs/19");
+        Add(db, Offsite, "Researcher", "Kappa", offsiteApply: true);
 
         // Rank and assessment disagree everywhere, so an accidental ordering by the wrong column
         // is visible rather than coincidental.
@@ -140,6 +154,10 @@ public sealed class GenerateApplicationsTests : IDisposable
         Match(db, Applied, score: 53, assessment: 88, rank: 7.05);
         Match(db, Third, score: 54, assessment: 81, rank: 6.9);
         Match(db, Fourth, score: 56, assessment: 80, rank: 6.8);
+
+        // Ranked last, so every assertion about a bounded batch above it keeps the meaning it had
+        // before this row existed. What it is here to move is the unbounded set.
+        Match(db, Offsite, score: 57, assessment: 84, rank: 6.7);
 
         // The live database's own shape: exactly one posting with documents.
         db.ApplicationDocuments.Add(new ApplicationDocumentEntity
@@ -180,10 +198,10 @@ public sealed class GenerateApplicationsTests : IDisposable
 
         // The four postings a run would reach, in the order it reads them. Everything else is
         // held back by a different rule, and each of those rules has a test of its own below.
-        Assert.Equal([Best, Second, Third, Fourth], documented);
+        Assert.Equal([Best, Second, Third, Fourth, Offsite], documented);
 
-        Assert.Equal(4, summary.Written);
-        Assert.Equal(4, summary.Considered);
+        Assert.Equal(5, summary.Written);
+        Assert.Equal(5, summary.Considered);
 
         // The aggregator and the bodyless advert. Counted rather than silent: "the queue is
         // empty" and "the queue is full of things we step over" want opposite fixes.
@@ -228,15 +246,46 @@ public sealed class GenerateApplicationsTests : IDisposable
     }
 
     [Fact]
-    public async Task A_posting_with_no_employer_link_is_never_written_for()
+    public async Task A_board_hosted_posting_is_never_written_for()
     {
         var writer = new StubWriter();
 
         await RunAsync(writer);
 
         // The board says it hosts the application, so there is no upload box a tailored PDF
-        // could be attached to.
+        // could be attached to. Not "no employer link" - Offsite has no link either and is
+        // written for; what decides it is which answer the board gave about where the
+        // application happens.
         Assert.DoesNotContain(BoardHosted, writer.Postings);
+    }
+
+    [Fact]
+    public async Task An_offsite_posting_with_no_address_is_written_for()
+    {
+        var writer = new StubWriter();
+
+        await RunAsync(writer);
+
+        // The board withheld the address and said the employer takes the application, so the
+        // form is one hop away through the apply link the posting page carries. Skipping it was
+        // 1,272 postings on the live corpus - the largest population the loop can reach - held
+        // back by a rule aimed at a different row. See mcp_handoff.md 3.2b.
+        Assert.Contains(Offsite, writer.Postings);
+    }
+
+    [Fact]
+    public async Task A_withheld_address_and_a_published_one_into_another_board_are_told_apart()
+    {
+        var writer = new StubWriter();
+
+        await RunAsync(writer);
+
+        // Both read channel Ats - the channel is Ats the moment any direct link exists, whoever
+        // is at the end of it - so a rule written on the channel and the vendor would have
+        // admitted the aggregator too. The provenance is the only field that separates them, and
+        // this is the assertion that says so.
+        Assert.Contains(Offsite, writer.Postings);
+        Assert.DoesNotContain(Aggregated, writer.Postings);
     }
 
     [Fact]
@@ -334,7 +383,7 @@ public sealed class GenerateApplicationsTests : IDisposable
 
         var summary = await RunAsync(writer);
 
-        // Four postings would be written for; a pass with no stop would have made every one of
+        // Five postings would be written for; a pass with no stop would have made every one of
         // those calls on the most expensive deployment there is, to store nothing.
         Assert.Equal(3, writer.Postings.Count);
         Assert.DoesNotContain(Fourth, writer.Postings);
@@ -354,7 +403,7 @@ public sealed class GenerateApplicationsTests : IDisposable
 
         // A provider having a bad minute is not a provider that is gone, and the postings behind
         // the failure are written for rather than lost with it.
-        Assert.Equal([Second, Third, Fourth], documented);
+        Assert.Equal([Second, Third, Fourth, Offsite], documented);
     }
 
     [Fact]
@@ -369,7 +418,7 @@ public sealed class GenerateApplicationsTests : IDisposable
         // broken pass looks like, so the count of postings waiting is what tells them apart. The
         // aggregator and the bodyless advert are not in it: this pass will never write for either,
         // so counting them would leave a permanent floor under the backlog.
-        Assert.Equal(4, summary.Waiting);
+        Assert.Equal(5, summary.Waiting);
     }
 
     [Fact]
@@ -377,8 +426,8 @@ public sealed class GenerateApplicationsTests : IDisposable
     {
         var summary = await RunAsync(new StubWriter(), documentsPerNight: 1);
 
-        // Four postings were waiting; one now has a draft.
-        Assert.Equal(3, summary.Waiting);
+        // Five postings were waiting; one now has a draft.
+        Assert.Equal(4, summary.Waiting);
     }
 
     [Fact]
