@@ -1,4 +1,4 @@
-using JobPlatform.Core.Ai;
+﻿using JobPlatform.Core.Ai;
 using JobPlatform.Core.Enrichment;
 using JobPlatform.Core.Matching;
 using JobPlatform.Core.Model;
@@ -32,6 +32,16 @@ namespace JobPlatform.Ingestion.Functions;
 /// runs and still writes, because the arithmetic needs no model. That is a genuinely useful
 /// degraded mode rather than a token one - a deployment with no provider configured still
 /// produces ranked matches, just without the judgement layer.
+///
+/// <b>Two facts about the world make a claim on the second pass's budget and neither makes one on
+/// the match.</b> A posting's age decides a reserved share of the shortlist; a posting's
+/// reachability decides whether it is drawn at all. Both are facts about how the market publishes
+/// adverts rather than about whether this candidate fits one, so no score, ranking, threshold or
+/// verdict reads either - and the symmetry is worth keeping in mind whenever a third such fact is
+/// proposed, because the pressure is always to let it "just nudge" the score. The reachability
+/// rule and the measurement behind it are in <c>PostingReachability</c>; it is applied by the
+/// shortlist query rather than here, because a selection applied after the draw would be a silent
+/// reduction of the budget rather than a filter.
 /// </remarks>
 public sealed class MatchSweepFunction(
     JobsDbContext db,
@@ -261,7 +271,7 @@ public sealed class MatchSweepFunction(
         if (profileIds.Count == 0)
         {
             logger.LogInformation("Match sweep: no profiles to score.");
-            return new SweepSummary(0, 0, 0, 0, 0);
+            return new SweepSummary(0, 0, 0, 0, 0, 0);
         }
 
         // Fetched once for the whole sweep. Every profile is scored against the same slice, and
@@ -295,8 +305,26 @@ public sealed class MatchSweepFunction(
             + "of {Requested} requested ({Discarded} discarded).",
             scored, assessed.Persisted, assessed.Requested, assessed.Discarded);
 
+        // Logged even at zero, and deliberately: the number this rule was argued from is 681
+        // postings today against a projected ~2,600 once the corpus reclassifies, and a claim
+        // that size cannot rest on a line that only appears when it is already interesting.
+        // "Held out of the draw" rather than "saved": the draw is bounded, so an excluded pair
+        // is usually replaced by the next-best one and the night costs the same either way.
+        // CountUnreachableAsync says why, and this wording is the only thing stopping the two
+        // being read as one number.
+        logger.LogInformation(
+            "Match sweep: {Unreachable} pair(s) held out of the judgement draw as permanently "
+            + "unreachable - the board hosts the application and the employer publishes no "
+            + "confirmed board. This is the pool the rule reached, not the judgements it saved.",
+            assessed.Unreachable);
+
         return new SweepSummary(
-            profileIds.Count, scored, assessed.Persisted, assessed.Requested, assessed.Discarded);
+            profileIds.Count,
+            scored,
+            assessed.Persisted,
+            assessed.Requested,
+            assessed.Discarded,
+            assessed.Unreachable);
     }
 
     private async Task<int> ScoreAsync(
@@ -577,9 +605,22 @@ public sealed class MatchSweepFunction(
         var shortlist = await BuildShortlistAsync(
             profileId, assessmentLimit, minScore, maxScore, now, ct);
 
+        // One count per profile per sweep, taken over the same eligible set the top-down draw
+        // runs over, and taken here rather than inside the draw because it is a measurement of
+        // the draw rather than a part of it. It costs one COUNT against a pass that has already
+        // read tens of thousands of rows, and it is what makes the reachability rule's claim
+        // checkable instead of remembered. Unbounded by the recent window on purpose: the window
+        // is a reservation inside the budget, and this is asking how far the rule reaches.
+        var unreachable = new AssessmentTally(
+            0, 0, 0, await matches.CountUnreachableAsync(profileId, minScore, maxScore, ct: ct));
+
+        // Before the empty check rather than after it, because the empty shortlist is the case
+        // the count exists to explain: a night that drew nothing because everything left was
+        // board-hosted looks exactly like a night with nothing left to judge, and those want
+        // opposite responses.
         if (shortlist.Count == 0)
         {
-            return AssessmentTally.Empty;
+            return unreachable;
         }
 
         // The assessor needs the whole profile, not the flattened facts: it reads the
@@ -592,14 +633,14 @@ public sealed class MatchSweepFunction(
 
         if (subjectId is null)
         {
-            return AssessmentTally.Empty;
+            return unreachable;
         }
 
         var view = await profiles.GetAsync(subjectId, ct);
 
         if (view is null)
         {
-            return AssessmentTally.Empty;
+            return unreachable;
         }
 
         var assessments = await assessor.AssessAsync(view.Profile, shortlist, ct);
@@ -642,7 +683,8 @@ public sealed class MatchSweepFunction(
 
         var persisted = await matches.ApplyAssessmentsAsync(profileId, written, time.GetUtcNow(), ct);
 
-        return new AssessmentTally(shortlist.Count, written.Count, persisted);
+        return new AssessmentTally(
+            shortlist.Count, written.Count, persisted, unreachable.Unreachable);
     }
 
     /// <summary>
@@ -651,17 +693,31 @@ public sealed class MatchSweepFunction(
     /// <param name="Requested">Pairs sent to the model. This is what the run cost.</param>
     /// <param name="Returned">Answers the assessor could correlate back to a posting.</param>
     /// <param name="Persisted">Rows actually written, which a no-op update can make smaller.</param>
-    private readonly record struct AssessmentTally(int Requested, int Returned, int Persisted)
+    /// <param name="Unreachable">
+    /// Pairs above the threshold and unassessed that the reachability rule kept out of the draw.
+    /// </param>
+    /// <remarks>
+    /// <b><see cref="Unreachable"/> is not part of the same arithmetic as the other three and must
+    /// not be folded into them.</b> Those three describe one call and each is a subset of the one
+    /// before it; this one counts rows that were never in the call at all, so
+    /// <c>Requested + Unreachable</c> is not a number that means anything - the draw is bounded,
+    /// and an excluded pair is usually replaced by the next-best one rather than leaving a gap.
+    /// It rides along here only because it is measured per profile and reported per sweep, which
+    /// is exactly what this type is for.
+    /// </remarks>
+    private readonly record struct AssessmentTally(
+        int Requested, int Returned, int Persisted, int Unreachable)
     {
         public int Discarded => Requested - Returned;
 
-        public static AssessmentTally Empty => new(0, 0, 0);
+        public static AssessmentTally Empty => new(0, 0, 0, 0);
 
         public static AssessmentTally operator +(AssessmentTally left, AssessmentTally right)
             => new(
                 left.Requested + right.Requested,
                 left.Returned + right.Returned,
-                left.Persisted + right.Persisted);
+                left.Persisted + right.Persisted,
+                left.Unreachable + right.Unreachable);
     }
 
     /// <param name="Profiles">How many profiles the sweep considered.</param>
@@ -673,11 +729,24 @@ public sealed class MatchSweepFunction(
     /// <param name="Discarded">
     /// Pairs paid for whose answer could not be correlated back to a posting.
     /// </param>
+    /// <param name="Unreachable">
+    /// Pairs the reachability rule held out of the draw: above the threshold, unassessed, and on a
+    /// posting whose board hosts the application with no employer board to recover a link from.
+    /// </param>
     /// <remarks>
     /// <see cref="Requested"/> and <see cref="Discarded"/> are reported rather than inferred
     /// because a caller cannot derive them: a sweep that assessed forty looks identical whether
     /// it asked for forty or for ninety. On 2026-08-28 it was ninety.
+    ///
+    /// <see cref="Unreachable"/> is here for the same reason one step further out. It is a claim
+    /// on the budget and never on the match, so it moves no score, no rank and no verdict and
+    /// therefore shows up nowhere else - which is exactly what makes an unmeasured version of it
+    /// so easy to believe. <b>It is the pool the rule reached and not the judgements it saved</b>,
+    /// and those differ whenever the eligible pool is larger than the budget, which is most
+    /// nights. Measured on 2026-09-09 the pool is 681 postings corpus-wide; the ~2,600 the same
+    /// rule will reach once LinkedIn's route-unknown backlog reclassifies is a projection and must
+    /// not be quoted as a saving.
     /// </remarks>
     public sealed record SweepSummary(
-        int Profiles, int Scored, int Assessed, int Requested, int Discarded);
+        int Profiles, int Scored, int Assessed, int Requested, int Discarded, int Unreachable);
 }

@@ -1,7 +1,10 @@
+using System.Net;
 using JobPlatform.Core.Applications;
 using JobPlatform.Ingestion.Ats;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Http;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace JobPlatform.Ingestion.Tests.Ats;
@@ -68,6 +71,70 @@ public sealed class AtsBoardRegistrationTests
         Assert.Contains(
             client.DefaultRequestHeaders.Accept,
             accept => accept.MediaType == "application/json");
+    }
+
+    [Fact]
+    public void The_careers_page_reader_shares_the_client_that_carries_no_cookie_or_credential()
+    {
+        // The third discovery source is the only thing here that fetches a host nobody publishes an
+        // API for, so it is the one place a header would be added to "help a page answer" and
+        // nothing would fail. Wiring it onto the shared client is what makes that impossible rather
+        // than discouraged: UseCookies off means a Set-Cookie cannot come back on the next request,
+        // a null Credentials means the host's managed identity is never offered, and PreAuthenticate
+        // off means nothing is volunteered ahead of a challenge that will never come.
+        using var provider = Provide();
+
+        Assert.NotNull(provider.GetService<CareersPageReader>());
+
+        var handler = Assert.IsType<SocketsHttpHandler>(PrimaryHandler(provider));
+
+        Assert.False(handler.UseCookies);
+        Assert.Null(handler.Credentials);
+        Assert.False(handler.PreAuthenticate);
+
+        // And a redirect chain long enough to be a loop is not a careers page. There is nothing to
+        // leak along one - no cookie is carried and no credential exists to offer - but an
+        // unbounded chase is an arbitrary host deciding how long an invocation runs.
+        Assert.Equal(3, handler.MaxAutomaticRedirections);
+    }
+
+    /// <summary>
+    /// The handler the named client is actually built with, by running the registered builder.
+    /// </summary>
+    /// <remarks>
+    /// Reached through <c>HttpClientFactoryOptions</c> rather than by constructing a client, because
+    /// the primary handler is not exposed on <c>HttpClient</c> at all - and the properties above are
+    /// the whole of "no credential, no cookie, no session" as a fact rather than as a promise, so
+    /// they are worth reaching for. This is what the factory itself does when it creates the client.
+    /// </remarks>
+    private static HttpMessageHandler PrimaryHandler(IServiceProvider provider)
+    {
+        var options = provider
+            .GetRequiredService<IOptionsMonitor<HttpClientFactoryOptions>>()
+            .Get(AtsBoardRegistration.HttpClientName);
+
+        var builder = new CapturingHandlerBuilder(provider);
+
+        foreach (var action in options.HttpMessageHandlerBuilderActions)
+        {
+            action(builder);
+        }
+
+        return builder.PrimaryHandler;
+    }
+
+    /// <summary>A builder that keeps whatever the registration hands it.</summary>
+    private sealed class CapturingHandlerBuilder(IServiceProvider services) : HttpMessageHandlerBuilder
+    {
+        public override string? Name { get; set; }
+
+        public override HttpMessageHandler PrimaryHandler { get; set; } = new HttpClientHandler();
+
+        public override IList<DelegatingHandler> AdditionalHandlers { get; } = [];
+
+        public override IServiceProvider Services { get; } = services;
+
+        public override HttpMessageHandler Build() => PrimaryHandler;
     }
 
     [Fact]

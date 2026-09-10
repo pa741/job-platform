@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 using JobPlatform.Core.Applications;
 using JobPlatform.Data.Sql;
 using JobPlatform.Data.Sql.Entities;
@@ -826,6 +826,219 @@ public sealed class EmployerAtsBoardStoreTests : IDisposable
         Assert.Equal(Now, stored.ConfirmedAtUtc);
         Assert.Equal(Now.AddHours(1), stored.LastFetchedUtc);
         Assert.Equal("https://boards.greenhouse.io/acme/jobs/1", (await PostingAsync(id)).EmployerAtsApplyUrl);
+    }
+
+    // -----------------------------------------------------------------------
+    // Whose careers page is worth reading
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task The_employer_blocking_an_application_somebody_wants_has_their_page_read_first()
+    {
+        await AddPostingsAsync(Acme, 3);
+        var wanted = await AddPostingsAsync(Contoso, 1);
+
+        await WantAsync(wanted[0]);
+
+        await CompanyUrlAsync(Acme, "https://careers.acme.example/");
+        await CompanyUrlAsync(Contoso, "https://careers.contoso.example/");
+
+        await using var db = CreateContext();
+
+        var pages = await CreateRepository(db)
+            .ListCareersPagesToReadAsync(Now, TimeSpan.FromDays(90), limit: 10);
+
+        // The same ranking the fetch list uses and for the same measured reason: on the 2026-09-08
+        // run, 45 boards were fetched and 5 were among the 22 that would have unblocked a posting
+        // somebody could apply to. A bounded budget spent top-down on the wrong ranking is spent on
+        // employers nobody is applying to - and this budget is the tightest of the three, because
+        // it is the one aimed at hosts that publish no API for us.
+        Assert.Equal([Contoso, Acme], pages.Select(page => page.CompanyId));
+
+        // Contoso leads on one blocked posting against Acme's three, and Acme is still returned:
+        // a sort key rather than a filter, so an employer nobody has matched yet is reached after
+        // the ones somebody is waiting on rather than instead of them.
+        Assert.Equal(3, pages[1].BlockedPostings);
+        Assert.Equal("https://careers.contoso.example/", pages[0].CareersUrl);
+    }
+
+    [Fact]
+    public async Task An_employer_with_any_board_already_is_not_offered_a_careers_page_read()
+    {
+        await AddPostingsAsync(Acme, 2);
+        await AddPostingsAsync(Contoso, 2);
+
+        await CompanyUrlAsync(Acme, "https://careers.acme.example/");
+        await CompanyUrlAsync(Contoso, "https://careers.contoso.example/");
+
+        // Unconfirmed and unusable, and still a reason not to spend a request: the row is the
+        // memory of one already spent, which is exactly the bound the probe list relies on.
+        await AddBoardAsync(Acme, AtsVendor.Greenhouse, "orbital", AtsBoardDiscovery.Probed, confirmedAtUtc: null);
+
+        await using var db = CreateContext();
+
+        var pages = await CreateRepository(db)
+            .ListCareersPagesToReadAsync(Now, TimeSpan.FromDays(90), limit: 10);
+
+        Assert.Equal([Contoso], pages.Select(page => page.CompanyId));
+    }
+
+    [Fact]
+    public async Task An_employer_with_no_address_of_their_own_is_not_offered_and_junk_still_is()
+    {
+        await AddPostingsAsync(Acme, 1);
+        await AddPostingsAsync(Contoso, 1);
+
+        // Null is excluded in SQL because reading it would spend a slot to establish nothing.
+        // Anything else is offered: whether a string is an address, and whether the host is the
+        // employer's, are Core's questions and the reader's, and a WHERE clause approximating them
+        // would be a second, weaker spelling of a rule that already exists.
+        await CompanyUrlAsync(Contoso, "  not a url  ");
+
+        await using var db = CreateContext();
+
+        var pages = await CreateRepository(db)
+            .ListCareersPagesToReadAsync(Now, TimeSpan.FromDays(90), limit: 10);
+
+        Assert.Equal([Contoso], pages.Select(page => page.CompanyId));
+    }
+
+    [Fact]
+    public async Task A_page_read_inside_the_window_is_not_offered_again_and_one_read_before_it_is()
+    {
+        await AddPostingsAsync(Acme, 1);
+        await AddPostingsAsync(Contoso, 1);
+
+        await CompanyUrlAsync(Acme, "https://careers.acme.example/");
+        await CompanyUrlAsync(Contoso, "https://careers.contoso.example/");
+
+        await using (var db = CreateContext())
+        {
+            var store = CreateRepository(db);
+
+            Assert.True(await store.RecordCareersPageReadAsync(Acme, Now.AddDays(-10)));
+            Assert.True(await store.RecordCareersPageReadAsync(Contoso, Now.AddDays(-120)));
+        }
+
+        await using var read = CreateContext();
+
+        var pages = await CreateRepository(read)
+            .ListCareersPagesToReadAsync(Now, TimeSpan.FromDays(90), limit: 10);
+
+        // Ninety days rather than the boards' seven, because the two answer questions that change
+        // at different speeds: a board's listings are vacancies, and whether a company has an
+        // applicant tracking system at all is a procurement decision. A window exists so that "we
+        // looked and there was nothing" cannot become permanent for an employer who adopts one
+        // later.
+        Assert.Equal([Contoso], pages.Select(page => page.CompanyId));
+    }
+
+    [Fact]
+    public async Task A_zero_window_means_a_page_is_read_once_and_never_again()
+    {
+        await AddPostingsAsync(Acme, 1);
+
+        await CompanyUrlAsync(Acme, "https://careers.acme.example/");
+
+        await using (var db = CreateContext())
+        {
+            await CreateRepository(db).RecordCareersPageReadAsync(Acme, Now.AddYears(-5));
+        }
+
+        await using var read = CreateContext();
+
+        // A supported setting rather than a degenerate one, and it has to be tested because the
+        // obvious implementation - a cutoff of "now minus zero" - would re-read every employer on
+        // every pass, which is the opposite of what the setting reads as.
+        Assert.Empty(
+            await CreateRepository(read).ListCareersPagesToReadAsync(Now, TimeSpan.Zero, limit: 10));
+    }
+
+    [Fact]
+    public async Task A_board_a_careers_page_named_is_stored_unusable_unless_the_caller_confirms_it()
+    {
+        await AddPostingsAsync(Acme, 1);
+
+        await using (var db = CreateContext())
+        {
+            Assert.True(await CreateRepository(db)
+                .RecordCareersPageAsync(Acme, Board(token: "someoneelse"), confirmed: false, Now));
+        }
+
+        var stored = await StoredAsync(Acme);
+
+        // The row is worth keeping - the request was spent and this is what stops it being spent
+        // again - and ConfirmedAtUtc is the whole permission, so a token whose owner nobody
+        // established produces no link however plainly it was published.
+        Assert.Equal(AtsBoardDiscovery.CareersPage, stored.Discovery);
+        Assert.Null(stored.ConfirmedAtUtc);
+
+        await using var read = CreateContext();
+
+        Assert.Empty(
+            await CreateRepository(read).ListBoardsToFetchAsync(Now, TimeSpan.FromDays(1), limit: 10));
+    }
+
+    [Fact]
+    public async Task A_link_the_employer_publishes_later_upgrades_the_board_their_page_named()
+    {
+        await using (var db = CreateContext())
+        {
+            await CreateRepository(db)
+                .RecordCareersPageAsync(Acme, Board(), confirmed: false, Now.AddDays(-30));
+        }
+
+        await using (var db = CreateContext())
+        {
+            Assert.True(await CreateRepository(db).LearnAsync(Acme, Board(), Now));
+        }
+
+        var stored = await StoredAsync(Acme);
+
+        // Learned beats every other path, and the direction is enforced rather than trusted: the
+        // employer's own apply link is the evidence a careers-page token never had. The discovery
+        // date stays where it was, because "when did we start believing this" is the first question
+        // asked about a board that turns out to belong to somebody else.
+        Assert.Equal(AtsBoardDiscovery.Learned, stored.Discovery);
+        Assert.Equal(Now, stored.ConfirmedAtUtc);
+        Assert.Equal(Now.AddDays(-30), stored.DiscoveredAtUtc);
+    }
+
+    [Fact]
+    public async Task A_careers_page_may_not_displace_a_board_the_employer_published()
+    {
+        await AddBoardAsync(
+            Acme, AtsVendor.Greenhouse, "acme", AtsBoardDiscovery.Learned, Now.AddDays(-30));
+
+        await using (var db = CreateContext())
+        {
+            Assert.False(await CreateRepository(db)
+                .RecordCareersPageAsync(Acme, Board(), confirmed: true, Now));
+        }
+
+        var stored = await StoredAsync(Acme);
+
+        // A page may not re-date a row so DiscoveredAtUtc becomes today, may not overwrite the
+        // discovery that says where the token came from, and may not re-stamp a confirmation
+        // somebody earned. One insert path, one rule, and it is the same one the probe follows.
+        Assert.Equal(AtsBoardDiscovery.Learned, stored.Discovery);
+        Assert.Equal(Now.AddDays(-30), stored.ConfirmedAtUtc);
+    }
+
+    /// <summary>Publishes an address for an employer, the way an ingest folds one onto them.</summary>
+    /// <remarks>
+    /// <c>Companies.Url</c> is <c>JobPostings.CompanyUrl</c> after the ingest has folded it onto the
+    /// employer - <c>company.Url = posting.CompanyUrl ?? company.Url</c> on every upsert - so this
+    /// writes exactly what a scrape writes, unvalidated on the way in because that is how it
+    /// arrives.
+    /// </remarks>
+    private async Task CompanyUrlAsync(int companyId, string? url)
+    {
+        await using var db = CreateContext();
+
+        await db.Companies
+            .Where(company => company.Id == companyId)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(company => company.Url, url));
     }
 
     // -----------------------------------------------------------------------

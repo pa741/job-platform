@@ -93,7 +93,16 @@ public sealed record MatchRow(
 /// <param name="AtsVendor">
 /// Whose application system sits at the end of <paramref name="ApplyUrl"/>, read off the URL.
 /// <c>Aggregator</c> is the value worth acting on: a "direct" link into another job board is
-/// another board rather than an employer's form, and the loop should skip it.
+/// another board rather than an employer's form, and the loop should skip it - which
+/// <see cref="ApplyableQuery.ExcludeAggregators"/> now does in the query rather than asking a
+/// caller to.
+///
+/// <b>It is read off the effective link and therefore off all four rungs, which is what makes it
+/// something other than <c>JobPostings.ApplyVendor</c>.</b> That column answers about the ladder
+/// this posting owns; this answers about the URL handed over, borrowed rung included. The two
+/// disagree exactly where a borrow happened, and every reader of either has to know which question
+/// it asked - see <see cref="ApplyableQuery.ExcludeAggregators"/> for what the filter does about
+/// it.
 /// </param>
 /// <param name="AssessedAtUtc">
 /// When the model judged this pair. The queue admits nothing unassessed, so this dates the
@@ -249,6 +258,85 @@ public sealed record ApplyableQuery
     /// the opposite of what asking for a floor means.
     /// </remarks>
     public int? MinAssessmentScore { get; init; }
+
+    /// <summary>
+    /// Drop the postings whose apply link leads to another job board rather than to an employer.
+    /// </summary>
+    /// <remarks>
+    /// <b>Enforced here for the reason <see cref="MinAssessmentScore"/> is enforced here.</b>
+    /// <c>list_applyable</c> has told its caller since the surface existed that <c>Aggregator</c>
+    /// is "worth skipping", and a prompt-level instruction is a request rather than a guarantee -
+    /// the one reader that actually acts on it, <c>GenerateApplicationsFunction</c>, does so by
+    /// filtering the rows it was handed, which is a skip and not a filter. Every other client is
+    /// trusted to have read a sentence. Off by default, because a queue that quietly returned a
+    /// subset would read as a market that had gone quiet.
+    ///
+    /// <b>It is a clause on <c>JobPostings.ApplyVendor</c>, because the rule that fills that
+    /// column has no SQL.</b> <c>AtsVendorDetector.Detect</c> parses a host, walks it to a label
+    /// boundary and reads the query parameters, so every caller that wants a vendor has had to run
+    /// it after materialisation - and after materialisation is exactly where this filter must not
+    /// run. A predicate applied after <c>Take</c> is not a filter, it is a silent reduction of the
+    /// limit, three times over in this codebase now. The stored column is what lets this one sit
+    /// with the others, in the query, before the bound.
+    ///
+    /// <b>The column and the vendor this queue reports can disagree, and the clause is written
+    /// around the disagreement rather than despite it.</b> The column is derived from the
+    /// posting's own ladder - <c>JobUrlDirect ?? EmployerAtsApplyUrl ?? JobUrl</c> - and the row's
+    /// <c>AtsVendor</c> is read off the effective apply URL, which has a fourth rung the column
+    /// deliberately does not model: a link borrowed from the same job on another board. So a
+    /// LinkedIn listing whose own ladder ends at its board page stores <c>Aggregator</c> and hands
+    /// back <c>Lever</c>, and they are both right about the question each was asked.
+    ///
+    /// <b>So the clause holds a row back only where the column says aggregator <i>and</i> no
+    /// borrow could rescue it, and that direction is the whole decision.</b> Filtering on the
+    /// column alone is one comparison and hides precisely the rows the fourth rung exists to
+    /// rescue - roughly 5% of the links LinkedIn stopped publishing come back that way - so the
+    /// filter would be at its most wrong on the postings it was most needed for. <b>Hiding a job
+    /// that could have been applied to is the worse failure of the two, because it is
+    /// invisible</b>: a row that should be absent from a list is something somebody notices, and a
+    /// row that should be present is not. Showing a posting that cannot be applied through costs a
+    /// caller one glance at a row that says <c>atsVendor: Aggregator</c> next to
+    /// <c>applyUrlSource: MatchedOnAnotherBoard</c> and is refusable on the spot.
+    ///
+    /// <b>What that leaves is one residual error, and it falls the visible way on purpose.</b> A
+    /// borrowed link that is itself another board's re-listing is kept - the rescue clause asks
+    /// whether a borrow is available, not whose form is at the end of it, because the borrowed
+    /// link belongs to a different row and SQL here can only read this one. The queue then reports
+    /// <c>Aggregator</c> on a row this filter let through, which is an answer the caller can act
+    /// on. Removing it means storing a vendor for a link a posting does not own, which is a
+    /// property of a cluster rather than of a row, and is DDL bought for the smaller error.
+    ///
+    /// <b>The rescue is a fourth spelling of the borrow, with the hazard that implies.</b> The
+    /// channel filter, the provenance filter and the projection already write it out, because EF
+    /// translates some of them and materialises the other and a shared helper would have to be an
+    /// expression tree nobody can read.
+    /// <c>The_aggregator_filter_keeps_a_row_a_borrowed_link_rescues</c> is what holds this one to
+    /// them, and the <c>OffsiteApply</c> veto is in it for the same reason it is in the others: a
+    /// board saying it hosts the application is talking about this listing rather than one that
+    /// resembles it.
+    ///
+    /// <b>It excludes <c>Aggregator</c> and never <c>!IsEmployerAts()</c>, which would also take
+    /// <c>Unknown</c>.</b> Three reasons, and the third is the one that decides it. Unknown is a
+    /// different fact - "there is nothing at the end of this link" rather than "the link is
+    /// another board" - and the queue already reports it per row, so a caller that means it can
+    /// ask. It is also the column value most likely to be wrong about the row, for the reason
+    /// above: a posting with no link of its own is exactly the posting a borrow rescues. And the
+    /// shortlist facet next door already spells "exclude aggregators" as
+    /// <c>!= AtsVendor.Aggregator</c>, so a second reading of the same words in the same file is
+    /// the drift this codebase keeps paying for. <c>GenerateApplicationsFunction</c> is right to
+    /// use the wider test where it is: it reads the vendor off a materialised row, where the
+    /// fourth rung has already been applied and <c>Unknown</c> really does mean there is nothing
+    /// to open, and it is deciding whether to spend a model call rather than what a caller may
+    /// see.
+    ///
+    /// <b>A row nothing has derived is kept.</b> <c>ApplyVendor</c> is null until a writer reaches
+    /// it, which is not <c>AtsVendor.Unknown</c> - that member is a verdict about the row and null
+    /// is the absence of one. EF compiles the comparison with C# null semantics
+    /// (<c>&lt;&gt; 13 OR IS NULL</c>), so an underived corpus stays visible rather than vanishing
+    /// on the morning of a deploy. A filter that hid what it had not judged would be hiding a job
+    /// for no stated reason, which is the failure this whole property is written to avoid.
+    /// </remarks>
+    public bool ExcludeAggregators { get; init; }
 
     /// <summary>How the queue is ordered. <see cref="ApplyableSort.Rank"/> unless asked otherwise.</summary>
     public ApplyableSort Sort { get; init; } = ApplyableSort.Rank;
@@ -552,6 +640,15 @@ public sealed class JobMatchRepository(JobsDbContext db)
     ///
     /// The description comes across here, unlike in the scoring query, because this is the point
     /// at which something actually has to read the advert.
+    ///
+    /// <b>Reachability is the fifth, and it is the only one of the five that is a fact about the
+    /// world rather than about this pair.</b> A posting whose board hosts the application and
+    /// whose employer publishes no board of their own is one nothing unattended can ever apply to,
+    /// so a judgement bought for it buys a verdict on a job that cannot be acted on -
+    /// <see cref="PostingReachability"/> holds the rule and the measurement behind it. It belongs
+    /// here and nowhere else: this method is the judgement budget, and the score, the ranking and
+    /// the verdict all stay exactly as they were. The excluded pair keeps its score, keeps its
+    /// place on the matches page, and is drawn the night its link arrives.
     /// </remarks>
     /// <param name="maximumScore">
     /// Upper bound on the score, for drawing a sample from one band rather than off the top.
@@ -589,6 +686,101 @@ public sealed class JobMatchRepository(JobsDbContext db)
         DateTimeOffset? postedSince = null,
         CancellationToken ct = default)
     {
+        // Reachability is applied inside the query and before the bound, for exactly the reason
+        // the description and dismissal clauses are, and with one extra reason of its own. A
+        // filter run over the materialised page is not a filter, it is a silent reduction of the
+        // limit: ask for thirty and get twenty-two, with the eight the rule removed not replaced
+        // by the next-best pairs and nothing in the summary saying the night came back short.
+        // Three filters in this codebase have already had to be moved for that. The extra reason
+        // is that this rule concentrates: board-hosted postings are overwhelmingly LinkedIn's,
+        // LinkedIn is most of the corpus, and a band ordered by posting id would meet the same
+        // starved head every night that the descriptionless rows used to produce.
+        var query = Eligible(profileId, minimumScore, maximumScore, postedSince)
+            .Where(PostingReachability.WorthJudging(db.EmployerAtsBoards));
+
+        var ordered = maximumScore is null
+            ? query.OrderByDescending(m => m.Score)
+            : query.OrderBy(m => m.PostingId);
+
+        var rows = await ordered
+            .Take(limit)
+            .Select(m => new
+            {
+                m.PostingId,
+                m.Score,
+                m.ComponentsJson,
+                m.MatchedJson,
+                m.GapsJson,
+                m.RequiredGapCount,
+                m.ScorerVersion,
+                m.Posting!.Title,
+                m.Posting.Company,
+                m.Posting.Description,
+            })
+            .ToListAsync(ct);
+
+        return rows
+            // Belt and braces: the query excludes null and empty, this also excludes whitespace,
+            // which SQL Server's comparison semantics would not. It can no longer starve a band,
+            // because a row of pure whitespace is rare where an empty one is not.
+            .Where(r => !string.IsNullOrWhiteSpace(r.Description))
+            .Select(r => new CandidacyRequest(
+                r.PostingId,
+                r.Title,
+                r.Company,
+                r.Description!,
+                Rebuild(r.Score, r.ComponentsJson, r.MatchedJson, r.GapsJson, r.ScorerVersion)))
+            .ToList();
+    }
+
+    /// <summary>
+    /// How many otherwise-judgeable pairs the reachability rule is holding out of the draw.
+    /// </summary>
+    /// <remarks>
+    /// <b>Reported rather than inferred, because the alternative is a saving nobody can check.</b>
+    /// <c>PostingReachability</c> makes an argument about 691 postings, of which 681 are excluded
+    /// and 4,364 more will join them as the corpus reclassifies. None of that is visible in a
+    /// sweep's own numbers - a night that judged forty looks identical whether the rule removed
+    /// nothing or removed four hundred - so this is the one thing standing between a measured
+    /// claim and a remembered one.
+    ///
+    /// <b>It counts the pool held back, which is not the same as judgements saved, and the
+    /// difference is worth knowing before somebody quotes it.</b> The shortlist is a bounded draw
+    /// off the top of a ranking: on a night when the eligible pool is larger than the budget, an
+    /// excluded pair is simply replaced by the next-best one and the night costs exactly what it
+    /// would have cost anyway. The saving is real only where the pool is thin enough that an
+    /// unreachable pair would have made the shortlist. So this number is an upper bound on the
+    /// effect and a direct measure of the rule's reach, and the log line says which it is.
+    ///
+    /// The arguments mirror <see cref="GetUnassessedAsync"/> rather than being fixed here, so the
+    /// count is over the same eligible set the caller is actually drawing from. Both read
+    /// <see cref="Eligible"/>, so "otherwise judgeable" cannot come to mean two different things.
+    /// </remarks>
+    public async Task<int> CountUnreachableAsync(
+        long profileId,
+        int minimumScore,
+        int? maximumScore = null,
+        DateTimeOffset? postedSince = null,
+        CancellationToken ct = default)
+        => await Eligible(profileId, minimumScore, maximumScore, postedSince)
+            .Where(PostingReachability.PermanentlyUnreachable(db.EmployerAtsBoards))
+            .CountAsync(ct);
+
+    /// <summary>
+    /// The pairs a judgement could be spent on tonight, before reachability is considered.
+    /// </summary>
+    /// <remarks>
+    /// Factored out when the reachability rule arrived, because the rule's whole justification is
+    /// a count of what it removes and that count is only meaningful against the same eligible set
+    /// the draw runs over. Written twice, the two would agree on the day they were written and
+    /// disagree the first time a clause is added to one of them - and the disagreement would
+    /// surface as a number in a log line, which is the least likely place for anybody to notice
+    /// it. Reachability itself is deliberately <i>not</i> in here: this is the set the two callers
+    /// share, and it is the thing they disagree about.
+    /// </remarks>
+    private IQueryable<JobMatchEntity> Eligible(
+        long profileId, int minimumScore, int? maximumScore, DateTimeOffset? postedSince)
+    {
         var query = db.JobMatches
             .AsNoTracking()
             .Where(m => m.ProfileId == profileId
@@ -625,39 +817,7 @@ public sealed class JobMatchRepository(JobsDbContext db)
             query = query.Where(PostingRecency.Matches(cutoff));
         }
 
-        var ordered = maximumScore is null
-            ? query.OrderByDescending(m => m.Score)
-            : query.OrderBy(m => m.PostingId);
-
-        var rows = await ordered
-            .Take(limit)
-            .Select(m => new
-            {
-                m.PostingId,
-                m.Score,
-                m.ComponentsJson,
-                m.MatchedJson,
-                m.GapsJson,
-                m.RequiredGapCount,
-                m.ScorerVersion,
-                m.Posting!.Title,
-                m.Posting.Company,
-                m.Posting.Description,
-            })
-            .ToListAsync(ct);
-
-        return rows
-            // Belt and braces: the query excludes null and empty, this also excludes whitespace,
-            // which SQL Server's comparison semantics would not. It can no longer starve a band,
-            // because a row of pure whitespace is rare where an empty one is not.
-            .Where(r => !string.IsNullOrWhiteSpace(r.Description))
-            .Select(r => new CandidacyRequest(
-                r.PostingId,
-                r.Title,
-                r.Company,
-                r.Description!,
-                Rebuild(r.Score, r.ComponentsJson, r.MatchedJson, r.GapsJson, r.ScorerVersion)))
-            .ToList();
+        return query;
     }
 
     /// <summary>Writes what the model concluded, leaving the arithmetic half untouched.</summary>
@@ -986,8 +1146,13 @@ public sealed class JobMatchRepository(JobsDbContext db)
     /// difference between this trio and the channel filter below, where there was no way to avoid a
     /// second spelling. <c>CvVariant.IsSendable</c> has the same limitation and the same escape:
     /// <c>CvVariantEntity.Sendable</c> is its one shadow over columns, composed above rather than
-    /// respelled here. <c>AtsVendorDetector.Detect</c> has no escape at all - it reads a URL rather
-    /// than compares one - so it runs after materialisation rather than in the projection.
+    /// respelled here. <c>AtsVendorDetector.Detect</c> has no escape of that kind - it reads a URL
+    /// rather than compares one - so the row's vendor is still derived after materialisation. What
+    /// it has instead is a <i>stored</i> shadow, <c>JobPostings.ApplyVendor</c>, which is what lets
+    /// <see cref="ApplyableQuery.ExcludeAggregators"/> filter before the bound. A stored derivation
+    /// is a weaker escape than a shadow over columns and in a specific way: this one is a rung
+    /// short of the ladder the projection walks, so the filter carries the missing rung itself
+    /// rather than pretending the two agree. The remarks on that property are the argument.
     ///
     /// <b>Dismissed pairs were being returned, and this was the only match query that let
     /// them.</b> <see cref="ListAsync"/> and <see cref="GetUnassessedAsync"/> both exclude them;
@@ -997,9 +1162,14 @@ public sealed class JobMatchRepository(JobsDbContext db)
     ///
     /// <b>Every filter runs before the bound, and each needs its own test.</b> The channel filter
     /// and the projection are written out twice because EF translates one and materialises the
-    /// other; the apply-URL provenance filter has the same shape and the same hazard. A filter
+    /// other; the apply-URL provenance filter has the same shape and the same hazard, and the
+    /// aggregator filter is the third writing of the same ladder. A filter
     /// applied after <c>Take</c> is a silent reduction of the limit, three times over in this
-    /// codebase now, so it is asserted rather than assumed. <b>And a test covers every argument
+    /// codebase now, so it is asserted rather than assumed. <b>The bound here is the read window
+    /// and not the limit</b>, which the aggregator test has to defeat as well: the query reads
+    /// <see cref="ClusterWindow"/> rows per job, so a predicate run over the materialised page
+    /// still answers correctly whenever the window happens to hold a survivor. Only a head longer
+    /// than the window tells the two apart. <b>And a test covers every argument
     /// the filter accepts, not every argument it happened to be called with</b>: the two spellings
     /// of the provenance rule had already drifted on a value nothing ever passed, which no test
     /// asking about the other values could see.
@@ -1294,6 +1464,43 @@ public sealed class JobMatchRepository(JobsDbContext db)
                         && other.JobUrlDirect != null))),
             _ => matches,
         };
+
+        // The third filter written out against the same ladder, and the only one that cannot read
+        // the rung it cares about. AtsVendorDetector.Detect reads a URL rather than compares one,
+        // so JobPostings.ApplyVendor is what puts the vendor in the query at all - and that column
+        // is derived from the posting's own JobUrlDirect ?? EmployerAtsApplyUrl ?? JobUrl, which
+        // stops one rung short of what the projection below hands over.
+        //
+        // So the clause is two halves. The first is the column, which is exact wherever the
+        // posting publishes a link of its own: nothing may be borrowed while JobUrlDirect or
+        // EmployerAtsApplyUrl is set, so a whatjobs "direct" link and a board page with no twin
+        // are both answered outright. The second is the borrow itself, spelled out here for the
+        // fourth time, and it keeps the rows on which the column is stale: a LinkedIn listing
+        // whose own ladder ends at its board page but whose twin published an employer form is a
+        // posting this queue can be applied through, and hiding it would be hiding a job nobody
+        // would ever notice was missing. The OffsiteApply veto is carried with it, because a board
+        // that says it hosts the application is talking about this listing rather than one that
+        // resembles it - so that row keeps its board page, keeps its aggregator vendor, and is
+        // dropped.
+        //
+        // The residual error is a borrowed link that is itself another board's re-listing, which
+        // is kept and reports Aggregator to the caller. That is the error worth having: it is on
+        // the row, in a field the description tells a client to read, where hiding a rescued
+        // posting is on no row at all. See the remarks on ApplyableQuery.ExcludeAggregators.
+        if (query.ExcludeAggregators)
+        {
+            matches = matches.Where(m => m.Posting!.ApplyVendor != AtsVendor.Aggregator
+                || (m.Posting.JobUrlDirect == null
+                    && m.Posting.EmployerAtsApplyUrl == null
+                    && m.Posting.OffsiteApply != false
+                    && m.Posting.LocationCity != null
+                    && db.JobPostings.Any(other =>
+                        other.Title == m.Posting.Title
+                        && other.Company == m.Posting.Company
+                        && other.LocationCity == m.Posting.LocationCity
+                        && other.Site != m.Posting.Site
+                        && other.JobUrlDirect != null)));
+        }
 
         // The projection is written once and handed to two queries: the page itself, and the
         // rows that complete a cluster the page cut in half. It is an expression rather than a

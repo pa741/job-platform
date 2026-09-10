@@ -40,6 +40,7 @@ internal static class Program
                   dbadmin status          "<connection-string>"
                   dbadmin coverage        "<connection-string>" [top-mentions]
                   dbadmin apply-links     "<connection-string>" [days]
+                  dbadmin measure-easy-apply "<connection-string>"
                   dbadmin backfill-apply-vendor "<connection-string>" [--confirm]
                   dbadmin delete-submissions "<connection-string>" <id> [<id>...] [--confirm]
                   dbadmin delete-applications "<connection-string>" (<id>... | --all) [--confirm]
@@ -77,6 +78,8 @@ internal static class Program
                 "apply-links" => await ApplyLinksAsync(
                     connectionString,
                     args.Length >= 3 && int.TryParse(args[2], out var days) ? days : 7),
+                // Read-only, so there is no --confirm to check for - see the doc comment.
+                "measure-easy-apply" => await MeasureEasyApplyAsync(connectionString),
                 // Dry run unless --confirm, like the submissions command below and for a
                 // related reason: these rows cost model calls to produce and nothing regenerates
                 // them on demand except another pass over the same postings.
@@ -458,25 +461,37 @@ internal static class Program
 
         // How many of the missing links another board already knows.
         //
-        // JobFingerprint.ContentHash is normalised title|company|location, so the same job
-        // cross-posted to LinkedIn and to Indeed or freehire hashes the same - and those two
-        // still publish the employer's apply URL. Every match here is a link recoverable with
-        // no extra request, no account and nothing to route around: it is already in the
+        // CrossBoardKey, not ContentHash. ContentHash folds in the *raw* location string, and
+        // boards write it differently - "London, England, United Kingdom" against "London,
+        // UK" - so it matched across boards zero times in 5,268 live postings, which is the
+        // entire reason CrossBoardKey exists (see the remarks on JobPostingEntity.CrossBoardKey):
+        // it parses the city out first and matched 285 times on the same corpus. Joining on
+        // ContentHash here would report zero by construction and this section would be arguing
+        // against a recovery path that actually works. Every match below is a link recoverable
+        // with no extra request, no account and nothing to route around: it is already in the
         // database under a different row.
+        //
+        // The null guard is not optional. CrossBoardKey is null wherever the employer or the
+        // city is unknown - a posting with no city is not the same job as another posting with
+        // no city - and EF compiles `==` with C# null semantics: without `p.CrossBoardKey !=
+        // null` two unlocated postings would match each other and merge into one cluster.
+        // JobMatchRepository.ListApplyableAsync guards the same column the same way, for the
+        // same reason.
         var linkless = db.JobPostings
             .Where(p => p.LastSeenUtc > since && p.JobUrlDirect == null);
 
         var linklessCount = await linkless.CountAsync();
 
         var recoverable = await linkless
-            .Where(p => db.JobPostings.Any(other =>
-                other.ContentHash == p.ContentHash
-                && other.Site != p.Site
-                && other.JobUrlDirect != null))
+            .Where(p => p.CrossBoardKey != null
+                && db.JobPostings.Any(other =>
+                    other.CrossBoardKey == p.CrossBoardKey
+                    && other.Site != p.Site
+                    && other.JobUrlDirect != null))
             .CountAsync();
 
         Console.WriteLine();
-        Console.WriteLine("Recoverable from another board, by content fingerprint");
+        Console.WriteLine("Recoverable from another board, by cross-board fingerprint");
         Console.WriteLine($"  postings with no direct link  {linklessCount,7}");
         Console.WriteLine(
             $"  the same job found elsewhere  {recoverable,7}  {Share(recoverable, linklessCount)}");
@@ -487,21 +502,25 @@ internal static class Program
 
         // A zero above is only meaningful if the fingerprint crosses boards at all. Without
         // this line it is impossible to tell "the boards list different jobs" from "the join
-        // never matches", and those call for opposite decisions.
+        // never matches", and those call for opposite decisions. Same null guard, same reason:
+        // an unlocated posting must clock in as "no key" rather than as a match for every other
+        // unlocated posting.
         var anyCrossBoard = await db.JobPostings
             .Where(p => p.LastSeenUtc > since)
-            .Where(p => db.JobPostings.Any(other =>
-                other.ContentHash == p.ContentHash && other.Site != p.Site))
+            .Where(p => p.CrossBoardKey != null
+                && db.JobPostings.Any(other =>
+                    other.CrossBoardKey == p.CrossBoardKey && other.Site != p.Site))
             .CountAsync();
 
         Console.WriteLine(
             $"  same job on two boards, at all {anyCrossBoard,6}  "
             + $"{Share(anyCrossBoard, linklessCount)} - a zero here means the fingerprint, not the market");
 
-        // ContentHash folds location in, and boards write locations differently - "London,
-        // England, United Kingdom" against "London, UK". So a zero above may only mean the hash
-        // is too strict to cross boards. Title and employer alone is the looser test that says
-        // whether the inventory actually overlaps.
+        // CrossBoardKey requires both the employer and the city to be known, so a zero above
+        // can still mean "most of this corpus has no city to key on" rather than "no overlap
+        // exists". Title and employer alone drops that requirement entirely and says whether
+        // the inventory actually overlaps at all - the city precision comes back in the next
+        // check, which is why that one and not this one is "safe to act on".
         var looseOverlap = await db.JobPostings
             .Where(p => p.LastSeenUtc > since && p.JobUrlDirect == null)
             .Where(p => db.JobPostings.Any(other =>
@@ -554,6 +573,145 @@ internal static class Program
 
         return 0;
     }
+
+    /// <summary>
+    /// Measures the board-hosted population <c>EmployerAtsBoardRepository.WithoutEmployerLink</c>
+    /// excludes from apply-link recovery outright, and how much of it is reachable today with no
+    /// new request.
+    /// </summary>
+    /// <remarks>
+    /// <b>The clause it checks rests on an assumption nobody had measured.</b>
+    /// <c>WithoutEmployerLink</c> requires <c>OffsiteApply != false</c>, so a posting whose own
+    /// board says "we host this application" - Easy Apply, in LinkedIn's case - is never fetched
+    /// for or probed against, on the stated reasoning that there is nothing for an employer's ATS
+    /// to recover: the board already has the application. That reasoning holds only if an
+    /// employer running Easy Apply on LinkedIn never <i>also</i> lists the same vacancy on their
+    /// own Greenhouse or Ashby board. Nothing in this codebase has ever checked. Board-hosted
+    /// postings are roughly 44% of LinkedIn and LinkedIn is roughly 72% of the corpus, so this one
+    /// clause could be quietly skipping the largest reachable population there is - or it could be
+    /// exactly right, and there is nothing here worth building. This command is the difference
+    /// between those two stories, and it answers with a join over rows already on disk: no
+    /// request, no probe, no new column.
+    ///
+    /// <b>Five tiers, each a count of postings and a count of distinct companies</b>, because a
+    /// company with two hundred Easy Apply listings and a company with one look identical in a
+    /// postings-only count and are very different news for a probe budget that spends per
+    /// employer rather than per posting. Board-hosted narrows to the population
+    /// <c>WithoutEmployerLink</c> actually excludes - a direct link or a recovered one already
+    /// answers the question regardless of <c>OffsiteApply</c> - which narrows again to postings
+    /// with a resolved <c>CompanyId</c>, because there is no board to look up for an employer
+    /// nobody named. <b>The fourth tier is the headline</b>: of those, how many sit at a company
+    /// already carrying a <i>confirmed</i> board - reachable this minute, at no cost, if the one
+    /// clause in <c>WithoutEmployerLink</c> were relaxed. The fifth tier - any board row at all,
+    /// confirmed or merely probed - is reported next to it and never folded into it, because an
+    /// unconfirmed token is a guess that happened to answer an HTTP request and must never mint an
+    /// apply link on the strength of that alone; adding the two together would report probes as
+    /// prizes.
+    ///
+    /// <b>Broken down by site, on top of the headline, because the argument is specifically about
+    /// LinkedIn.</b> A headline number dominated by some other board would not move section 1 of
+    /// <c>mcp_handoff.md</c> the way a LinkedIn-heavy one would.
+    ///
+    /// <b>A large headline number means the assumption was wrong</b>, and the probe list in
+    /// <c>EmployerAtsBoardRepository</c> should stop filtering out board-hosted postings, handing
+    /// the recovery pass its single largest population for free. <b>A number near zero means the
+    /// assumption was right</b>: employers running Easy Apply mostly do not also run their own
+    /// board for the same role, and the clause should stay exactly as it is.
+    ///
+    /// <b>Read-only, so it takes no <c>--confirm</c>.</b> There is nothing here that writes, and a
+    /// flag that does nothing would be worse than no flag at all - it would invite a caller to
+    /// believe a dry run is possible where every run already is one. Aggregate counts and scalar
+    /// projections throughout, never a materialised <c>JobPostingEntity</c>: a posting row carries
+    /// an unbounded description, and dragging one across the wire per row just to add it to a
+    /// count is the shape the cost model forbids on a database billed by the second.
+    /// </remarks>
+    private static async Task<int> MeasureEasyApplyAsync(string connectionString)
+    {
+        await using var db = new JobsDbContext(Options(connectionString));
+
+        // Tier 1: every posting whose own board says it hosts the application.
+        var boardHosted = db.JobPostings.Where(p => p.OffsiteApply == false);
+        var boardHostedPostings = await boardHosted.CountAsync();
+        var boardHostedCompanies = await CompanyCountAsync(boardHosted);
+
+        // Tier 2: of those, the population WithoutEmployerLink is built to exclude. It already
+        // requires no direct URL and no recovered ATS link; OffsiteApply == false is the one
+        // extra condition standing between this posting and being fetched for, and the one this
+        // command exists to question.
+        var noEmployerLink = boardHosted.Where(p => p.JobUrlDirect == null && p.EmployerAtsApplyUrl == null);
+        var noEmployerLinkPostings = await noEmployerLink.CountAsync();
+        var noEmployerLinkCompanies = await CompanyCountAsync(noEmployerLink);
+
+        // Tier 3: of those, an employer has actually been resolved onto the row. There is
+        // nothing to probe or look a board up for on a posting that names nobody.
+        var withCompany = noEmployerLink.Where(p => p.CompanyId != null);
+        var withCompanyPostings = await withCompany.CountAsync();
+        var withCompanyCompanies = await CompanyCountAsync(withCompany);
+
+        // Tier 4, the headline: of those, the employer already carries a *confirmed* board.
+        // Reachable this minute, at no new request, if WithoutEmployerLink's OffsiteApply
+        // clause were relaxed.
+        var withConfirmedBoard = withCompany.Where(p =>
+            db.EmployerAtsBoards.Any(b => b.CompanyId == p.CompanyId && b.ConfirmedAtUtc != null));
+        var withConfirmedBoardPostings = await withConfirmedBoard.CountAsync();
+        var withConfirmedBoardCompanies = await CompanyCountAsync(withConfirmedBoard);
+
+        // Tier 5: of those, the employer has any board row at all, confirmed or merely probed.
+        // A superset of tier 4 - reported beside it and never added to it. See the remarks.
+        var withAnyBoard = withCompany.Where(p =>
+            db.EmployerAtsBoards.Any(b => b.CompanyId == p.CompanyId));
+        var withAnyBoardPostings = await withAnyBoard.CountAsync();
+        var withAnyBoardCompanies = await CompanyCountAsync(withAnyBoard);
+
+        Console.WriteLine("Easy Apply reach - the population WithoutEmployerLink excludes today");
+        Console.WriteLine($"  {"tier",-52} {"postings",8} {"companies",9}");
+        Console.WriteLine(
+            $"  {"board-hosted (OffsiteApply == false)",-52} "
+            + $"{boardHostedPostings,8} {boardHostedCompanies,9}");
+        Console.WriteLine(
+            $"  {"...with no employer link at all",-52} "
+            + $"{noEmployerLinkPostings,8} {noEmployerLinkCompanies,9}");
+        Console.WriteLine(
+            $"  {"...with a CompanyId resolved",-52} "
+            + $"{withCompanyPostings,8} {withCompanyCompanies,9}");
+        Console.WriteLine(
+            $"  {"...at a company with a confirmed board (headline)",-52} "
+            + $"{withConfirmedBoardPostings,8} {withConfirmedBoardCompanies,9}");
+        Console.WriteLine(
+            $"  {"...at a company with any board, confirmed or probed",-52} "
+            + $"{withAnyBoardPostings,8} {withAnyBoardCompanies,9}");
+        Console.WriteLine();
+        Console.WriteLine(
+            "  The last two rows are not additive - 'any board' already contains 'confirmed'.");
+
+        var bySite = await withConfirmedBoard
+            .GroupBy(p => p.Site)
+            .Select(g => new
+            {
+                Site = g.Key,
+                Postings = g.Count(),
+                Companies = g.Select(p => p.CompanyId).Distinct().Count(),
+            })
+            .OrderByDescending(x => x.Postings)
+            .ToListAsync();
+
+        Console.WriteLine();
+        Console.WriteLine("Headline tier, by site - the argument is specifically about LinkedIn");
+        Console.WriteLine($"  {"site",-16} {"postings",8} {"companies",9}");
+
+        foreach (var row in bySite)
+        {
+            Console.WriteLine($"  {Truncate(row.Site, 16),-16} {row.Postings,8} {row.Companies,9}");
+        }
+
+        return 0;
+    }
+
+    // Distinct non-null CompanyId across a filtered posting query, without materialising a row -
+    // shared by every tier above so the "distinct companies" count is computed the same way each
+    // time.
+    private static Task<int> CompanyCountAsync(IQueryable<JobPostingEntity> query)
+        => query.Where(p => p.CompanyId != null).Select(p => p.CompanyId).Distinct().CountAsync();
 
     /// <summary>
     /// Removes submissions by id, with their event logs. <b>The one eraser in the system.</b>

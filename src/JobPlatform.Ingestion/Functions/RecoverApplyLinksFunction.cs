@@ -1,4 +1,4 @@
-﻿using System.Linq.Expressions;
+using System.Linq.Expressions;
 using JobPlatform.Core.Applications;
 using JobPlatform.Data.Sql;
 using JobPlatform.Data.Sql.Entities;
@@ -25,10 +25,12 @@ namespace JobPlatform.Ingestion.Functions;
 /// too.
 ///
 /// <b>Every member defaults to something a clone can run unattended</b>, so a deployment that binds
-/// nothing gets a bounded, polite pass rather than an unbounded one or a dead one. Two of them are
-/// switches as well as bounds: <see cref="BoardsPerPass"/> at zero stops the fetch and
-/// <see cref="EmployersProbedPerPass"/> at zero stops the probe, which is the control worth having
-/// when the traffic is aimed at an API that is doing us a favour by answering at all.
+/// nothing gets a bounded, polite pass rather than an unbounded one or a dead one. Three of them are
+/// switches as well as bounds: <see cref="BoardsPerPass"/> at zero stops the fetch,
+/// <see cref="EmployersProbedPerPass"/> at zero stops the probe and
+/// <see cref="CareersPagesPerPass"/> at zero stops the careers-page read, which is the control
+/// worth having when the traffic is aimed at an API doing us a favour by answering at all - and
+/// worth having most of all for the one phase whose traffic goes to hosts that never offered.
 /// </remarks>
 public sealed class ApplyLinkRecoveryOptions
 {
@@ -67,6 +69,47 @@ public sealed class ApplyLinkRecoveryOptions
     /// own.
     /// </remarks>
     public int EmployersProbedPerPass { get; set; } = 10;
+
+    /// <summary>
+    /// How many employers' own careers pages one pass reads.
+    /// </summary>
+    /// <remarks>
+    /// <b>Twenty-five, and it sits between the two other bounds for a reason that is about who is
+    /// being asked rather than about what is found.</b> A board fetch goes to one of five vendors
+    /// that publish a listing endpoint for job seekers to read, and forty of those is a courteous
+    /// pass. A careers-page read goes to an arbitrary employer's web server, which publishes nothing
+    /// for us and has agreed to nothing - so it is bounded below the board fetch even though it
+    /// costs exactly one request per employer, where a probe campaign costs up to eight.
+    ///
+    /// <b>The population it eats into is the one the probe cannot reach.</b>
+    /// <c>AtsBoardCandidates.For</c> refuses to guess at Monzo, Stripe, Revolut and every other
+    /// short one-word name, and guesses the wrong vendor for the rest; a careers page names the
+    /// vendor and the token outright. So this bound is deliberately larger than
+    /// <see cref="EmployersProbedPerPass"/>: it is the better question, asked more cheaply.
+    ///
+    /// <b>Zero switches it off without a deploy</b>, like the two bounds either side of it, and it
+    /// is the switch most worth having of the three - this is the only traffic this system aims at
+    /// hosts that never offered to answer.
+    /// </remarks>
+    public int CareersPagesPerPass { get; set; } = 25;
+
+    /// <summary>
+    /// How long a careers-page read stands before that employer's page is worth reading again.
+    /// </summary>
+    /// <remarks>
+    /// <b>Ninety days, an order of magnitude above <see cref="RefetchAfterDays"/>, because the two
+    /// answer questions that change at different speeds.</b> A board's listings are vacancies and
+    /// turn over weekly; whether a company has an applicant tracking system at all, and which, is a
+    /// procurement decision that changes on the order of years. Re-reading somebody's marketing
+    /// site every week to be told the same thing is the noise this feature is written to avoid.
+    ///
+    /// <b>A window exists at all so "we looked and there was nothing" cannot become permanent.</b>
+    /// An employer who adopts Greenhouse next month would otherwise be unreachable for ever because
+    /// their page was read before they had one - which is the failure mode a stamp introduces and
+    /// the reason it is a date rather than a flag. Zero or less means never re-read, which is a
+    /// supported setting rather than a broken one.
+    /// </remarks>
+    public int RereadCareersPageAfterDays { get; set; } = 90;
 
     /// <summary>
     /// The hard ceiling on how many probe requests one pass makes, across every employer.
@@ -135,21 +178,29 @@ public sealed class ApplyLinkRecoveryOptions
 /// <remarks>
 /// <b>Why this exists, in one measurement.</b> Of 382 applyable postings on 2026-09-07, 73 carry an
 /// employer apply link and all 309 that do not are LinkedIn, which stopped publishing apply URLs to
-/// signed-out clients entirely. The authenticated route back is closed rather than merely unbuilt -
-/// <c>mcp_handoff.md</c> 3.2 and 3.2a carry the decision and the legal record behind it - and the
+/// signed-out clients entirely. The authenticated route back was costed and refused -
+/// <c>mcp_handoff.md</c> 3.2 and 3.2a carry the decision and the measurements behind it - and the
 /// third option is that <i>the employer will tell you</i>. Greenhouse, Ashby, Lever, Workable and
 /// SmartRecruiters each publish a documented, unauthenticated board listing that exists to be read
 /// by job seekers. <b>Nothing on this path sends a credential, a cookie or a session, on any
 /// host</b>, and nothing added to it may.
 ///
-/// <b>Three phases, cheapest first, and the ordering is the design rather than a convenience.</b>
+/// <b>Four phases, cheapest first, and the ordering is the design rather than a convenience.</b>
 /// <list type="number">
 /// <item>
 /// <b>Learn.</b> Every employer whose board token can be read off a link they have already
 /// published. It makes no request at all - it is a join over data already held - and it is where
-/// 122 of the 309, 39% of the gap, is. It also produces the only boards a Greenhouse, Ashby or
-/// Lever employer can ever have, because those three endpoints do not name the employer and so
-/// cannot confirm a guess.
+/// 122 of the 309, 39% of the gap, is.
+/// </item>
+/// <item>
+/// <b>Careers page.</b> One request each, for employers with no board of any kind, reading the
+/// address they published for themselves. Greenhouse and Ashby embed their forms under the
+/// employer's own domain, so the page that carries the form usually also links to the board it
+/// embeds - and that link names the token where <c>gh_jid</c> alone cannot. It reaches the
+/// employers a probe is refused for: <c>AtsBoardCandidates.For</c> will not guess at Monzo, Stripe
+/// or Dex, and a page naming their board needs no guess. <b>The token is published rather than
+/// manufactured, and whose page it was is still an inference</b>, so the row owes a confirmation
+/// exactly as a probed one does.
 /// </item>
 /// <item>
 /// <b>Probe.</b> Only for employers with no board of any kind and with postings actually blocked.
@@ -173,15 +224,18 @@ public sealed class ApplyLinkRecoveryOptions
 /// <c>JobUrlDirect</c> at all; this pass simply never asks it to.
 ///
 /// <b>Bounded hard, and every bound is somebody else's rate limiter rather than our bill.</b> There
-/// is a cap on boards fetched, a cap on employers probed, a hard ceiling on probe requests, a
-/// per-employer probe cap, a refetch window and a wall-clock budget. A runaway loop here is not a
-/// slow night; it is rude.
+/// is a cap on boards fetched, a cap on employers probed, a cap on careers pages read, a hard
+/// ceiling on probe requests, a per-employer probe cap, a refetch window, a re-read window and a
+/// wall-clock budget. A runaway loop here is not a slow night; it is rude - and one of these phases
+/// aims its traffic at employers' own web servers rather than at an API written to be read, which
+/// is why its bound is the tightest of the three that make requests.
 ///
-/// <b>Resumable from the database and from nothing else</b>, in all three phases and by
-/// construction rather than by a flag: a learned board leaves the learn query, an employer with any
-/// board row leaves the probe list, and a fetched board leaves the fetch list until its refetch
-/// window has passed. A pass cut short by its budget resumes where it stopped; a pass that crashes
-/// loses only the work in flight.
+/// <b>Resumable from the database and from nothing else</b>, in all four phases and by construction
+/// rather than by a flag: a learned board leaves the learn query, an employer whose careers page
+/// has been read leaves the careers list until its re-read window has passed, an employer with any
+/// board row leaves both the careers list and the probe list, and a fetched board leaves the fetch
+/// list until its refetch window has passed. A pass cut short by its budget resumes where it
+/// stopped; a pass that crashes loses only the work in flight.
 ///
 /// <b>Degraded rather than broken wherever a reader is absent.</b> Workable is the fifth vendor
 /// <c>AtsBoard</c> admits and the one with no reader, so its boards are counted and stepped over
@@ -192,6 +246,7 @@ public sealed class RecoverApplyLinksFunction(
     JobsDbContext db,
     EmployerAtsBoardRepository boards,
     AtsBoardReader reader,
+    CareersPageReader careers,
     IOptions<ApplyLinkRecoveryOptions> options,
     TimeProvider time,
     ILogger<RecoverApplyLinksFunction> logger)
@@ -321,6 +376,16 @@ public sealed class RecoverApplyLinksFunction(
     /// </remarks>
     private const int MaxEmployersProbedPerRequest = 2;
 
+    /// <summary>How many careers pages one HTTP invocation may read.</summary>
+    /// <remarks>
+    /// Three, which is three requests: this phase costs one per employer rather than up to eight,
+    /// so the route can afford more employers here than it can probes. The bound is still small
+    /// because the route is a nudge somebody types rather than a batch, and because a person
+    /// re-running it is the one way this pass can aim repeated traffic at an employer's own server
+    /// faster than the nightly bound allows.
+    /// </remarks>
+    private const int MaxCareersPagesPerRequest = 3;
+
     /// <summary>How many employer names to list in the log line before truncating.</summary>
     private const int NamesLogged = 10;
 
@@ -353,6 +418,7 @@ public sealed class RecoverApplyLinksFunction(
         return RecoverAsync(
             settings.BoardsPerPass,
             settings.EmployersProbedPerPass,
+            settings.CareersPagesPerPass,
             learn: true,
             TimerBudget,
             ct);
@@ -387,6 +453,7 @@ public sealed class RecoverApplyLinksFunction(
             // with nothing after having already spent forty requests.
             Math.Clamp(body?.Boards ?? MaxBoardsPerRequest, 0, MaxBoardsPerRequest),
             Math.Clamp(body?.Employers ?? MaxEmployersProbedPerRequest, 0, MaxEmployersProbedPerRequest),
+            Math.Clamp(body?.Pages ?? MaxCareersPagesPerRequest, 0, MaxCareersPagesPerRequest),
             body?.Learn ?? true,
             RequestBudget,
             ct);
@@ -396,15 +463,22 @@ public sealed class RecoverApplyLinksFunction(
 
     /// <param name="Boards">Boards to read, bounded by <see cref="MaxBoardsPerRequest"/> whatever is asked for.</param>
     /// <param name="Employers">Employers to probe, bounded by <see cref="MaxEmployersProbedPerRequest"/>.</param>
+    /// <param name="Pages">Careers pages to read, bounded by <see cref="MaxCareersPagesPerRequest"/>.</param>
     /// <param name="Learn">
-    /// Whether to run the free phase. Defaults to true and is exposed only so the two request-making
-    /// phases can be exercised on their own - there is no reason to switch off the half that costs
-    /// nobody anything.
+    /// Whether to run the free phase. Defaults to true and is exposed only so the three
+    /// request-making phases can be exercised on their own - there is no reason to switch off the
+    /// one that costs nobody anything.
     /// </param>
-    public sealed record RecoverRequest(int? Boards = null, int? Employers = null, bool? Learn = null);
+    public sealed record RecoverRequest(
+        int? Boards = null, int? Employers = null, int? Pages = null, bool? Learn = null);
 
     private async Task<RecoverySummary> RecoverAsync(
-        int boardLimit, int employerLimit, bool learn, TimeSpan budget, CancellationToken ct)
+        int boardLimit,
+        int employerLimit,
+        int pageLimit,
+        bool learn,
+        TimeSpan budget,
+        CancellationToken ct)
     {
         var settings = options.Value;
         var now = time.GetUtcNow();
@@ -417,6 +491,16 @@ public sealed class RecoverApplyLinksFunction(
             if (learn)
             {
                 await LearnAsync(settings.LearnFromLinks, now, tally, ct);
+            }
+
+            // Before the probe, because it is the better question and the cheaper one: it names the
+            // vendor and the token instead of guessing at both, and it costs one request per
+            // employer rather than up to eight. An employer whose page names a board also leaves
+            // the probe list for good, so the ordering saves the probe's ceiling for the employers
+            // nothing else can reach.
+            if (time.GetElapsedTime(started) < budget)
+            {
+                await CareersAsync(pageLimit, settings, since, now, tally, started, budget, ct);
             }
 
             if (time.GetElapsedTime(started) < budget)
@@ -440,9 +524,10 @@ public sealed class RecoverApplyLinksFunction(
             logger.LogError(
                 exception,
                 "Apply-link recovery: a write was refused, so the pass stopped. {Learned} board(s) "
-                + "learned, {Confirmed} probed board(s) confirmed and {Recovered} link(s) recovered "
-                + "before it did. The likeliest cause is an employer that is not in Companies.",
-                tally.Learned, tally.Confirmed, tally.Recovered);
+                + "learned, {CareersBoards} named by a careers page, {Confirmed} probed board(s) "
+                + "confirmed and {Recovered} link(s) recovered before it did. The likeliest cause "
+                + "is an employer that is not in Companies.",
+                tally.Learned, tally.CareersBoards, tally.Confirmed, tally.Recovered);
         }
 
         tally.Blocked = await BlockedCountAsync(since, ct);
@@ -453,12 +538,15 @@ public sealed class RecoverApplyLinksFunction(
         // backlog of four hundred, and only the third figure separates them.
         logger.LogInformation(
             "Apply-link recovery complete: {Learned} board(s) learned from links already held; "
+            + "{CareersPages} careers page(s) read naming {CareersBoards} board(s) of which "
+            + "{CareersConfirmed} confirmed, {CareersUnusable} employer URL(s) not worth a request; "
             + "{Probed} probe request(s) made for {Answered} answering board(s), {Confirmed} "
             + "confirmed; {Fetched} board(s) read carrying {Listings} vacancy(ies), {Unreadable} "
             + "skipped for want of a reader and {Unavailable} unanswered; {Checked} posting(s) "
             + "asked about, {Recovered} link(s) recovered and {Ambiguous} abstained on. "
             + "{Blocked} posting(s) still have no employer link.",
-            tally.Learned, tally.Probed, tally.Answered, tally.Confirmed, tally.Fetched,
+            tally.Learned, tally.CareersPages, tally.CareersBoards, tally.CareersConfirmed,
+            tally.CareersUnusable, tally.Probed, tally.Answered, tally.Confirmed, tally.Fetched,
             tally.Listings, tally.Unreadable, tally.Unavailable, tally.Checked, tally.Recovered,
             tally.Ambiguous, tally.Blocked);
 
@@ -485,8 +573,9 @@ public sealed class RecoverApplyLinksFunction(
     ///
     /// <b>The query excludes employers that already have a learned board, and deliberately not
     /// employers that have any board at all.</b> A probed row is a guess this pass may have stored
-    /// earlier, unconfirmed and unusable, and <c>LearnAsync</c> upgrades exactly that row - the
-    /// employer's own link is the evidence the guess never had. Excluding them would leave a
+    /// earlier and a careers-page row is a token whose owner it could not establish - both
+    /// unconfirmed and unusable - and <c>LearnAsync</c> upgrades exactly those rows, because the
+    /// employer's own link is the evidence neither of them had. Excluding them would leave a
     /// correct token permanently unusable because a weaker version of it was written first.
     ///
     /// <b>Resumable by construction:</b> a learned board leaves this query, so a pass cut short
@@ -543,6 +632,216 @@ public sealed class RecoverApplyLinksFunction(
             }
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Careers page: one request each, and the token is published rather than guessed
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Reads the address each employer published for themselves, and records the board it names.
+    /// </summary>
+    /// <remarks>
+    /// <b>This is the third discovery source, and it exists because the two vendors that matter
+    /// most hide the token from every URL a board publishes.</b> Greenhouse and Ashby embed their
+    /// forms under the employer's own domain - the corpus carries
+    /// <c>https://careers.withwaymo.com/jobs?gh_jid=7852098</c> - and <c>AtsBoardToken.FromUrl</c>
+    /// answers null for that shape by design, because the token appears nowhere in it. The
+    /// employer's own site is where the other half is: the page that embeds the form usually also
+    /// links to the board it is embedding.
+    ///
+    /// <b>One request per employer per pass, at an arbitrary third-party host.</b> Every other
+    /// request this system makes goes to one of five documented board APIs published for job
+    /// seekers to read; this one goes to somebody's web server that has agreed to nothing. So the
+    /// bound is the tightest of the three request-making phases, the timeout is stricter, the
+    /// number of bytes read is capped, redirects are limited by the shared handler, and no
+    /// credential, cookie or session exists to send - see <c>CareersPageReader</c>, which owns all
+    /// of that, and <see cref="AtsBoardRegistration"/>, where the handler makes it true rather than
+    /// promised.
+    ///
+    /// <b>The employer is stamped before the request, exactly as a board is.</b> Without the stamp,
+    /// "we read their site and there was no board on it" has nowhere to live - the board table
+    /// holds boards that exist - and the pass would fetch the same page every night for ever. It is
+    /// stamped for a URL refused before a request too: that employer occupies a slot in a bounded
+    /// list whether or not a socket is opened, and what was established is a fact about our stored
+    /// URL rather than about their site.
+    ///
+    /// <b>A found token is confirmed here or it is stored unusable, and nothing in between.</b>
+    /// <c>ConfirmedAtUtc</c> is the whole test, exactly as it is for a probe: the discovery path
+    /// grants no permission on its own, and <c>ListBoardsToFetchAsync</c> cannot return an
+    /// unconfirmed row. What confirms one is <see cref="NamePublishesToken"/> - and an unconfirmed
+    /// row is still written, because the request was spent and the row is what stops it being spent
+    /// again, and because the learn phase will upgrade it the day that employer publishes a direct
+    /// link.
+    ///
+    /// <b>The board is not fetched here, unlike a confirmed probe.</b> A probe reads the board to
+    /// confirm it, so the listings are already in hand and matching them costs nothing; here the
+    /// confirmation comes out of the page and no board has been read at all. Fetching one would put
+    /// a second request inside a phase whose whole discipline is one - so the board joins the fetch
+    /// list, which runs later in this same pass, ranked against every other board by the postings
+    /// somebody is waiting on. A board discovered tonight is fetched tonight if it is worth it and
+    /// tomorrow if it is not, and that ranking is the point.
+    /// </remarks>
+    private async Task CareersAsync(
+        int limit,
+        ApplyLinkRecoveryOptions settings,
+        DateTimeOffset since,
+        DateTimeOffset now,
+        RecoveryTally tally,
+        long started,
+        TimeSpan budget,
+        CancellationToken ct)
+    {
+        if (limit <= 0)
+        {
+            return;
+        }
+
+        var employers = await boards.ListCareersPagesToReadAsync(
+            now,
+            TimeSpan.FromDays(Math.Max(settings.RereadCareersPageAfterDays, 0)),
+            limit,
+            since,
+            ct);
+
+        var borrowed = new List<string>();
+
+        foreach (var employer in employers)
+        {
+            if (time.GetElapsedTime(started) >= budget)
+            {
+                break;
+            }
+
+            // Before the request. A page that times out, refuses the connection or answers a login
+            // wall would otherwise be asked again on every pass for ever, at a host that publishes
+            // no API for us.
+            await boards.RecordCareersPageReadAsync(employer.CompanyId, now, ct);
+
+            var read = await careers.ReadAsync(employer.CareersUrl, ct);
+
+            // Two of the five answers cost nobody anything - a URL refused before a socket was
+            // opened, and a stored URL that was already a board address - so the figure that says
+            // what this pass cost has to be read off the answer rather than off the loop.
+            if (read.Requested)
+            {
+                tally.CareersPages++;
+            }
+
+            if (read.Outcome == CareersPageOutcome.NotAnAddress)
+            {
+                // Counted rather than logged per employer: on a corpus whose company URLs are
+                // mostly a job board's own profile page for the company, this is the ordinary
+                // answer and a line each would be a log nobody reads.
+                tally.CareersUnusable++;
+                continue;
+            }
+
+            if (read.Board is not { } board)
+            {
+                continue;
+            }
+
+            var mine = NamePublishesToken(employer.Company, board.Token);
+
+            if (!await boards.RecordCareersPageAsync(employer.CompanyId, board, mine, now, ct))
+            {
+                continue;
+            }
+
+            tally.CareersBoards++;
+
+            if (!mine)
+            {
+                // The page named a board and the name does not account for it - an agency linking
+                // to a client's, a subsidiary page carrying the parent's. Kept as the memory of a
+                // spent request and as something a later direct link can upgrade, and it produces
+                // no link meanwhile. Logged at debug rather than warned: this is the check working.
+                borrowed.Add(employer.Company);
+
+                logger.LogDebug(
+                    "Apply-link recovery: {Employer}'s careers page names the {Vendor} board "
+                    + "{Token}, which their own name does not account for. Stored unconfirmed, so "
+                    + "no link is recovered through it.",
+                    employer.Company, board.Vendor, board.Token);
+
+                continue;
+            }
+
+            tally.CareersConfirmed++;
+
+            logger.LogInformation(
+                "Apply-link recovery: {Employer}'s own careers page names {Vendor} board {Token}, "
+                + "confirmed against their name, unblocking up to {Blocked} posting(s).",
+                employer.Company, board.Vendor, board.Token, employer.BlockedPostings);
+        }
+
+        if (borrowed.Count > 0)
+        {
+            // Information rather than a warning, and it names them for the reason the unprobeable
+            // list does: "some pages named somebody else's board" is not something anybody can act
+            // on, where a list of employers is the evidence for whether this rule is refusing
+            // agencies - which is what it is for - or refusing employers whose slug simply does not
+            // resemble their name, which would be a case for a second signal and never for
+            // lowering the bar.
+            logger.LogInformation(
+                "Apply-link recovery: {Count} careers page(s) named a board their employer's own "
+                + "name does not account for, so none was confirmed: {Employers}.",
+                borrowed.Count,
+                string.Join(", ", borrowed.Take(NamesLogged))
+                    + (borrowed.Count > NamesLogged ? ", ..." : string.Empty));
+        }
+    }
+
+    /// <summary>
+    /// Whether the employer's own name accounts for the token their page published.
+    /// </summary>
+    /// <remarks>
+    /// <b>This is the confirmation, and it is two of Core's existing rules rather than a third
+    /// one.</b> <c>AtsBoardCandidates.Confirm</c> answers whether two names are the same company,
+    /// and <c>AtsBoardCandidates.For</c> answers which tokens that company's name would be spelled
+    /// as. Either agreeing is the employer's name and their page's token arriving at the same
+    /// string by different routes.
+    ///
+    /// <b>Passing a token where <c>Confirm</c> expects a board's name is legitimate here and is
+    /// exactly what that function refuses for a probe, so the difference has to be stated.</b> Core
+    /// says the token is deliberately not a parameter because <c>For</c> produced it from the very
+    /// name it would be compared against - which would confirm every probe including every wrong
+    /// one while looking like a check. <b>A careers-page token is derived from nothing.</b> It is a
+    /// string that appeared in the employer's own markup, so comparing it to their name is two
+    /// independent sources agreeing rather than one source talking to itself. Nothing here may be
+    /// reused on the probe path, where the circularity is real.
+    ///
+    /// <b><c>For</c> is consulted as well as <c>Confirm</c> because slugs are spelled the way
+    /// vendors spell them.</b> "Capital on Tap" and <c>capitalontap</c> are one company and three
+    /// words against one, so <c>Confirm</c> refuses them - correctly, since it compares names and
+    /// that token is not a name. <c>For</c> emits exactly the concatenated and hyphenated spellings
+    /// a vendor's settings page produces, and that list is Core's own judgement about what a name
+    /// is worth turning into a token, so agreeing with it is agreeing with the rule rather than
+    /// with a copy of it.
+    ///
+    /// <b>The two cover different halves and neither is redundant.</b> <c>For</c> refuses to emit
+    /// anything for Monzo, Stripe, Dex or Fin - <c>MinimumSingleWordLength</c> is why, and it is
+    /// the constant that keeps the four measured false positives out of the probe path - and those
+    /// are precisely the employers this phase exists to reach, because a page naming their board
+    /// needs no guess. <c>Confirm</c> takes them, since a name equal to a token word for word is
+    /// not a guess at all.
+    ///
+    /// <b>Case is folded on the comparison and never on the token.</b> <c>For</c> emits lower case
+    /// and SmartRecruiters keys its listings on a case-sensitive company id - <c>BlueOptima</c>,
+    /// verified live - so the token is stored exactly as the page spelled it and only this
+    /// comparison ignores case. Folding the stored value would be the silent false negative Core
+    /// and the schema both refuse.
+    ///
+    /// <b>What this refuses is stated rather than discovered.</b> An employer whose board token is
+    /// a shortening their name does not contain - "Acme Industries" on a board called <c>acme</c> -
+    /// is not confirmed, because <c>Confirm</c>'s prefix rule requires the shared part to be
+    /// distinctive on its own and <c>acme</c> is not. That is Core's argument rather than this
+    /// file's: "Orbital Industries" against <c>orbital</c> has the identical shape and is two
+    /// companies. The row is stored unconfirmed and a direct link will upgrade it.
+    /// </remarks>
+    private static bool NamePublishesToken(string company, string token)
+        => AtsBoardCandidates.Confirm(company, token) >= AtsBoardConfidence.NameAgrees
+            || AtsBoardCandidates.For(company).Contains(token, StringComparer.OrdinalIgnoreCase);
 
     // -----------------------------------------------------------------------
     // Probe: the weak half, and the half that has to confirm
@@ -1077,6 +1376,14 @@ public sealed class RecoverApplyLinksFunction(
 
         public int LinksRead { get; set; }
 
+        public int CareersPages { get; set; }
+
+        public int CareersUnusable { get; set; }
+
+        public int CareersBoards { get; set; }
+
+        public int CareersConfirmed { get; set; }
+
         public int Probed { get; set; }
 
         public int Answered { get; set; }
@@ -1102,8 +1409,9 @@ public sealed class RecoverApplyLinksFunction(
         public int Blocked { get; set; }
 
         public RecoverySummary ToSummary() => new(
-            Learned, LinksRead, Probed, Answered, Confirmed, Unprobeable, Fetched, Unreadable,
-            Unavailable, Listings, Checked, Recovered, Ambiguous, Blocked);
+            Learned, LinksRead, CareersPages, CareersUnusable, CareersBoards, CareersConfirmed,
+            Probed, Answered, Confirmed, Unprobeable, Fetched, Unreadable, Unavailable, Listings,
+            Checked, Recovered, Ambiguous, Blocked);
     }
 
     /// <param name="Learned">
@@ -1114,6 +1422,26 @@ public sealed class RecoverApplyLinksFunction(
     /// Already-held apply links the learn phase read through. At
     /// <see cref="ApplyLinkRecoveryOptions.LearnFromLinks"/> the phase is at its ceiling and the
     /// employers behind it wait for another pass.
+    /// </param>
+    /// <param name="CareersPages">
+    /// Employers' own careers pages actually fetched. <b>This is the half of what the pass cost
+    /// that went to hosts which publish no API for us</b>, so it is reported before anything it
+    /// bought and separately from the probe requests, which went to vendors who do.
+    /// </param>
+    /// <param name="CareersUnusable">
+    /// Employers whose stored URL was not worth a request - blank, not an address, or a job board's
+    /// own profile page for the company rather than the company's site. No request was made for any
+    /// of them, and this is a figure about the quality of scraped data rather than about employers.
+    /// </param>
+    /// <param name="CareersBoards">
+    /// Boards attached to an employer from a token their own page published, confirmed or not. The
+    /// distance from <paramref name="CareersConfirmed"/> is pages that named a board the employer's
+    /// name does not account for - an agency's client, a parent company - which is the check doing
+    /// its job rather than a shortfall.
+    /// </param>
+    /// <param name="CareersConfirmed">
+    /// Of those, the ones whose token the employer's own name accounts for, and which may therefore
+    /// produce a link. Nothing else on this path can.
     /// </param>
     /// <param name="Probed">
     /// Board tokens tried against a vendor. <b>This is what the pass cost somebody else</b>, and it
@@ -1173,6 +1501,10 @@ public sealed class RecoverApplyLinksFunction(
     public sealed record RecoverySummary(
         int Learned,
         int LinksRead,
+        int CareersPages,
+        int CareersUnusable,
+        int CareersBoards,
+        int CareersConfirmed,
         int Probed,
         int Answered,
         int Confirmed,

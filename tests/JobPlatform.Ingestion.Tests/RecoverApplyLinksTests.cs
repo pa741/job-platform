@@ -1,10 +1,12 @@
 using System.Collections.Concurrent;
+using System.Net;
 using System.Text;
 using JobPlatform.Core.Applications;
 using JobPlatform.Data.Sql;
 using JobPlatform.Data.Sql.Entities;
 using JobPlatform.Ingestion.Ats;
 using JobPlatform.Ingestion.Functions;
+using JobPlatform.Ingestion.Tests.Ats;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
@@ -125,6 +127,42 @@ public sealed class RecoverApplyLinksTests : IDisposable
     private const string DataOneUrl = "https://boards.greenhouse.io/cloudflare/jobs/9002";
     private const string DataTwoUrl = "https://boards.greenhouse.io/cloudflare/jobs/9003";
     private const string ContosoUrl = "https://jobs.smartrecruiters.com/ContosoHoldings/1234";
+
+    /// <summary>Where Dex's own careers page lives, as the ingest folded it onto the employer.</summary>
+    private const string DexCareersUrl = "https://careers.dex.example/";
+
+    private const string OrbitalCareersUrl = "https://careers.orbitallabs.example/";
+    private const string AcmeCareersUrl = "https://careers.acmeindustries.example/";
+    private const string DexJobUrl = "https://boards.greenhouse.io/dex/jobs/7001";
+
+    /// <summary>
+    /// A Greenhouse embed under the employer's own domain, with the board named beside it.
+    /// </summary>
+    /// <remarks>
+    /// Both halves are load-bearing and a fixture with either alone would assert half the rule. The
+    /// <c>gh_jid</c> link is the shape the live corpus is full of - <c>careers.withwaymo.com</c>
+    /// carries one - and it names the vendor and no token, which <c>AtsBoardToken.FromUrl</c>
+    /// answers null for on purpose. The board link is where the token is.
+    /// </remarks>
+    private const string DexCareersPage = """
+        <!doctype html>
+        <html lang="en">
+          <body>
+            <a href="https://careers.dex.example/jobs?gh_jid=6304904">Junior Engineer</a>
+            <a href="https://boards.greenhouse.io/dex">See every opening</a>
+          </body>
+        </html>
+        """;
+
+    /// <summary>An agency's page, naming a board that belongs to one of their clients.</summary>
+    private const string BorrowedBoardPage = """
+        <!doctype html>
+        <html lang="en">
+          <body>
+            <a href="https://jobs.lever.co/someoneelse/2f1c9d7e">A role with one of our clients</a>
+          </body>
+        </html>
+        """;
 
     public RecoverApplyLinksTests()
     {
@@ -656,6 +694,184 @@ public sealed class RecoverApplyLinksTests : IDisposable
     }
 
     // -----------------------------------------------------------------------
+    // Careers page: the third source, one request each, and the token is published
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_board_named_by_the_employers_own_page_is_confirmed_and_recovers_a_link_the_same_night()
+    {
+        var vendors = Vendors();
+
+        vendors.Boards[(AtsVendor.Greenhouse, "dex")] = AtsBoardRead.For(
+            [new AtsListing("Junior Engineer", "London", DexJobUrl)]);
+
+        await CompanyUrlAsync(Dex, DexCareersUrl);
+
+        var pages = Pages((DexCareersUrl, DexCareersPage));
+
+        var summary = await RunAsync(vendors, pages: pages);
+
+        // The employer no other path can reach. AtsBoardCandidates.For refuses to guess at a
+        // three-letter name outright - "Dex" is one of the four measured false positives that
+        // MinimumSingleWordLength exists to keep out - and LinkedIn published no apply link for
+        // their postings, so there is nothing to learn from either. Their own page names the board.
+        Assert.Empty(AtsBoardCandidates.For("Dex"));
+
+        Assert.Single(pages.Requests);
+        Assert.Equal(1, summary.CareersPages);
+        Assert.Equal(1, summary.CareersBoards);
+        Assert.Equal(1, summary.CareersConfirmed);
+
+        var board = Assert.Single(await BoardsAsync(), row => row.CompanyId == Dex);
+
+        // Recorded as what it is: weaker than a token off a link the employer published, stronger
+        // than a slug guessed from their name, and confirmed here because the token their page
+        // carries is their own name - which is not the circular check Core refuses for a probe,
+        // since nothing derived this token from that name.
+        Assert.Equal(AtsBoardDiscovery.CareersPage, board.Discovery);
+        Assert.Equal(Now, board.ConfirmedAtUtc);
+
+        // And the fetch phase, later in the same pass, does what a confirmation is for.
+        var recovered = await PostingAsync(AtDex);
+
+        Assert.Equal(DexJobUrl, recovered.EmployerAtsApplyUrl);
+        Assert.Null(recovered.JobUrlDirect);
+    }
+
+    [Fact]
+    public async Task A_careers_page_that_names_no_board_is_recorded_as_asked_rather_than_read_again()
+    {
+        await CompanyUrlAsync(Orbital, OrbitalCareersUrl);
+
+        var first = Pages((OrbitalCareersUrl, RecordedCareersPages.GreenhouseEmbedWithoutTheBoard));
+
+        // The probe is off, so the second pass below can only be explained by the stamp: with it on,
+        // this employer would leave the careers list because a probe wrote them a board row, and the
+        // test would pass while asserting the wrong mechanism.
+        var summary = await RunAsync(Vendors(), employers: 0, pages: first);
+
+        // The page proves the employer runs Greenhouse and names no token - every gh_jid on it sits
+        // under their own domain, where AtsBoardToken.FromUrl answers null by design. So nothing is
+        // learned and nothing is guessed.
+        Assert.Single(first.Requests);
+        Assert.Equal(1, summary.CareersPages);
+        Assert.Equal(0, summary.CareersBoards);
+        Assert.DoesNotContain(await BoardsAsync(), row => row.Discovery == AtsBoardDiscovery.CareersPage);
+
+        // The stamp is the only record a page that named nothing leaves, and without it "we read
+        // their site and there was nothing" is indistinguishable from "nobody has looked" - so the
+        // pass would fetch that employer's server every night for ever. The same
+        // two-nulls-in-one-column fault OffsiteApply was added to undo.
+        Assert.Equal(Now, (await CompanyAsync(Orbital)).AtsCareersPageReadUtc);
+
+        var second = Pages((OrbitalCareersUrl, RecordedCareersPages.GreenhouseEmbedWithoutTheBoard));
+
+        await RunAsync(Vendors(), employers: 0, pages: second);
+
+        Assert.Empty(second.Requests);
+    }
+
+    [Fact]
+    public async Task An_employer_whose_page_named_nothing_is_still_worth_probing()
+    {
+        await CompanyUrlAsync(Orbital, OrbitalCareersUrl);
+
+        var vendors = Vendors();
+
+        await RunAsync(vendors, pages: Pages((OrbitalCareersUrl, RecordedCareersPages.NoBoardAtAll)));
+
+        // The page answered a question about their site and not about their employer. A page with
+        // no board row behind it leaves them in the probe list, which is the difference between
+        // "asked their site" and "given up on them" - and it is why a page that names nothing
+        // writes no board row rather than a row saying so.
+        Assert.Contains(vendors.Requests, request => request.Token == "orbitallabs");
+    }
+
+    [Fact]
+    public async Task A_company_url_that_is_junk_or_an_aggregators_costs_no_request_and_throws_nothing()
+    {
+        // Three of the four shapes scraped company URLs actually arrive in. The aggregator is the
+        // one worth naming: company_url is very often a job board's own profile page for the
+        // employer, and a board link found on one of those belongs to whoever that page is listing.
+        await CompanyUrlAsync(Contoso, "https://www.linkedin.com/company/contoso");
+        await CompanyUrlAsync(Orbital, "   ");
+        await CompanyUrlAsync(Shortened, "not a url");
+
+        var pages = Pages();
+
+        var summary = await RunAsync(Vendors(), pages: pages);
+
+        Assert.Empty(pages.Requests);
+        Assert.Equal(0, summary.CareersPages);
+        Assert.Equal(3, summary.CareersUnusable);
+
+        // Stamped even though nothing was fetched, because the employer occupies a slot in a
+        // bounded work list whether or not a socket is opened - leaving them unstamped would starve
+        // the employers behind them on every pass.
+        Assert.Equal(Now, (await CompanyAsync(Orbital)).AtsCareersPageReadUtc);
+    }
+
+    [Fact]
+    public async Task A_page_naming_a_board_the_employers_name_does_not_account_for_recovers_nothing()
+    {
+        await CompanyUrlAsync(Shortened, AcmeCareersUrl);
+
+        var vendors = Vendors();
+
+        vendors.Boards[(AtsVendor.Lever, "someoneelse")] = AtsBoardRead.For(
+            [new AtsListing("Analyst", "Leeds", "https://jobs.lever.co/someoneelse/2f1c9d7e")]);
+
+        var summary = await RunAsync(
+            vendors, pages: Pages((AcmeCareersUrl, BorrowedBoardPage)));
+
+        // The agency case, and the largest remaining backlog in this corpus: the employers holding
+        // the most link-less applyable postings are agencies advertising a client's vacancy under
+        // their own name. Their page names a real board and it is not theirs, so the token is
+        // stored - the request was spent and the row is what stops it being spent again - and it is
+        // stored unusable.
+        var board = Assert.Single(await BoardsAsync(), row => row.CompanyId == Shortened);
+
+        Assert.Equal(AtsBoardDiscovery.CareersPage, board.Discovery);
+        Assert.Null(board.ConfirmedAtUtc);
+        Assert.Equal(1, summary.CareersBoards);
+        Assert.Equal(0, summary.CareersConfirmed);
+
+        // ConfirmedAtUtc is the whole test: an unconfirmed row cannot reach the fetch list and
+        // AtsBoardToFetch cannot represent one, so the board is never read and the posting is never
+        // stamped as asked about. A guess has to get past two independent refusals to reach a link.
+        Assert.DoesNotContain(vendors.Requests, request => request.Token == "someoneelse");
+
+        var blocked = await PostingAsync(BehindShortener);
+
+        Assert.Null(blocked.EmployerAtsApplyUrl);
+        Assert.Null(blocked.EmployerAtsCheckedUtc);
+    }
+
+    [Fact]
+    public async Task The_pass_reads_no_more_careers_pages_than_it_is_allowed()
+    {
+        foreach (var employer in new[] { Contoso, Dex, Orbital, Shortened })
+        {
+            await CompanyUrlAsync(employer, $"https://careers.employer{employer}.example/");
+        }
+
+        var pages = Pages();
+
+        var summary = await RunAsync(Vendors(), pages: pages, pageLimit: 2);
+
+        // The bound is on requests to employers' own servers rather than on rows read here, which
+        // is what makes it a courtesy rather than a tuning knob - and it is the tightest of the
+        // three request-making bounds because this is the only traffic aimed at hosts that never
+        // offered to answer.
+        Assert.Equal(2, pages.Requests.Count);
+        Assert.Equal(2, summary.CareersPages);
+
+        // The two the ordering chose, and the other two wait for another pass rather than being
+        // dropped: every one of them keeps a null stamp, so the next pass offers them again.
+        Assert.Null((await CompanyAsync(Shortened)).AtsCareersPageReadUtc);
+    }
+
+    // -----------------------------------------------------------------------
     // The HTTP nudge
     // -----------------------------------------------------------------------
 
@@ -707,13 +923,15 @@ public sealed class RecoverApplyLinksTests : IDisposable
         int employers = 10,
         int probeRequests = 40,
         bool learn = true,
-        DateTimeOffset? now = null)
+        DateTimeOffset? now = null,
+        StubHandler? pages = null,
+        int pageLimit = 25)
     {
-        var function = Create(vendors, boards, employers, probeRequests, now ?? Now);
+        var function = Create(vendors, boards, employers, probeRequests, now ?? Now, pages, pageLimit);
 
         return learn
             ? function.RunNightlyAsync()
-            : Summary(function, boards, employers);
+            : Summary(function, boards, employers, pageLimit);
     }
 
     /// <summary>
@@ -725,10 +943,10 @@ public sealed class RecoverApplyLinksTests : IDisposable
     /// a link would otherwise have named for free.
     /// </remarks>
     private static async Task<RecoverApplyLinksFunction.RecoverySummary> Summary(
-        RecoverApplyLinksFunction function, int boards, int employers)
+        RecoverApplyLinksFunction function, int boards, int employers, int pages)
     {
         var result = await function.RunRecoverApplyLinksFunction(
-            Request($$"""{"boards":{{boards}},"employers":{{employers}},"learn":false}"""),
+            Request($$"""{"boards":{{boards}},"employers":{{employers}},"pages":{{pages}},"learn":false}"""),
             CancellationToken.None);
 
         return Assert.IsType<RecoverApplyLinksFunction.RecoverySummary>(
@@ -740,7 +958,9 @@ public sealed class RecoverApplyLinksTests : IDisposable
         int boards = 40,
         int employers = 10,
         int probeRequests = 40,
-        DateTimeOffset? now = null)
+        DateTimeOffset? now = null,
+        StubHandler? pages = null,
+        int pageLimit = 25)
     {
         var db = CreateContext();
 
@@ -751,14 +971,64 @@ public sealed class RecoverApplyLinksTests : IDisposable
                 vendors.Clients(),
                 Options.Create(new AtsBoardOptions()),
                 NullLogger<AtsBoardReader>.Instance),
+            // Stubbed at HTTP rather than at an interface, unlike the four vendors, and the seam is
+            // different because the subject is. A board client's job is a documented endpoint and a
+            // JSON shape, so the interface is where a pass stops caring; a careers page has no
+            // interface to stand behind - what this pass is judged on is that an arbitrary
+            // employer's server was asked once, politely, or not at all - so the stub sits where
+            // the requests are countable.
+            new CareersPageReader(
+                new StubHttpClientFactory(pages ?? Pages()),
+                Options.Create(new AtsBoardOptions()),
+                NullLogger<CareersPageReader>.Instance),
             Options.Create(new ApplyLinkRecoveryOptions
             {
                 BoardsPerPass = boards,
                 EmployersProbedPerPass = employers,
                 ProbeRequestsPerPass = probeRequests,
+                CareersPagesPerPass = pageLimit,
             }),
             new FakeTime(now ?? Now),
             NullLogger<RecoverApplyLinksFunction>.Instance);
+    }
+
+    /// <summary>Careers pages, by the address the employer published for themselves.</summary>
+    /// <remarks>
+    /// An address nobody registered answers 404, which is <c>Unavailable</c> rather than "this
+    /// employer has no board" - unlike a probed board token, where a 404 is the answer. The handler
+    /// records every request, and on most of these tests the assertion that matters is that it
+    /// recorded none.
+    /// </remarks>
+    private static StubHandler Pages(params (string Url, string Body)[] pages)
+    {
+        var bodies = pages.ToDictionary(page => page.Url, page => page.Body, StringComparer.Ordinal);
+
+        return new StubHandler(url => bodies.TryGetValue(url, out var body)
+            ? RecordedCareersPages.Ok(body)
+            : RecordedCareersPages.Status(HttpStatusCode.NotFound));
+    }
+
+    /// <summary>Publishes an address for an employer, the way an ingest folds one onto them.</summary>
+    /// <remarks>
+    /// <c>Companies.Url</c> is <c>JobPostings.CompanyUrl</c> after the ingest has folded it onto the
+    /// employer - <c>company.Url = posting.CompanyUrl ?? company.Url</c> - so writing it directly is
+    /// writing what a scrape would have written, and the string is deliberately whatever the test
+    /// says rather than something validated on the way in.
+    /// </remarks>
+    private async Task CompanyUrlAsync(int companyId, string? url)
+    {
+        await using var db = CreateContext();
+
+        await db.Companies
+            .Where(company => company.Id == companyId)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(company => company.Url, url));
+    }
+
+    private async Task<CompanyEntity> CompanyAsync(int companyId)
+    {
+        await using var db = CreateContext();
+
+        return await db.Companies.AsNoTracking().SingleAsync(company => company.Id == companyId);
     }
 
     private async Task<JobPostingEntity> PostingAsync(long postingId)

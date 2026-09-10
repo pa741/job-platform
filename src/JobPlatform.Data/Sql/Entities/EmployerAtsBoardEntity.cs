@@ -1,4 +1,4 @@
-using JobPlatform.Core.Applications;
+﻿using JobPlatform.Core.Applications;
 
 namespace JobPlatform.Data.Sql.Entities;
 
@@ -61,6 +61,40 @@ public enum AtsBoardDiscovery
     /// employers are reachable only through this path.
     /// </remarks>
     Learned = 1,
+
+    /// <summary>
+    /// Read off a board link the employer's own careers page carries.
+    /// </summary>
+    /// <remarks>
+    /// <b>Weaker than <see cref="Learned"/> and stronger than <see cref="Probed"/>, and both halves
+    /// of that are load-bearing.</b> Weaker, because the claim rests on a URL this system stored as
+    /// the employer's <c>company_url</c> being the employer's own site: it is scraped text, it is
+    /// frequently a board's profile page for that company rather than the company's, and even a
+    /// genuine careers site links to boards that are not its owner's - a parent, a portfolio
+    /// company, an agency's client. <c>JobUrlDirect</c> has none of those problems, because the
+    /// board carrying the advert published it as the apply link <i>for that vacancy</i>. Stronger,
+    /// because nothing here is guessed: <see cref="Probed"/> manufactures a slug out of the
+    /// employer's name and asks a vendor whether anybody owns it, which is how "Dex", "Kernel",
+    /// "Fin" and "Orbital" turn into a stranger's board, whereas this token is a string the page
+    /// published and the only open question is whose page it was.
+    ///
+    /// <b>It is numbered 2 and not 1.5, and the numbering says nothing about that ordering.</b>
+    /// Renumbering is forbidden on the remarks above, so a member takes the next free value; and
+    /// unlike <c>AtsBoardConfidence</c>, which is a strength ordering callers compare against a
+    /// threshold, nothing anywhere compares two of these - every reader tests equality. A future
+    /// reader that wants "at least as strong as probed" has to write the strength down as a
+    /// predicate rather than infer it from the arithmetic, which is <c>ParkReasonPolicy</c>'s
+    /// arrangement and the right one.
+    ///
+    /// <b>It owes a confirmation exactly as <see cref="Probed"/> does</b>, and
+    /// <see cref="EmployerAtsBoardEntity.ConfirmedAtUtc"/> is still the whole test: the discovery
+    /// path never grants permission on its own. What confirms one is that the token the page
+    /// published agrees with the employer's name under <c>AtsBoardCandidates.Confirm</c> - which is
+    /// not the circular comparison that class refuses for a probe, because a probed token was
+    /// derived from that name and this one was not. Where the page names somebody else's board the
+    /// row is stored unconfirmed, which refuses the link and remembers that the request was spent.
+    /// </remarks>
+    CareersPage = 2,
 }
 
 /// <summary>
@@ -95,7 +129,7 @@ public enum AtsBoardDiscovery
 /// to job seekers, unauthenticated and documented, which is the whole reason this feature exists
 /// rather than the authenticated LinkedIn route - see <c>mcp_handoff.md</c> 3.2 and 3.2a. There
 /// is no column for a cookie, a session or an account, and adding one would put the feature back
-/// on the wrong side of a decision that has a legal record behind it.
+/// on the wrong side of a decision that has a record behind it.
 ///
 /// <b>What it deliberately does not record.</b> A probe that answered 404 writes nothing: this
 /// table holds boards that exist, and a row per token that did not answer would be a second,

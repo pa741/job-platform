@@ -219,8 +219,11 @@ public sealed class SubmissionTools(
         + "says where the URL came from: 'Posting' is the employer's link as published, "
         + "'MatchedOnAnotherBoard' is the same job found on a different board and is an "
         + "inference, 'BoardPosting' means no direct link is known. 'atsVendor' says whose form "
-        + "is at the end of it - 'Aggregator' is another job board rather than an employer and is "
-        + "worth skipping. Duplicate listings of one job collapse into one row, with the others "
+        + "is at the end of it - 'Aggregator' is another job board rather than an employer, and "
+        + "following one spends a day's cap arriving at a second search results page. Pass "
+        + "excludeAggregators=true to have the server drop those rather than skipping them here: "
+        + "a filter applied to rows already returned shrinks the batch instead of filling it. "
+        + "Duplicate listings of one job collapse into one row, with the others "
         + "in 'alternatePostings'. Ordered best first. Read the 'quota' block before planning a "
         + "batch: it says how many more applications may be recorded as sent today. This is a "
         + "work queue, not a search: it never returns a posting already applied to.")]
@@ -235,6 +238,7 @@ public sealed class SubmissionTools(
         [Description("A floor on the model's assessment score, 0-100. Enforced here: a pair the model scored no number for never clears it.")] int? minAssessmentScore = null,
         [Description("'Rank' (default, the fused ordering), 'Score' (the deterministic score) or 'AssessmentScore' (the model's judgement, unscored last).")] string? orderBy = null,
         [Description("Restrict to links of one provenance: 'Posting', 'MatchedOnAnotherBoard' or 'BoardPosting'. Ask for 'Posting' to get only employer links.")] string? applyUrlSource = null,
+        [Description("true to drop the postings whose apply link leads to another job board rather than to an employer. Enforced in the query, so it is a filter on the queue and not a note to skip rows after they arrive: asking for 10 with this set returns 10 applyable postings rather than however many of the top 10 happened to be. Postings nothing has derived a vendor for are kept, because 'nobody has looked' is not 'another job board'. Kept too: a posting whose own board publishes no link but whose twin elsewhere does, since the queue applies through the twin's - such a row can still say 'Aggregator' if the twin's link is another board as well, so read 'atsVendor' either way.")] bool excludeAggregators = false,
         CancellationToken ct = default)
     {
         var (profileId, failure) = await ResolveAsync(context, ct);
@@ -299,6 +303,7 @@ public sealed class SubmissionTools(
             AssessedSince = assessedSince,
             DocumentsReady = documentsReady,
             MinAssessmentScore = minAssessmentScore,
+            ExcludeAggregators = excludeAggregators,
             Sort = parsedSort ?? ApplyableSort.Rank,
             Limit = Math.Clamp(limit, 1, MaxLimit),
         };
@@ -344,9 +349,17 @@ public sealed class SubmissionTools(
                 // the match was wrong.
                 applyUrlSource = row.ApplyUrlSource.ToString(),
 
-                // Read off the URL rather than stored. 'Aggregator' is the value that changes
-                // what a run does: a "direct" link into another job board is another board, and
-                // following it spends a day's cap discovering that by hand.
+                // Read off the URL above rather than stored. 'Aggregator' is the value that
+                // changes what a run does: a "direct" link into another job board is another
+                // board, and following it spends a day's cap discovering that by hand.
+                //
+                // It stays on every row even when excludeAggregators has already dropped the
+                // aggregators, because the filter and this field answer about different links.
+                // The filter reads a stored vendor derived from the posting's own ladder; this
+                // reads the link actually handed over, which may have been borrowed from the same
+                // job on another board. The one case where they part company - a borrowed link
+                // that is itself another board's re-listing - survives the filter and says so
+                // here, which is the only reason it is acceptable that it survives at all.
                 atsVendor = row.AtsVendor.ToString(),
                 verdict = row.Verdict?.ToString(),
 

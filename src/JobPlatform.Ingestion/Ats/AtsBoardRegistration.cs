@@ -7,7 +7,7 @@ using Microsoft.Extensions.Options;
 namespace JobPlatform.Ingestion.Ats;
 
 /// <summary>
-/// Wires the board readers and the one outbound client they share.
+/// Wires the board readers, the careers-page reader, and the one outbound client they share.
 /// </summary>
 /// <remarks>
 /// <b>One named client for all four vendors, built through <c>IHttpClientFactory</c>.</b> The
@@ -25,7 +25,7 @@ namespace JobPlatform.Ingestion.Ats;
 /// a fact.</b> <c>UseCookies</c> is off, so a <c>Set-Cookie</c> from a vendor is not stored and
 /// cannot come back on the next request; <c>Credentials</c> is null, so the host's own identity is
 /// never offered; and <c>PreAuthenticate</c> is off, so nothing is volunteered ahead of a
-/// challenge. That is a recorded decision with a legal record behind it - <c>mcp_handoff.md</c> 3.2
+/// challenge. That is a recorded decision with measurements behind it - <c>mcp_handoff.md</c> 3.2
 /// and 3.2a - and it is enforced here rather than reviewed for, because a reviewed rule is one
 /// somebody eventually adds a header past.
 ///
@@ -47,7 +47,10 @@ public static class AtsBoardRegistration
     /// </remarks>
     public const string HttpClientName = "ats-boards";
 
-    /// <summary>Registers the four vendor readers, their shared client and the pass-level reader.</summary>
+    /// <summary>
+    /// Registers the four vendor readers, the careers-page reader, their shared client and the
+    /// pass-level reader.
+    /// </summary>
     public static IServiceCollection AddAtsBoardClients(
         this IServiceCollection services,
         IConfiguration configuration)
@@ -121,6 +124,14 @@ public static class AtsBoardRegistration
         // how a caller finds that out without spending a request on it.
 
         services.AddSingleton<AtsBoardReader>();
+
+        // The third discovery source, and the only one of the three that fetches a host nobody
+        // publishes an API for. It is registered here rather than beside the pass because it shares
+        // the client above, and sharing it is the point: the cookie-less, credential-less handler
+        // is what makes "no credential, no cookie, no session" true of an arbitrary employer's site
+        // as well as of the five board endpoints. A separately wired reader would have had to
+        // remember all three, and nothing would have failed if it forgot.
+        services.AddSingleton<CareersPageReader>();
 
         return services;
     }

@@ -262,3 +262,126 @@ internal static class RecordedBoards
             Content = new StringContent(body, Encoding.UTF8, "application/json"),
         };
 }
+
+/// <summary>
+/// The careers-page shapes, written from the embeds the vendors document rather than scraped.
+/// </summary>
+/// <remarks>
+/// <b>Nothing in this test project touches the network, for the reason <see cref="RecordedBoards"/>
+/// gives and one more besides.</b> These are not vendors' endpoints, they are employers' own web
+/// servers - the hosts this feature is most careful with, because they publish nothing for us and
+/// have agreed to nothing. A suite that fetched a real one would be doing on every
+/// <c>dotnet test</c> exactly what the pass bounds itself to twenty-five of a night.
+///
+/// <b>The employers are invented and the markup is not.</b> The shapes are the ones Greenhouse and
+/// Ashby document for embedding a board under an employer's own domain: a script tag pointing at
+/// the vendor's embed host with the board named in <c>for=</c>, per-vacancy links carrying
+/// <c>gh_jid</c> under the employer's domain, and a "see every opening" link to the board itself.
+/// The hosts use <c>.example</c>, which is reserved and resolves nowhere, so a payload that
+/// escaped into a live pass could not reach anybody.
+///
+/// <b>The <c>gh_jid</c> links are the point of the first fixture and they carry no token.</b>
+/// <c>AtsBoardToken.FromUrl</c> answers null for an embed under the employer's own domain and says
+/// why; what those links establish is the vendor, and the board link two lines further down is
+/// where the token is. A fixture with only one of the two would pass while asserting half the rule.
+/// </remarks>
+internal static class RecordedCareersPages
+{
+    /// <summary>An employer running a Greenhouse embed, with the board named beside it.</summary>
+    public const string GreenhouseEmbed = """
+        <!doctype html>
+        <html lang="en">
+          <head>
+            <title>Careers at Acme Robotics</title>
+            <script src="https://boards.greenhouse.io/embed/job_board/js?for=acmerobotics"></script>
+          </head>
+          <body>
+            <a href="https://www.linkedin.com/company/acme-robotics">Follow us on LinkedIn</a>
+            <ul id="grnhse_app">
+              <li><a href="/careers/opening?gh_jid=6304904">Senior Software Engineer, Platform</a></li>
+              <li><a href="https://careers.acmerobotics.example/jobs?gh_jid=6304905">Systems Engineer</a></li>
+            </ul>
+            <a href="https://job-boards.greenhouse.io/acmerobotics">See every opening</a>
+          </body>
+        </html>
+        """;
+
+    /// <summary>The same embed with no board link: the vendor is proved and the token is not.</summary>
+    public const string GreenhouseEmbedWithoutTheBoard = """
+        <!doctype html>
+        <html lang="en">
+          <head><title>Careers at Acme Robotics</title></head>
+          <body>
+            <ul>
+              <li><a href="https://careers.acmerobotics.example/jobs?gh_jid=6304904">Senior Software Engineer</a></li>
+              <li><a href="https://careers.acmerobotics.example/jobs?gh_jid=6304905">Systems Engineer</a></li>
+            </ul>
+          </body>
+        </html>
+        """;
+
+    /// <summary>A page with no applicant tracking system anywhere on it.</summary>
+    public const string NoBoardAtAll = """
+        <!doctype html>
+        <html lang="en">
+          <head><title>Work with us</title></head>
+          <body>
+            <p>Send a CV to <a href="mailto:jobs@acmerobotics.example">jobs@acmerobotics.example</a>.</p>
+            <a href="https://www.linkedin.com/company/acme-robotics">LinkedIn</a>
+          </body>
+        </html>
+        """;
+
+    /// <summary>An agency's page: their own embed, and a client's board beside it.</summary>
+    /// <remarks>
+    /// The failure this whole phase has to refuse, and the reason two vendors on one page is an
+    /// abstention. The employers holding the most link-less applyable postings in this corpus are
+    /// recruitment agencies advertising a client's vacancy under their own name, so a page that
+    /// links to somebody else's board is the shape to expect rather than an edge case.
+    /// </remarks>
+    public const string TwoVendorsOnOnePage = """
+        <!doctype html>
+        <html lang="en">
+          <body>
+            <a href="https://careers.acmerobotics.example/jobs?gh_jid=6304904">Our own vacancies</a>
+            <a href="https://jobs.lever.co/anotherco/2f1c9d7e">A role with one of our clients</a>
+          </body>
+        </html>
+        """;
+
+    /// <summary>One vendor, two boards: a parent and a subsidiary on one careers page.</summary>
+    public const string TwoBoardsOnOnePage = """
+        <!doctype html>
+        <html lang="en">
+          <body>
+            <a href="https://boards.greenhouse.io/acmerobotics">Engineering roles</a>
+            <a href="https://boards.greenhouse.io/acmelabs">Research roles</a>
+          </body>
+        </html>
+        """;
+
+    /// <summary>A 200 carrying one of the pages above.</summary>
+    public static HttpResponseMessage Ok(string body)
+        => new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "text/html"),
+        };
+
+    /// <summary>A 200 whose body is not a document to read addresses out of.</summary>
+    public static HttpResponseMessage NotADocument()
+        => new(HttpStatusCode.OK)
+        {
+            Content = new StringContent("%PDF-1.7", Encoding.UTF8, "application/pdf"),
+        };
+
+    /// <summary>A status with no page behind it. Every one of them is <c>Unavailable</c> here.</summary>
+    /// <remarks>
+    /// Unlike a probed board token, where a 404 <i>is</i> the answer, a 404 from a careers page
+    /// means no page was seen at all - which says nothing about whether that employer has a board.
+    /// </remarks>
+    public static HttpResponseMessage Status(HttpStatusCode status)
+        => new(status)
+        {
+            Content = new StringContent("", Encoding.UTF8, "text/html"),
+        };
+}

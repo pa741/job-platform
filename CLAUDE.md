@@ -120,6 +120,11 @@ worked around.
 - `src/JobPlatform.Core/Matching/MatchRanker.cs` — what the matches page is *ordered* by, which
   is not the score. Pure and Azure-free for the same reason, and it carries the measurement that
   justifies every constant in it.
+- `src/JobPlatform.Data/Sql/PostingReachability.cs` — whether anything unattended could ever
+  apply to a posting, as one predicate and its derived negation. It decides who gets *judged* and
+  nothing else: it is read by the shortlist query and by the count that reports on it, and by
+  nothing on the scoring, ranking or verdict path. Read the remarks on the permanent/temporary
+  boundary and on the coalesce before touching either.
 - `src/JobPlatform.Core/Model/PostingAge.cs` — how old a posting is, as one rule: the board's
   stated date where it published one, first-seen where it did not. Pure, and the two relational
   spellings in `src/JobPlatform.Data/Sql/PostingRecency.cs` are transcriptions of it that
@@ -162,6 +167,11 @@ worked around.
   could be passed in, which is what keeps one name on every CV.
 - `src/JobPlatform.Data/Sql/CvVariantRepository.cs` — every variant read and write. Takes a
   profile id the caller resolved, like the submission and answer stores.
+- `src/JobPlatform.Ingestion/Ats/CareersPageReader.cs` — the only code here that fetches a host
+  nobody publishes an API for. It extracts nothing itself: every address on the page goes to
+  `AtsBoardToken.FromUrl` and `AtsVendorDetector.Detect`, which already know the board hosts, the
+  embed parameters, the aggregator list and the reserved segments. Read the remarks on the bounds
+  before touching any of them, and the ones on `Read` before relaxing the abstention.
 
 ## Conventions and constraints
 
@@ -687,13 +697,15 @@ mechanism, and it is derived from the corpus rather than guessed at.
 ### Apply links, and where they come from
 
 - **No account is used to read any board, and that is a decision with a record rather than a
-  preference.** `mcp_handoff.md` 3.2 rejected authenticated LinkedIn and 3.2a says why the answer
-  did not change when its own reopening condition fired: hiQ ended with LinkedIn winning on
-  *contract* - an injunction, a judgment and the corpus destroyed - so a terms breach is actionable
-  even over public data; the 2026 enforcement wave targets browser automation specifically, which is
-  the shape an authenticated fetch takes; and there is no sanctioned route, because LinkedIn's Job
-  Posting API is write-only and closed to new partners. If a change here seems to need a cookie, a
-  session or a login, that is the signal the design is being worked around.
+  preference.** `mcp_handoff.md` 3.2 rejected authenticated LinkedIn on throughput and upkeep -
+  ~100-200 detail views per account per day against ~640 LinkedIn postings a day, so 3-6 accounts
+  running continuously, and an `li_at` that expires in weeks and cannot be refreshed unattended, so
+  the pipeline gains a manual step whose failure mode is silent. 3.2a found a third route instead:
+  the employer's own applicant tracking system publishes the same link on a documented,
+  unauthenticated endpoint, and roughly half the gap is reachable that way with no account, no
+  proxy and nothing to keep alive. There is also no sanctioned alternative - LinkedIn's Job Posting
+  API is write-only and closed to new partners. **Non-engineering considerations are deliberately
+  not recorded here; assess them separately before reopening this.**
 - **The employer will tell you, and their ATS is a documented public endpoint.** Greenhouse, Ashby,
   Lever and SmartRecruiters serve board listings unauthenticated, verified live against real tokens
   from this corpus. That is a service to *their* customers rather than to us: one fetch per board per
@@ -755,6 +767,37 @@ mechanism, and it is derived from the corpus rather than guessed at.
   is exactly what it did. **Quote the ceiling before promising a number**: the recoverable share is
   roughly the non-agency share of the queue, and in this corpus that is small. Dex (14) and AVEVA
   (4) are the real employers in that list.
+- **The employer's own careers page is the third source of a board token, and it is the only thing
+  here that fetches a host nobody publishes an API for.** Greenhouse and Ashby embed their forms
+  under the employer's domain - `https://careers.withwaymo.com/jobs?gh_jid=7852098` is in the
+  corpus - so `gh_jid` proves the vendor and names no board, which `AtsBoardToken.FromUrl` answers
+  null for on purpose. The page carrying the embed usually also links to the board it embeds, and
+  that link has the token. Everything about the request follows from whose server it is: one GET
+  per employer per pass, a cap on employers per run *below* the board-fetch cap, a five-second
+  deadline enforced by a linked cancellation source because `HttpClient.Timeout` stops applying at
+  the response headers, a byte ceiling, http or https only, an aggregator's profile page refused
+  before a socket opens, and the same `ats-boards` client - so `UseCookies` off and `Credentials`
+  null are facts rather than promises. **A page read only part way answers `Unavailable` and never
+  "no board here"**, for the reason a truncated board is not an empty one: the second gets stored.
+- **A careers-page token is weaker than a learned one and stronger than a probed one, and it still
+  owes a confirmation.** `AtsBoardDiscovery.CareersPage` argues both halves: whose page it was is
+  an inference - `CompanyUrl` is scraped text, is often a board's profile page for the company, and
+  a genuine careers site still links to parents, subsidiaries and clients - but the token itself is
+  published rather than manufactured, which is the exact thing that makes `Dex`, `Kernel`, `Fin`
+  and `Orbital` unsafe to *guess*. **Comparing that token back to the employer's name is not the
+  circular check Core refuses for a probe**: `AtsBoardCandidates.For` derived a probed token from
+  that name, and nothing derived this one. So the confirmation is Core's own two rules - `Confirm`
+  on the name, or the token being one of the spellings `For` offers - and it reaches the employers
+  the probe cannot, since `For` refuses to guess at Monzo, Stripe or Dex at all. Two boards on one
+  page, or two vendors, abstains: the largest remaining backlog is agencies advertising a client's
+  vacancy, so a page linking to somebody else's board is the expected shape rather than the edge.
+- **`Companies.AtsCareersPageReadUtc` is the only record a page that named nothing leaves**, and
+  without it "we read their site and there was nothing" and "nobody has looked" are one value -
+  the fault `OffsiteApply` exists to undo, one level up. It is stamped *before* the request, like
+  `RecordFetchAsync`, and it is stamped for a URL refused without a request too, because that
+  employer occupies a slot in a bounded work list either way. The re-read window is 90 days rather
+  than the boards' 7: a vacancy list turns over weekly, whether a company has an ATS at all does
+  not.
 - **Do not expect much from Workable.** Every Workable link in this corpus is
   `apply.workable.com/j/{code}`, which names no board, so those employers are reachable only through
   a probe. Workday has no clean public listing at all and is deliberately out of scope.
@@ -1351,6 +1394,31 @@ Each of these cost a red CI run; none of them fail locally.
   the reason the embedding is kept out of `Score`. The window decides which rows are *eligible*
   for the reserved share - it is not a way past `AssessmentThreshold`, and a fresh posting the
   arithmetic rejected stays rejected.
+- **Reachability is a claim on the budget and never on the match either, and it is the second
+  fact of that shape rather than a new kind of rule.** `PostingReachability` holds it: a posting
+  whose board hosts the application (`OffsiteApply == false`), carrying neither `JobUrlDirect` nor
+  `EmployerAtsApplyUrl`, at an employer with no confirmed ATS board, is one nothing unattended can
+  apply to - so `GetUnassessedAsync` does not draw it. Nothing else reads it. No score, ranking,
+  verdict or threshold may, and `MatchSweepReachabilityTests` runs the whole sweep twice over two
+  corpora differing in that one column and compares the stored arithmetic row for row.
+  **Permanent and temporary are different states and merging them drops jobs forever.** No link
+  with `OffsiteApply` true *or null* is temporary - apply-link recovery targets exactly those -
+  and those keep their budget place, because the shortlist is drawn from unassessed pairs: one
+  never drawn is never assessed and never becomes eligible again for any other reason. The error
+  therefore falls towards judging everywhere, including the 10-of-691 case where the employer's
+  own board is confirmed.
+  **Do not overstate the saving.** Measured 2026-09-09 it excludes 681 postings of 8,411, not the
+  ~2,600 it reaches once LinkedIn's 4,364 route-unknown rows reclassify; the sweep logs the count
+  held back so the effect is observed rather than assumed, and the log says "held out of the draw"
+  rather than "saved" because a bounded draw replaces an excluded pair with the next-best one.
+- **A nullable-bool clause that will be negated needs `?? default` or SQL swallows it, and this
+  cost a whole corpus once.** `OffsiteApply == false` compiles to `OffsiteApply = 0`, which is
+  NULL rather than false for a route-unknown posting; `PostingReachability.WorthJudging` wraps the
+  predicate in a `NOT`, `NOT NULL` is still NULL, and a `WHERE` drops the row. The first version
+  therefore excluded every one of the 4,364 rows it promises to keep - 52% of the corpus - and
+  compiled, translated and read correctly. C# and SQL disagree about `null == false` only under
+  negation, which is the worst place for it to hide. `(OffsiteApply ?? true) == false` makes the
+  tree two-valued and states the safe default where a reader sees it.
 - **How old a posting is has exactly one definition, and it is `PostingAge`.** The board's stated
   `DatePosted` where it published one - two postings in five - and `FirstSeenUtc` where it did
   not. Believing only the stated date would hide most of the market; believing only first-seen
@@ -1682,6 +1750,15 @@ dotnet run --project tools/JobPlatform.DbAdmin -- delete-submissions "<connectio
 # because its scraper sets the field unconditionally. A site at ~100% board-hosted is a broken
 # scraper selector, not a market that moved.
 dotnet run --project tools/JobPlatform.DbAdmin -- apply-links "<connection-string>" 7
+
+# How much of the board-hosted ("Easy Apply") population WithoutEmployerLink excludes from
+# recovery outright is reachable today with no new request - a company already carrying a
+# confirmed board in EmployerAtsBoards. That exclusion is only correct if an employer running
+# Easy Apply on LinkedIn never also lists the same vacancy on their own Greenhouse or Ashby
+# board, which had never been measured. Read-only - a pure join over rows already on disk, no
+# request and no probe - so there is no --confirm to pass. A large headline number means the
+# clause should be relaxed; a number near zero means it was right all along.
+dotnet run --project tools/JobPlatform.DbAdmin -- measure-easy-apply "<connection-string>"
 
 # Full provision (idempotent)
 ./scripts/provision.ps1 -ResourceGroup <rg> -LandingStorageAccount <account>

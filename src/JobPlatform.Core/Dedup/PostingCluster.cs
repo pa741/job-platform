@@ -1,4 +1,4 @@
-namespace JobPlatform.Core.Dedup;
+﻿namespace JobPlatform.Core.Dedup;
 
 /// <summary>Where an apply URL came from, and therefore how much to trust it.</summary>
 /// <remarks>
@@ -82,7 +82,7 @@ public enum ApplyUrlSource
     /// Ashby, Lever, Workable and SmartRecruiters serve public, documented, unauthenticated board
     /// listings that exist to be read by job seekers, so nothing on this path takes a credential,
     /// a cookie or a session. See <c>mcp_handoff.md</c> 3.2 and 3.2a: the authenticated LinkedIn
-    /// route is closed rather than merely unbuilt, and this exists because that one is.
+    /// route was costed and refused on throughput and upkeep, and this exists because it was.
     ///
     /// It is worth an order of magnitude more than the cross-board recovery, which is why it was
     /// built at all. Measured 2026-09-07: of 382 applyable postings, 309 carried no employer link

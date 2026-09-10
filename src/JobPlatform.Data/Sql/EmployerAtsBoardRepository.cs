@@ -66,6 +66,40 @@ public sealed record AtsBoardToFetch(
 public sealed record AtsEmployerToProbe(int CompanyId, string Company, int BlockedPostings);
 
 /// <summary>
+/// An employer with no board on any vendor, and an address of their own worth reading for one.
+/// </summary>
+/// <remarks>
+/// <b>This is the same population <see cref="AtsEmployerToProbe"/> describes, asked a cheaper and
+/// better question.</b> A probe manufactures a slug out of the name and asks four vendors whether
+/// anybody owns it; this reads the page the employer publishes about themselves, where Greenhouse
+/// and Ashby embed their forms under the employer's own domain - the live corpus carries
+/// <c>https://careers.withwaymo.com/jobs?gh_jid=7852098</c> - and a board link or an embed marker
+/// sits in the markup. One request against one host, and the token is published rather than
+/// guessed at.
+///
+/// <b><see cref="CareersUrl"/> is <c>JobPostings.CompanyUrl</c> folded onto the employer by the
+/// ingest, and reading the folded copy is the point rather than a shortcut.</b> A board hangs off
+/// <c>Companies.Id</c>, so the question is "what is this employer's address" and not "what did one
+/// of their adverts say" - and <c>JobPostingRepository</c> already answers the first by writing
+/// <c>company.Url = posting.CompanyUrl ?? company.Url</c> on every ingest, which makes this column
+/// the most recent non-null spelling that employer has published. Reading it per posting instead
+/// would be a group-by over the postings table to arrive at the same string, and would have to
+/// pick between several employers' spellings with no rule for doing so.
+///
+/// <b>It is scraped text and this type makes no claim about it.</b> It may be blank in effect, not
+/// a URL at all, a tracker, an aggregator's profile page for the company, or a host that is not
+/// theirs. Every one of those is the reader's problem rather than this query's - the alternative is
+/// a <c>WHERE</c> clause encoding a URL grammar in SQL, which would be a second, weaker spelling of
+/// a rule Core already owns.
+/// </remarks>
+/// <param name="CompanyId">The employer, as <c>Companies.Id</c>.</param>
+/// <param name="Company">That employer's folded display name, for confirming what the page names.</param>
+/// <param name="CareersUrl">The address they published for themselves. Unvalidated - see the remarks.</param>
+/// <param name="BlockedPostings">How many of their postings have no employer apply link.</param>
+public sealed record AtsCareersPage(
+    int CompanyId, string Company, string CareersUrl, int BlockedPostings);
+
+/// <summary>
 /// A board that was asked and has shown nothing since. A token can be renamed and a company can
 /// leave a vendor, and neither event announces itself.
 /// </summary>
@@ -142,8 +176,8 @@ public sealed record AtsPostingMatch(long PostingId, AtsListingMatch Match);
 ///
 /// <b>Nothing on this path takes a credential, a cookie or a session, and nothing added here
 /// may.</b> The five vendors involved publish these boards to job seekers, unauthenticated and
-/// documented; the authenticated LinkedIn route was researched and refused, and there is a legal
-/// record behind that refusal rather than a preference. See <c>mcp_handoff.md</c> 3.2 and 3.2a.
+/// documented; the authenticated LinkedIn route was researched and refused, and there is a record
+/// behind that refusal rather than a preference. See <c>mcp_handoff.md</c> 3.2 and 3.2a.
 /// There is no column, parameter or method here that could hold one.
 ///
 /// <b>Two facts about a board and two columns, kept apart on purpose.</b>
@@ -155,11 +189,21 @@ public sealed record AtsPostingMatch(long PostingId, AtsListingMatch Match);
 /// <see cref="AtsSilentBoard"/>'s remarks give the case where reusing one as the other silently
 /// breaks Lever.
 ///
-/// <b>Learned beats probed, and the direction is enforced rather than trusted.</b>
-/// <see cref="LearnAsync"/> upgrades a probed row and <see cref="RecordProbeAsync"/> never touches
-/// a row that already exists, so a probe cannot downgrade, re-date or un-confirm a token the
-/// employer themselves published. Nothing here overwrites a confirmation either: a transient 500
-/// from a vendor must not cost a board that was proved a year ago.
+/// <b>Learned beats everything, and the direction is enforced rather than trusted.</b>
+/// <see cref="LearnAsync"/> upgrades a row discovered any other way, and the two inferring paths -
+/// <see cref="RecordProbeAsync"/> and <see cref="RecordCareersPageAsync"/>, both through
+/// <c>AddIfAbsentAsync</c> - never touch a row that already exists, so neither can downgrade,
+/// re-date or un-confirm a token the employer themselves published. Nothing here overwrites a
+/// confirmation either: a transient 500 from a vendor must not cost a board that was proved a year
+/// ago.
+///
+/// <b>Three discovery paths, one usable-board test.</b> A token is read off an apply link the
+/// employer published, read off a board link their own careers page carries, or built from their
+/// name and tried - and what a caller may act on is <c>ConfirmedAtUtc</c> alone, never
+/// <c>Discovery</c>. That is deliberate: a discovery value is a fact about where a row came from
+/// and a reader branching on it is one member away from a path nobody taught it about, where a null
+/// timestamp cannot be manufactured by an enum nobody set. See
+/// <see cref="EmployerAtsBoardEntity.ConfirmedAtUtc"/>.
 ///
 /// <b>The apply link is written beside what the board published and never over it.</b>
 /// <c>JobUrlDirect</c> is what the board carrying the advert said; <c>EmployerAtsApplyUrl</c> is
@@ -302,22 +346,65 @@ public sealed class EmployerAtsBoardRepository(JobsDbContext db)
     /// re-write a probe either, because <c>DiscoveredAtUtc</c> would then always be today.
     /// </remarks>
     /// <returns><c>true</c> where a row was written; <c>false</c> where this board was already known.</returns>
-    public async Task<bool> RecordProbeAsync(
+    public Task<bool> RecordProbeAsync(
         int companyId, AtsBoard board, DateTimeOffset now, CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(board);
+        => AddIfAbsentAsync(companyId, board, AtsBoardDiscovery.Probed, now, confirmedAtUtc: null, ct);
 
-        if (await TrackedBoardAsync(companyId, board, ct) is not null)
-        {
-            return false;
-        }
-
-        db.EmployerAtsBoards.Add(Row(companyId, board, AtsBoardDiscovery.Probed, now, confirmedAtUtc: null));
-
-        await db.SaveChangesAsync(ct);
-
-        return true;
-    }
+    /// <summary>
+    /// Records a board read off a link the employer's own careers page carries, confirmed only
+    /// where the token the page published agrees with the employer's name.
+    /// </summary>
+    /// <remarks>
+    /// <b>The evidence is a parameter here for the same reason it is one on
+    /// <see cref="ConfirmAsync"/>: a caller has to say what it saw.</b> This path can produce a
+    /// confirmation at the moment of discovery, unlike a probe, and that is precisely the place
+    /// where a boolean nobody thought about would become permission - so the caller passes the
+    /// answer it computed rather than this method assuming that reaching a careers page is itself
+    /// evidence. <c>ConfirmedAtUtc</c> stays the whole test either way.
+    ///
+    /// <b>Why the token may be compared against the name here and may not be on a probe.</b>
+    /// <c>AtsBoardCandidates</c> refuses to take a probed token because <c>For</c> derived it from
+    /// that very name, so the comparison would confirm every probe including every wrong one while
+    /// looking like a check. A careers-page token was derived from nothing: it is a string that
+    /// appeared in the employer's own markup, so the name agreeing with it is two independent
+    /// sources saying the same thing. It is also the discriminating test for the failure this path
+    /// actually has - an agency's site linking to a client's board, or a careers page carrying a
+    /// parent company's - because in every one of those the token is somebody else's name and
+    /// disagrees.
+    ///
+    /// <b>An unconfirmed row is still written, and that is the bound rather than an oversight.</b>
+    /// The request has been spent; the row is what <see cref="ListEmployersToProbeAsync"/> reads to
+    /// know not to spend a probe campaign on the same employer, and
+    /// <see cref="ListBoardsToFetchAsync"/> cannot return it, so it produces no link. It is also
+    /// upgradeable: the day that employer publishes a direct apply link, <see cref="LearnAsync"/>
+    /// turns it into a fact.
+    ///
+    /// <b>An existing row is left exactly as it is</b>, which is <see cref="RecordProbeAsync"/>'s
+    /// rule and holds in both directions here: a careers page may not displace a learned board, and
+    /// it may not re-date or re-confirm a probe that earned its own confirmation.
+    /// </remarks>
+    /// <param name="companyId">The employer, as <c>Companies.Id</c>.</param>
+    /// <param name="board">The board the page named.</param>
+    /// <param name="confirmed">
+    /// Whether the caller established that the board is this employer's. False stores the row
+    /// unusable rather than not storing it.
+    /// </param>
+    /// <param name="now">The moment the page was read.</param>
+    /// <param name="ct">Cancellation.</param>
+    /// <returns><c>true</c> where a row was written; <c>false</c> where this board was already known.</returns>
+    public Task<bool> RecordCareersPageAsync(
+        int companyId,
+        AtsBoard board,
+        bool confirmed,
+        DateTimeOffset now,
+        CancellationToken ct = default)
+        => AddIfAbsentAsync(
+            companyId,
+            board,
+            AtsBoardDiscovery.CareersPage,
+            now,
+            confirmedAtUtc: confirmed ? now : null,
+            ct);
 
     /// <summary>
     /// Records that a probed board proved itself this employer's.
@@ -575,6 +662,126 @@ public sealed class EmployerAtsBoardRepository(JobsDbContext db)
                 blocked.Count(p => p.CompanyId == c.Id)))
             .ToListAsync(ct);
     }
+
+    /// <summary>
+    /// The employers whose own careers page is worth reading for a board token, the ones blocking
+    /// the postings somebody is waiting on first.
+    /// </summary>
+    /// <remarks>
+    /// <b>Ordered on the same two counts as the fetch and probe lists, and for the reason a night
+    /// measured.</b> The first version of this pass ranked employers by blocked postings anywhere in
+    /// the corpus, which sounds like the same question and is not: on the 2026-09-08 run, 45 boards
+    /// were fetched and 5 of them were among the 22 that would have unblocked a posting somebody
+    /// could apply to. A bounded budget spent top-down on the wrong ranking is a budget spent on
+    /// employers nobody is applying to, and this list is bounded harder than either of the others,
+    /// because every request on it goes to an arbitrary third-party host rather than to a vendor
+    /// that publishes an API for being read. <see cref="BlockedForSomebody"/> is the sort key and
+    /// never a filter here either: an employer nobody has matched yet is still reached, after the
+    /// ones somebody is waiting on rather than instead of them.
+    ///
+    /// <b>"No board at all" is the same exclusion the probe list uses, and it includes an
+    /// unconfirmed row.</b> A careers page that named somebody else's board still cost a request,
+    /// and the row it left is how this read knows not to spend another - the same bound
+    /// <see cref="ListEmployersToProbeAsync"/> relies on. An employer whose page named nothing
+    /// leaves no row anywhere, which is why the answer to that case is a stamp on the employer
+    /// rather than silence: see <see cref="RecordCareersPageReadAsync"/>.
+    ///
+    /// <b>A blank <c>Companies.Url</c> is excluded in SQL and nothing else about it is judged
+    /// here.</b> Whether the string is a URL, whether the host is an aggregator's and whether it
+    /// may be fetched are questions with answers in Core and in the ingestion layer, and a
+    /// <c>WHERE</c> clause approximating them would be a second, weaker spelling of a rule that
+    /// already exists - the mistake the shortlist's channel filter is still paying for. What is
+    /// excluded is only what would cost a slot to establish nothing: an employer with no address at
+    /// all.
+    /// </remarks>
+    /// <param name="asOf">The clock. The re-read window is measured back from here.</param>
+    /// <param name="rereadAfter">
+    /// How long a careers-page read stands before the page is worth reading again. <b>Zero or less
+    /// means never</b>, which is a supported answer rather than a degenerate one: an employer's
+    /// site is not a vacancy list and does not turn over nightly. A window exists at all so that an
+    /// employer who adopts an applicant tracking system later is not permanently unreachable
+    /// because a page was read before they had one.
+    /// </param>
+    /// <param name="limit">The most employers to return. A budget for somebody else's server.</param>
+    /// <param name="seenSince">Optional: count only postings seen at or after this.</param>
+    public async Task<IReadOnlyList<AtsCareersPage>> ListCareersPagesToReadAsync(
+        DateTimeOffset asOf,
+        TimeSpan rereadAfter,
+        int limit,
+        DateTimeOffset? seenSince = null,
+        CancellationToken ct = default)
+    {
+        if (limit <= 0)
+        {
+            return [];
+        }
+
+        var blocked = Blocked(seenSince);
+        var wanted = BlockedForSomebody(seenSince);
+        var unread = db.Companies.Where(c => c.AtsCareersPageReadUtc == null);
+
+        if (rereadAfter > TimeSpan.Zero)
+        {
+            var cutoff = asOf - rereadAfter;
+
+            // Composed rather than written as a single disjunction, so the query for the
+            // never-re-read case carries no cutoff parameter at all - the same reason
+            // Blocked composes its own recency bound instead of testing a nullable in the
+            // predicate.
+            unread = db.Companies.Where(c =>
+                c.AtsCareersPageReadUtc == null || c.AtsCareersPageReadUtc <= cutoff);
+        }
+
+        return await unread
+            .AsNoTracking()
+            .Where(c => c.Url != null
+                && !db.EmployerAtsBoards.Any(b => b.CompanyId == c.Id)
+                && blocked.Any(p => p.CompanyId == c.Id))
+            // Ordered before it is projected, for the reason ListBoardsToFetchAsync gives: EF
+            // cannot translate an ORDER BY over a member of a projected record, and finds out at
+            // run time rather than at compile time.
+            .OrderByDescending(c => wanted.Count(p => p.CompanyId == c.Id))
+            .ThenByDescending(c => blocked.Count(p => p.CompanyId == c.Id))
+            .ThenBy(c => c.Id)
+            .Take(limit)
+            .Select(c => new AtsCareersPage(
+                c.Id,
+                c.DisplayName,
+                // Not null by the clause above. EF reads the column rather than the expression, so
+                // the bang is a compiler formality rather than a claim about the data - what the
+                // string contains is still anybody's guess, which is what the type says.
+                c.Url!,
+                blocked.Count(p => p.CompanyId == c.Id)))
+            .ToListAsync(ct);
+    }
+
+    /// <summary>
+    /// Records that this employer's careers page was asked for, whether or not it answered and
+    /// whether or not it named a board.
+    /// </summary>
+    /// <remarks>
+    /// <b>Call it before the request, exactly as <see cref="RecordFetchAsync"/> is called before
+    /// its own.</b> A page that times out, refuses the connection or answers a login wall would
+    /// otherwise be asked again on every pass for ever, and this request goes to a host that
+    /// publishes no API for us and has agreed to nothing.
+    ///
+    /// <b>It is the only record a page that named nothing leaves.</b> <c>EmployerAtsBoards</c>
+    /// holds boards that exist, so "we read their site and there was no board on it" has nowhere
+    /// else to live - and without it that absence is indistinguishable from "nobody has looked",
+    /// which is the two-nulls-in-one-column fault this schema has already paid for twice.
+    ///
+    /// <b>Written as an update rather than as a read and a mutation</b>, which is
+    /// <see cref="RecordMatchesAsync"/>'s reason and one more besides: materialising a
+    /// <c>CompanyEntity</c> to set one timestamp would drag <c>Companies.Description</c> - the
+    /// unbounded employer blurb whose deduplication is most of why that table exists - into a pass
+    /// that wanted a name and a URL.
+    /// </remarks>
+    /// <returns><c>true</c> where the employer was found and stamped.</returns>
+    public async Task<bool> RecordCareersPageReadAsync(
+        int companyId, DateTimeOffset now, CancellationToken ct = default)
+        => await db.Companies
+            .Where(c => c.Id == companyId)
+            .ExecuteUpdateAsync(c => c.SetProperty(x => x.AtsCareersPageReadUtc, now), ct) == 1;
 
     /// <summary>
     /// The boards that have been asked and have shown nothing since.
@@ -949,6 +1156,49 @@ public sealed class EmployerAtsBoardRepository(JobsDbContext db)
                     && b.Token == board.Token
                     && b.Region == board.Region,
                 ct);
+
+    /// <summary>
+    /// Writes a board row where this employer does not already hold that board, and touches
+    /// nothing where they do.
+    /// </summary>
+    /// <remarks>
+    /// <b>One insert path for the two discovery routes that infer rather than read.</b> Both
+    /// <see cref="RecordProbeAsync"/> and <see cref="RecordCareersPageAsync"/> mean "remember this,
+    /// unless something is already known", and the half that matters is the <i>unless</i>: neither
+    /// may overwrite a learned board, re-date a row so <c>DiscoveredAtUtc</c> becomes today, or
+    /// clear a confirmation somebody earned. Written twice, the second copy is where one of those
+    /// three goes missing - which is <c>ParkReasonPolicy</c>'s argument for one definition and two
+    /// readers, and the shortlist channel filter's for what the alternative costs.
+    ///
+    /// <see cref="LearnAsync"/> is deliberately not routed through this: it is the one path that
+    /// <i>upgrades</i> an existing row, so "leave it alone" is exactly the rule it does not follow.
+    ///
+    /// A duplicate racing between the read and the insert is refused by the unique index rather
+    /// than by this method, for the reason <see cref="LearnAsync"/> gives: catching it here would
+    /// turn "this board could never be stored" - an employer absent from <c>Companies</c> - into
+    /// "already known".
+    /// </remarks>
+    private async Task<bool> AddIfAbsentAsync(
+        int companyId,
+        AtsBoard board,
+        AtsBoardDiscovery discovery,
+        DateTimeOffset now,
+        DateTimeOffset? confirmedAtUtc,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(board);
+
+        if (await TrackedBoardAsync(companyId, board, ct) is not null)
+        {
+            return false;
+        }
+
+        db.EmployerAtsBoards.Add(Row(companyId, board, discovery, now, confirmedAtUtc));
+
+        await db.SaveChangesAsync(ct);
+
+        return true;
+    }
 
     /// <summary>A new row, with the two dates the two paths disagree about spelled by the caller.</summary>
     private static EmployerAtsBoardEntity Row(

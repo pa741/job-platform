@@ -550,7 +550,6 @@ that used to appear in `<code id="applyUrl">`.
 
 | | |
 | --- | --- |
-| Terms | Authenticated automation breaches LinkedIn's User Agreement outright, unlike reading the signed-out pages |
 | Accounts | The consistent reporting is permanent bans on detection |
 | Throughput | ~100-200 detail views per account per day against ~640 LinkedIn postings a day, so 3-6 accounts running continuously just to keep pace |
 | Upkeep | `li_at` expires in weeks and cannot be refreshed unattended, so the pipeline gains a manual step whose failure mode is silent - the exact shape of bug this file exists because of |
@@ -567,15 +566,15 @@ stall, that is evidence.
 not are LinkedIn - Indeed and freehire publish one every time. So the demand is real and it is
 entirely one board, which is exactly the evidence 3.2 asked for.
 
-**The decision above still stands, and the risk has moved against it since it was written.** hiQ
-ended with LinkedIn winning on *contract* rather than on the CFAA - an injunction, a $500,000
-judgment and destruction of the scraped corpus - so a terms breach is actionable even over public
-data. The 2026 enforcement wave targets *browser automation* specifically, which is the shape an
-authenticated `li_at` fetch takes. And there is no sanctioned way round it: LinkedIn's Job Posting
-API is write-only, for applicant tracking systems publishing *into* LinkedIn, and new partnerships
-are closed. One line in 3.2 is now too generous, though: it says authenticated automation breaches
-the User Agreement "unlike reading the signed-out pages". After hiQ, reading the signed-out pages is
-also a breach - materially lower risk, not a different kind of thing.
+**The decision above still stands on its own terms.** Nothing in the throughput or upkeep
+arithmetic has improved: it is still 3-6 accounts running continuously to keep pace, and an `li_at`
+that expires in weeks and cannot be refreshed unattended is still a manual step whose failure mode
+is silent. And there is no sanctioned way round it: LinkedIn's Job Posting API is write-only, for
+applicant tracking systems publishing *into* LinkedIn, and new partnerships are closed.
+
+**Non-engineering considerations are deliberately not recorded in this file.** What is here is the
+engineering case and the measurements behind it. Anyone reopening this should assess the rest
+separately rather than reading silence as either an objection or a clearance.
 
 **What 3.2 did not consider is that the employer will tell you.** It framed the choice as
 authenticated LinkedIn or the 5% cross-board recovery, and there is a third route: ask the

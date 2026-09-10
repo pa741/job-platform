@@ -1,7 +1,7 @@
 namespace JobPlatform.Ingestion.Ats;
 
 /// <summary>
-/// What one pass over somebody else's board API is allowed to cost them.
+/// What one pass over somebody else's server is allowed to cost them.
 /// </summary>
 /// <remarks>
 /// <b>Every value here is a courtesy to a vendor rather than a tuning knob for us</b>, which is why
@@ -83,4 +83,46 @@ public sealed class AtsBoardOptions
     /// complete one is how an abstention turns into a match on the vacancy next to the right one.
     /// </remarks>
     public long MaxResponseBytes { get; set; } = 16L * 1024 * 1024;
+
+    /// <summary>
+    /// How long one employer's careers page may take before it is abandoned.
+    /// </summary>
+    /// <remarks>
+    /// <b>Five seconds, and it is half <see cref="RequestTimeout"/> because the two are waiting on
+    /// different kinds of promise.</b> A board endpoint is a vendor serving a document they publish
+    /// for exactly this purpose, and waiting for it is reasonable. A careers page is an arbitrary
+    /// third-party site that has agreed to nothing, may be rendering, redirecting or advertising,
+    /// and is being read on the off chance it names a token - so the pass is not entitled to wait
+    /// on it, and giving up costs one employer's stamp rather than anything else.
+    ///
+    /// <b>It bounds the whole read rather than the headers.</b> <c>HttpClient.Timeout</c> stops
+    /// applying once the response headers arrive, which on this path is where the reading starts;
+    /// <c>CareersPageReader</c> therefore enforces this with a linked cancellation source, or a
+    /// host that answered instantly and then dripped a body would never be abandoned at all.
+    ///
+    /// Overrunning it answers <c>CareersPageOutcome.Unavailable</c> and never
+    /// <c>CareersPageOutcome.NamedNothing</c>: a page nobody finished reading is not a page with no
+    /// board on it.
+    /// </remarks>
+    public TimeSpan CareersPageTimeout { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// The largest careers page that will be read at all.
+    /// </summary>
+    /// <remarks>
+    /// <b>One mebibyte, sixteen times below <see cref="MaxResponseBytes"/>, and the ratio is the
+    /// argument.</b> A board is an employer's whole vacancy list and some vendors put the full
+    /// advert text in it, so megabytes there are the documented shape of the thing. A careers page
+    /// is one document, and this is reading it for the addresses in its markup - so a page that
+    /// does not fit is a page doing something other than describing an employer's vacancies, and
+    /// buffering it would be an arbitrary host deciding how much of a Flex Consumption instance to
+    /// occupy.
+    ///
+    /// <b>Overrunning it is <c>Unavailable</c> rather than "no board here"</b>, because the board
+    /// link may be in the part nobody read. That is the rule <see cref="MaxResponseBytes"/> already
+    /// keeps for a truncated board, and it matters more here: a truncated board reports an employer
+    /// as having closed every vacancy, where this would report them as having no board at all and
+    /// the pass would stop asking.
+    /// </remarks>
+    public long MaxCareersPageBytes { get; set; } = 1024L * 1024;
 }

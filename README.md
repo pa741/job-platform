@@ -561,12 +561,13 @@ all 309 that do not are LinkedIn.** Indeed and freehire publish one every time. 
 publishing them to signed-out clients entirely, so four in five good matches name an employer and
 give a run nowhere to go.
 
-**No account is used to get them, and that is settled rather than unexplored.** Authenticated
-scraping breaches LinkedIn's User Agreement; the case that tested scraping ended with LinkedIn
-winning on contract, an injunction and the corpus destroyed; the 2026 enforcement wave targets
-browser automation specifically; and there is no sanctioned alternative, because LinkedIn's Job
-Posting API is write-only, for applicant tracking systems publishing *into* LinkedIn, and closed to
-new partners. Everything here reads what is published to anybody.
+**No account is used to get them, and that is settled rather than unexplored.** An authenticated
+fetch was costed and refused: ~100-200 detail views per account per day against ~640 LinkedIn
+postings a day means 3-6 accounts running continuously, and the session cookie expires in weeks and
+cannot be refreshed unattended, so the pipeline gains a manual step whose failure mode is silent.
+There is no sanctioned alternative either, because LinkedIn's Job Posting API is write-only, for
+applicant tracking systems publishing *into* LinkedIn, and closed to new partners. Everything here
+reads what is published to anybody.
 
 **So the employer is asked instead.** Greenhouse, Ashby, Lever and SmartRecruiters all serve their
 board listings on documented, unauthenticated endpoints that exist to be read by job seekers. A
